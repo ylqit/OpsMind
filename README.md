@@ -9,17 +9,19 @@ opsMind 是一个独立设计的 AIOps 开源项目，提供：
 - **主机资源监控** - CPU、内存、磁盘、网络实时监控
 - **告警管理** - 告警规则创建、查询、确认、解决
 - **修复预案** - 故障自动修复方案推荐
-- **容器诊断** - Docker 容器状态检查（后续支持）
-- **K8s YAML 生成** - Kubernetes 配置文件生成（后续支持）
+- **容器诊断** - Docker 容器状态检查
+- **K8s YAML 生成** - Kubernetes 配置文件生成
+- **日志分析** - 日志文件错误模式识别
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.10+
+- Node.js 18+ (前端)
 - Docker（可选，用于容器诊断功能）
 
-### 安装步骤
+### 后端安装
 
 1. **克隆项目**
 
@@ -62,6 +64,28 @@ python main.py
 
 服务将在 `http://localhost:8000` 启动。
 
+### 前端安装
+
+1. **进入前端目录**
+
+```bash
+cd frontend
+```
+
+2. **安装依赖**
+
+```bash
+npm install
+```
+
+3. **启动开发服务器**
+
+```bash
+npm run dev
+```
+
+前端将在 `http://localhost:3000` 启动，自动代理后端 API 请求。
+
 ### 验证安装
 
 ```bash
@@ -70,6 +94,9 @@ curl http://localhost:8000/health
 
 # 查看可用能力
 curl http://localhost:8000/api/capabilities
+
+# 主机监控
+curl http://localhost:8000/api/host/metrics
 ```
 
 ## API 使用示例
@@ -119,39 +146,45 @@ opsMind/
 │   ├── contracts.py            # 数据模型定义
 │   ├── capabilities/
 │   │   ├── base.py             # 能力基类
+│   │   ├── decorators.py       # 装饰器
 │   │   ├── host_monitor.py     # 主机监控
+│   │   ├── container_inspector.py  # 容器诊断
+│   │   ├── log_analyzer.py     # 日志分析
+│   │   ├── k8s_yaml_generator.py  # K8s YAML 生成
 │   │   ├── alert_manager.py    # 告警管理
-│   │   └── decorators.py       # 装饰器
+│   │   ├── remediation.py      # 修复预案
+│   │   └── execute_remediation.py  # 执行修复
 │   ├── storage/
 │   │   └── alert_store.py      # 告警存储
 │   └── integrations/
-│       └── data_sources/       # 数据源适配（后续）
+│       └── data_sources/       # 数据源适配
 │
-├── api/                        # API 路由（后续）
+├── api/
+│   └── routes.py               # REST API 路由
 │
-└── frontend/                   # React 前端（后续）
+└── frontend/                   # React + TypeScript 前端
+    ├── src/
+    │   ├── App.tsx             # 主应用
+    │   ├── api/client.ts       # API 客户端
+    │   ├── stores/             # Zustand 状态管理
+    │   └── components/         # React 组件
+    │       ├── Dashboard/      # 监控仪表盘
+    │       ├── AlertPanel/     # 告警管理
+    │       └── ContainerList/  # 容器管理
+    └── package.json
 ```
-
-## 核心能力
-
-| 能力名称 | 描述 | 需要确认 |
-|---------|------|---------|
-| `inspect_host` | 主机资源监控 | 否 |
-| `manage_alerts` | 告警规则管理 | 否 |
-| `get_remediation_plan` | 获取修复预案 | 否 |
-| `execute_remediation` | 执行修复 | 是 |
 
 ## 配置说明
 
 ### 环境变量
 
-| 变量名 | 说明 | 默认值 |
-|-------|------|-------|
-| `LLM_API_KEY` | LLM API 密钥（必填） | - |
-| `LLM_BASE_URL` | LLM API 地址 | `https://api.openai.com/v1` |
-| `LLM_MODEL` | 模型名称 | `gpt-4o-mini` |
-| `PORT` | 服务端口 | `8000` |
-| `DEBUG` | 调试模式 | `false` |
+| 变量名 | 说明 | 默认值                           |
+|-------|------|-------------------------------|
+| `LLM_API_KEY` | LLM API 密钥（必填） | -                             |
+| `LLM_BASE_URL` | LLM API 地址 | `https://api.openai.com/v1`   |
+| `LLM_MODEL` | 模型名称 | `gpt-5`                       |
+| `PORT` | 服务端口 | `8000`                        |
+| `DEBUG` | 调试模式 | `false`                       |
 | `DOCKER_HOST` | Docker 守护进程地址 | `unix:///var/run/docker.sock` |
 
 
