@@ -72,6 +72,7 @@ htmlcov/
 test_api.py
 *.test.py
 tests/
+api_test.html
 
 # 文档
 __mocks__/
