@@ -4,6 +4,7 @@
 监控 CPU、内存、磁盘、网络等系统资源。
 """
 import psutil
+import time
 from typing import Dict, Any, Type, List
 from pydantic import BaseModel, Field
 from .base import BaseCapability, CapabilityMetadata
@@ -77,7 +78,7 @@ class HostMonitor(BaseCapability):
             return ActionResult.fail(str(e), code="INVALID_INPUT")
 
         result = {
-            "timestamp": psutil.boot_time(),
+            "timestamp": time.time(),
             "metrics": {}
         }
 
@@ -116,7 +117,6 @@ class HostMonitor(BaseCapability):
             "per_cpu_usage": psutil.cpu_percent(interval=1, percpu=True),
             "cpu_count": psutil.cpu_count(),
             "cpu_freq": psutil.cpu_freq()._asdict() if psutil.cpu_freq() else None,
-            "load_avg": psutil.getloadavg() if hasattr(psutil, 'getloadavg') else None
         }
 
     def _get_memory_metrics(self) -> Dict[str, Any]:
