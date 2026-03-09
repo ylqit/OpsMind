@@ -14,6 +14,8 @@ from settings import RuntimeConfig
 from engine.capabilities.base import CapabilityRegistry
 from engine.capabilities.host_monitor import HostMonitor
 from engine.capabilities.alert_manager import AlertManager
+from engine.capabilities.remediation import RemediationPlan
+from engine.capabilities.execute_remediation import ExecuteRemediation
 from engine.storage.alert_store import AlertStore
 
 # 配置日志
@@ -71,6 +73,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     capability_registry.register(AlertManager(alert_store))
     logger.info("已注册能力：manage_alerts")
+
+    capability_registry.register(RemediationPlan())
+    logger.info("已注册能力：get_remediation_plan")
+
+    capability_registry.register(ExecuteRemediation())
+    logger.info("已注册能力：execute_remediation")
 
     logger.info("opsMind 启动完成")
 
