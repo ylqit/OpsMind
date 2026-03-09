@@ -10,6 +10,7 @@ import {
 import { Dashboard } from './components/Dashboard'
 import { AlertPanel } from './components/AlertPanel'
 import { ContainerList } from './components/ContainerList'
+import { AlertRules } from './components/AlertRules'
 
 const { Header, Content, Sider } = Layout
 
@@ -28,14 +29,14 @@ const App: React.FC = () => {
       label: '告警管理',
     },
     {
+      key: '/alert-rules',
+      icon: <SettingOutlined />,
+      label: '告警规则',
+    },
+    {
       key: '/containers',
       icon: <BoxPlotOutlined />,
       label: '容器管理',
-    },
-    {
-      key: '/settings',
-      icon: <SettingOutlined />,
-      label: '系统设置',
     },
   ]
 
@@ -79,8 +80,8 @@ const App: React.FC = () => {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/alerts" element={<AlertPanel />} />
+            <Route path="/alert-rules" element={<AlertRules />} />
             <Route path="/containers" element={<ContainerList />} />
-            <Route path="/settings" element={<div style={{ padding: 24 }}>系统设置（开发中）</div>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Content>

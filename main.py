@@ -20,6 +20,7 @@ from engine.capabilities.container_inspector import ContainerInspector
 from engine.capabilities.log_analyzer import LogAnalyzer, ScanLogDirectory
 from engine.capabilities.k8s_yaml_generator import K8sYamlGenerator, K8sConfigMapGenerator, K8sIngressGenerator
 from engine.storage.alert_store import AlertStore
+from engine.tasks import BackgroundTaskManager
 
 # 导入 API 路由
 from api import routes
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 config: RuntimeConfig
 capability_registry: CapabilityRegistry
 alert_store: AlertStore
+background_task_manager: BackgroundTaskManager
 
 
 @asynccontextmanager
@@ -92,12 +94,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")
 
+    # 启动后台任务
+    background_task_manager = BackgroundTaskManager(alert_store)
+    await background_task_manager.start()
+    logger.info("后台任务已启动")
+
     logger.info("opsMind 启动完成")
 
     yield
 
     # ========== 关闭时清理 ==========
     logger.info("正在关闭 opsMind...")
+
+    # 停止后台任务
+    if background_task_manager:
+        await background_task_manager.stop()
+
     logger.info("opsMind 已关闭")
 
 
