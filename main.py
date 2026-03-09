@@ -93,6 +93,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     capability_registry.register(ContainerInspector())
     logger.info("已注册能力：inspect_container")
 
+    capability_registry.register(LogAnalyzer())
+    logger.info("已注册能力：analyze_logs")
+
+    capability_registry.register(ScanLogDirectory())
+    logger.info("已注册能力：scan_log_directory")
+
+    capability_registry.register(K8sYamlGenerator())
+    logger.info("已注册能力：generate_k8s_yaml")
+
+    capability_registry.register(K8sConfigMapGenerator())
+    logger.info("已注册能力：generate_k8s_configmap")
+
+    capability_registry.register(K8sIngressGenerator())
+    logger.info("已注册能力：generate_k8s_ingress")
+
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")
     app.include_router(websocket.router, prefix="/api")
