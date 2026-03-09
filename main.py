@@ -16,7 +16,13 @@ from engine.capabilities.host_monitor import HostMonitor
 from engine.capabilities.alert_manager import AlertManager
 from engine.capabilities.remediation import RemediationPlan
 from engine.capabilities.execute_remediation import ExecuteRemediation
+from engine.capabilities.container_inspector import ContainerInspector
+from engine.capabilities.log_analyzer import LogAnalyzer, ScanLogDirectory
+from engine.capabilities.k8s_yaml_generator import K8sYamlGenerator, K8sConfigMapGenerator, K8sIngressGenerator
 from engine.storage.alert_store import AlertStore
+
+# 导入 API 路由
+from api import routes
 
 # 配置日志
 logging.basicConfig(
@@ -79,6 +85,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     capability_registry.register(ExecuteRemediation())
     logger.info("已注册能力：execute_remediation")
+
+    capability_registry.register(ContainerInspector())
+    logger.info("已注册能力：inspect_container")
+
+    # 注册 API 路由
+    app.include_router(routes.router, prefix="/api")
 
     logger.info("opsMind 启动完成")
 
