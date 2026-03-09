@@ -6,7 +6,7 @@
 import asyncio
 import functools
 from typing import Any, Callable, TypeVar
-from .contracts import ActionResult
+from ..contracts import ActionResult
 
 F = TypeVar('F', bound=Callable[..., Any])
 
