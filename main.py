@@ -19,6 +19,13 @@ from engine.capabilities.execute_remediation import ExecuteRemediation
 from engine.capabilities.container_inspector import ContainerInspector
 from engine.capabilities.log_analyzer import LogAnalyzer, ScanLogDirectory
 from engine.capabilities.k8s_yaml_generator import K8sYamlGenerator, K8sConfigMapGenerator, K8sIngressGenerator
+from engine.capabilities.notification import (
+    SendEmailNotification,
+    SendDingTalkNotification,
+    SendWeComNotification,
+    SendSlackNotification,
+    AlertNotificationManager
+)
 from engine.storage.alert_store import AlertStore
 from engine.tasks import BackgroundTaskManager
 
@@ -107,6 +114,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     capability_registry.register(K8sIngressGenerator())
     logger.info("已注册能力：generate_k8s_ingress")
+
+    # 注册通知能力
+    capability_registry.register(SendEmailNotification())
+    logger.info("已注册能力：send_email_notification")
+
+    capability_registry.register(SendDingTalkNotification())
+    logger.info("已注册能力：send_dingtalk_notification")
+
+    capability_registry.register(SendWeComNotification())
+    logger.info("已注册能力：send_wecom_notification")
+
+    capability_registry.register(SendSlackNotification())
+    logger.info("已注册能力：send_slack_notification")
+
+    capability_registry.register(AlertNotificationManager())
+    logger.info("已注册能力：manage_alert_notification")
 
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")
