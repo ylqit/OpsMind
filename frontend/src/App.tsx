@@ -11,6 +11,7 @@ import { Dashboard } from './components/Dashboard'
 import { AlertPanel } from './components/AlertPanel'
 import { ContainerList } from './components/ContainerList'
 import { AlertRules } from './components/AlertRules'
+import { SystemSettings } from './components/SystemSettings'
 
 const { Header, Content, Sider } = Layout
 
@@ -37,6 +38,11 @@ const App: React.FC = () => {
       key: '/containers',
       icon: <BoxPlotOutlined />,
       label: '容器管理',
+    },
+    {
+      key: '/settings',
+      icon: <SettingOutlined />,
+      label: '系统设置',
     },
   ]
 
@@ -82,6 +88,7 @@ const App: React.FC = () => {
             <Route path="/alerts" element={<AlertPanel />} />
             <Route path="/alert-rules" element={<AlertRules />} />
             <Route path="/containers" element={<ContainerList />} />
+            <Route path="/settings" element={<SystemSettings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Content>
