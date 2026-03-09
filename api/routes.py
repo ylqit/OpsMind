@@ -246,13 +246,9 @@ async def list_containers() -> Dict[str, Any]:
     列出所有 Docker 容器
     """
     from engine.capabilities.container_inspector import ContainerInspector
-    import asyncio
 
     inspector = ContainerInspector()
-    result = await asyncio.wait_for(inspector.dispatch(
-        container_name="_list_",
-        include_logs=False
-    ), timeout=30)
+    result = inspector.list_containers(all=True)
     return result.to_dict()
 
 
