@@ -33,6 +33,8 @@ from engine.capabilities.smart_alert import (
     RootCauseAnalyzer,
     SmartAlertEngine
 )
+from engine.operations.incident_reporter import IncidentReporter
+from engine.operations.skill_orchestrator import SkillOrchestrator
 from engine.storage.alert_store import AlertStore
 from engine.tasks import BackgroundTaskManager
 from engine.llm.config import get_llm_config_manager
@@ -161,6 +163,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     capability_registry.register(SmartAlertEngine())
     logger.info("已注册能力：smart_alert_engine")
+
+    # 注册操作编排能力
+    capability_registry.register(IncidentReporter())
+    logger.info("已注册能力：generate_incident_report")
+
+    capability_registry.register(SkillOrchestrator())
+    logger.info("已注册能力：orchestrate_skills")
 
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")

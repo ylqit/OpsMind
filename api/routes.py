@@ -759,3 +759,175 @@ async def llm_analyze(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM 调用失败：{str(e)}")
+
+
+# ========== Prometheus 数据源 API ==========
+
+@router.get("/prometheus/health")
+async def check_prometheus_health(
+    url: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    检查 Prometheus 服务健康状态
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        status = await adapter.health_check()
+        await adapter.close()
+
+        return {
+            "healthy": status.healthy,
+            "message": status.message,
+            "latency_ms": status.latency_ms,
+            "url": prometheus_url
+        }
+    except Exception as e:
+        return {
+            "healthy": False,
+            "message": str(e),
+            "url": prometheus_url
+        }
+
+
+@router.post("/prometheus/query")
+async def prometheus_query(
+    query: str = Body(..., description="PromQL 查询语句"),
+    url: Optional[str] = Body(default=None),
+    api_key: Optional[str] = Body(default=None),
+    time: Optional[str] = Body(default=None)
+) -> Dict[str, Any]:
+    """
+    Prometheus 即时查询
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+    from datetime import datetime
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        query_time = datetime.fromisoformat(time) if time else None
+        result = await adapter.query_instant(query, query_time)
+        await adapter.close()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败：{str(e)}")
+
+
+@router.post("/prometheus/query_range")
+async def prometheus_query_range(
+    query: str = Body(..., description="PromQL 查询语句"),
+    start: str = Body(..., description="开始时间（ISO 格式）"),
+    end: str = Body(..., description="结束时间（ISO 格式）"),
+    step: str = Body(default="5m", description="步长"),
+    url: Optional[str] = Body(default=None),
+    api_key: Optional[str] = Body(default=None)
+) -> Dict[str, Any]:
+    """
+    Prometheus 范围查询
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+    from datetime import datetime
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        result = await adapter.query_range(
+            query,
+            datetime.fromisoformat(start),
+            datetime.fromisoformat(end),
+            step
+        )
+        await adapter.close()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败：{str(e)}")
+
+
+@router.get("/prometheus/alerts")
+async def get_prometheus_alerts(
+    url: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    获取 Prometheus 当前告警
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        alerts = await adapter.get_alerts()
+        await adapter.close()
+        return {"alerts": alerts, "total": len(alerts)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取告警失败：{str(e)}")
+
+
+@router.get("/prometheus/rules")
+async def get_prometheus_rules(
+    group_name: Optional[str] = None,
+    url: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    获取 Prometheus 告警规则
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        rules = await adapter.get_alert_rules(group_name)
+        await adapter.close()
+        return {"rules": rules, "total": len(rules)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取规则失败：{str(e)}")
+
+
+@router.post("/prometheus/metric")
+async def get_prometheus_metric(
+    metric_name: str = Body(..., description="指标名称"),
+    labels: Optional[Dict[str, str]] = Body(default=None, description="标签过滤器"),
+    start: Optional[str] = Body(default=None, description="开始时间"),
+    end: Optional[str] = Body(default=None, description="结束时间"),
+    step: str = Body(default="5m", description="步长"),
+    url: Optional[str] = Body(default=None),
+    api_key: Optional[str] = Body(default=None)
+) -> Dict[str, Any]:
+    """
+    查询 Prometheus 指标
+    """
+    from engine.integrations.data_sources import PrometheusAdapter
+    from datetime import datetime
+
+    prometheus_url = url or "http://localhost:9090"
+    adapter = PrometheusAdapter(base_url=prometheus_url, api_key=api_key)
+
+    try:
+        await adapter.initialize()
+        result = await adapter.query_metric(
+            metric_name,
+            labels,
+            datetime.fromisoformat(start) if start else None,
+            datetime.fromisoformat(end) if end else None,
+            step
+        )
+        await adapter.close()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败：{str(e)}")
+

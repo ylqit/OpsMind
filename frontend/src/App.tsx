@@ -8,6 +8,7 @@ import {
   SettingOutlined,
   ToolOutlined,
   ThunderboltOutlined,
+  MedicineBoxOutlined,
 } from '@ant-design/icons'
 import { Dashboard } from './components/Dashboard'
 import { AlertPanel } from './components/AlertPanel'
@@ -16,6 +17,7 @@ import { ContainerList } from './components/ContainerList'
 import { SystemSettings } from './components/SystemSettings'
 import { CapabilityWorkbench } from './components/CapabilityWorkbench'
 import LLMSettings from './components/LLMSettings'
+import RemediationView from './components/RemediationView'
 import { RouteErrorBoundary, LoadingFallback } from './components/ErrorBoundary'
 
 const { Header, Content, Sider } = Layout
@@ -38,6 +40,11 @@ const App: React.FC = () => {
       key: '/alert-rules',
       icon: <SettingOutlined />,
       label: '告警规则',
+    },
+    {
+      key: '/remediation',
+      icon: <MedicineBoxOutlined />,
+      label: '修复预案',
     },
     {
       key: '/containers',
@@ -103,6 +110,7 @@ const App: React.FC = () => {
               <Route path="/" element={<Dashboard />} />
               <Route path="/alerts" element={<AlertPanel />} />
               <Route path="/alert-rules" element={<AlertRules />} />
+              <Route path="/remediation" element={<RemediationView />} />
               <Route path="/containers" element={<ContainerList />} />
               <Route path="/workbench" element={<CapabilityWorkbench />} />
               <Route path="/llm-settings" element={<LLMSettings />} />
