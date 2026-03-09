@@ -12,6 +12,7 @@ import { AlertPanel } from './components/AlertPanel'
 import { ContainerList } from './components/ContainerList'
 import { AlertRules } from './components/AlertRules'
 import { SystemSettings } from './components/SystemSettings'
+import { RouteErrorBoundary, LoadingFallback } from './components/ErrorBoundary'
 
 const { Header, Content, Sider } = Layout
 
@@ -83,14 +84,17 @@ const App: React.FC = () => {
           <h2 style={{ margin: 0 }}>智能运维助手</h2>
         </Header>
         <Content style={{ margin: '16px' }}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/alerts" element={<AlertPanel />} />
-            <Route path="/alert-rules" element={<AlertRules />} />
-            <Route path="/containers" element={<ContainerList />} />
-            <Route path="/settings" element={<SystemSettings />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <React.Suspense fallback={<LoadingFallback message="加载页面中..." />}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/alerts" element={<AlertPanel />} />
+              <Route path="/alert-rules" element={<AlertRules />} />
+              <Route path="/containers" element={<ContainerList />} />
+              <Route path="/settings" element={<SystemSettings />} />
+              <Route path="/error" element={<RouteErrorBoundary />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </React.Suspense>
         </Content>
       </Layout>
     </Layout>

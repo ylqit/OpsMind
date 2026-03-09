@@ -143,7 +143,7 @@ export const AlertRules: React.FC = () => {
         title="告警规则配置"
         style={{ margin: 24 }}
         extra={
-          <Space>
+          <Space wrap>
             <Button icon={<ReloadOutlined />} onClick={loadRules} loading={rulesLoading}>
               刷新
             </Button>
@@ -159,6 +159,7 @@ export const AlertRules: React.FC = () => {
           loading={rulesLoading}
           rowKey="id"
           scroll={{ x: 800 }}
+          size="middle"
         />
       </Card>
 

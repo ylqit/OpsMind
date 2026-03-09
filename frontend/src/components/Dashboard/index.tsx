@@ -115,9 +115,9 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="dashboard" style={{ padding: 24 }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2>资源监控仪表盘</h2>
+          <h2 style={{ fontSize: 20, margin: 0 }}>资源监控仪表盘</h2>
           <span style={{ fontSize: 12, color: connected ? '#52c41a' : '#faad14' }}>
             ● {connected ? '实时连接中' : '连接中...'}
           </span>

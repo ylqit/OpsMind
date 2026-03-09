@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ErrorType, getErrorMessage, getErrorType } from '../utils/errorHandler'
 
 const API_BASE_URL = '/api'
 
@@ -22,6 +23,17 @@ apiClient.interceptors.response.use(
       if (status === 500) {
         throw new Error(data.detail || '服务器内部错误')
       }
+      if (status === 401) {
+        throw new Error('未授权访问')
+      }
+      if (status === 403) {
+        throw new Error('无权访问')
+      }
+    }
+    // 网络错误处理
+    if (!error.response && error.message) {
+      const type = getErrorType(error)
+      throw new Error(getErrorMessage(error, type))
     }
     throw error
   }

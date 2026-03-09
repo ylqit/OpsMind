@@ -210,6 +210,7 @@ export const AlertPanel: React.FC = () => {
           rowKey="id"
           pagination={{ pageSize: 10 }}
           scroll={{ x: 800 }}
+          size="middle"
         />
       </Card>
 

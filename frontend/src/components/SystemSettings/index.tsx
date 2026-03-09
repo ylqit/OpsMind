@@ -84,7 +84,7 @@ export const SystemSettings: React.FC = () => {
   }
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: '24px', maxWidth: '100%', overflowX: 'hidden' }}>
       <Card
         title={
           <Space>
@@ -188,8 +188,8 @@ export const SystemSettings: React.FC = () => {
       </Card>
 
       {/* 统计卡片 */}
-      <Row gutter={16}>
-        <Col span={8}>
+      <Row gutter={[16, 16]}>{/* xs: 24, sm: 12, md: 8 */}
+        <Col xs={24} sm={12} md={8}>
           <Card>
             <Statistic
               title="监控能力"
@@ -199,7 +199,7 @@ export const SystemSettings: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col span={8}>
+        <Col xs={24} sm={12} md={8}>
           <Card>
             <Statistic
               title="活动告警"
@@ -209,7 +209,7 @@ export const SystemSettings: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col span={8}>
+        <Col xs={24} sm={12} md={8}>
           <Card>
             <Statistic
               title="告警规则"

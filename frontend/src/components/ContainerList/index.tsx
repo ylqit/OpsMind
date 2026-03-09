@@ -158,6 +158,7 @@ export const ContainerList: React.FC = () => {
           loading={loading}
           rowKey="id"
           scroll={{ x: 800 }}
+          size="middle"
         />
       </Card>
 

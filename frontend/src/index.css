@@ -16,3 +16,90 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+  .ant-layout-sider {
+    position: fixed;
+    z-index: 999;
+  }
+
+  .dashboard .ant-card {
+    margin-bottom: 12px;
+  }
+
+  .ant-descriptions-item-label {
+    font-size: 12px;
+  }
+
+  .ant-descriptions-item-content {
+    font-size: 13px;
+  }
+
+  /* 移动端标题字体调小 */
+  .ant-card-head-title {
+    font-size: 16px !important;
+  }
+
+  /* 移动端内边距减小 */
+  .ant-card-body {
+    padding: 12px !important;
+  }
+
+  /* 移动端统计表滚动 */
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 576px) {
+  .ant-table {
+    font-size: 12px;
+  }
+
+  .ant-btn {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  /* 移动端统计卡片 */
+  .ant-statistic-title {
+    font-size: 12px;
+  }
+
+  .ant-statistic-content {
+    font-size: 18px;
+  }
+
+  /* 移动端 Progress 大小调整 */
+  .ant-progress-text {
+    font-size: 12px;
+  }
+}
+
+/* 小屏幕优化 */
+@media (max-width: 768px) {
+  .alert-panel .ant-card-body,
+  .dashboard .ant-card-body {
+    padding: 12px !important;
+  }
+
+  /* 移动端表格滚动 */
+  .ant-table-scroll-horizontal {
+    overflow-x: auto;
+  }
+}
+
+/* 加载状态 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+/* 错误状态 */
+.error-container {
+  padding: 48px 16px;
+  text-align: center;
+}
