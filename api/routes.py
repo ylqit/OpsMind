@@ -3,11 +3,15 @@ API 路由模块
 
 提供 REST API 端点，直接调用能力实现。
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 
 router = APIRouter()
+
+# LLM 配置管理相关导入
+from engine.llm.config import get_llm_config_manager, LLMProviderConfig, LLMProviderType
+from engine.llm.client import LLMClient, LLMRouter
 
 
 class DispatchRequest(BaseModel):
@@ -511,3 +515,247 @@ async def generate_k8s_ingress(
         tls_secret=tls_secret
     ), timeout=15)
     return result.to_dict()
+
+
+# ========== LLM 配置管理端点 ==========
+
+@router.get("/llm/providers")
+async def list_llm_providers() -> Dict[str, Any]:
+    """
+    列出所有 LLM Provider 配置
+    """
+    config_manager = get_llm_config_manager()
+    config = config_manager.load_config()
+
+    providers = []
+    for p in config.providers:
+        providers.append({
+            "name": p.name,
+            "type": p.provider_type.value,
+            "model": p.model,
+            "base_url": p.base_url,
+            "enabled": p.enabled,
+            "timeout": p.timeout,
+            "api_key_configured": bool(p.api_key)
+        })
+
+    return {
+        "providers": providers,
+        "default_provider": config.default_provider,
+        "total": len(providers)
+    }
+
+
+@router.get("/llm/providers/{provider_name}")
+async def get_llm_provider(provider_name: str) -> Dict[str, Any]:
+    """
+    获取指定 LLM Provider 配置详情
+    """
+    config_manager = get_llm_config_manager()
+    config = config_manager.load_config()
+
+    provider = config.get_provider(provider_name)
+    if not provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    return {
+        "name": provider.name,
+        "type": provider.provider_type.value,
+        "model": provider.model,
+        "base_url": provider.base_url,
+        "enabled": provider.enabled,
+        "timeout": provider.timeout,
+        "max_retries": provider.max_retries,
+        "api_key_configured": bool(provider.api_key)
+    }
+
+
+@router.post("/llm/providers")
+async def create_llm_provider(provider_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    创建新的 LLM Provider
+
+    Request Body:
+        name: Provider 名称
+        type: Provider 类型 (openai, anthropic, custom)
+        api_key: API Key
+        model: 模型名称
+        base_url: API 基础 URL（可选，OpenAI 兼容需要）
+        enabled: 是否启用（默认 true）
+        timeout: 超时时间（默认 30 秒）
+    """
+    config_manager = get_llm_config_manager()
+
+    try:
+        provider = LLMProviderConfig(
+            name=provider_data.get("name"),
+            provider_type=LLMProviderType(provider_data.get("type", "custom")),
+            api_key=provider_data.get("api_key", ""),
+            model=provider_data.get("model"),
+            base_url=provider_data.get("base_url"),
+            enabled=provider_data.get("enabled", True),
+            timeout=provider_data.get("timeout", 30),
+            max_retries=provider_data.get("max_retries", 2)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    success = config_manager.add_provider(provider)
+    if success:
+        return {"message": f"Provider '{provider.name}' 创建成功", "name": provider.name}
+    else:
+        raise HTTPException(status_code=400, detail=f"Provider '{provider.name}' 已存在")
+
+
+@router.put("/llm/providers/{provider_name}")
+async def update_llm_provider(
+    provider_name: str,
+    updates: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    更新 LLM Provider 配置
+
+    Request Body:
+        api_key: API Key（可选，更新时提供）
+        model: 模型名称（可选）
+        base_url: API 基础 URL（可选）
+        enabled: 是否启用（可选）
+        timeout: 超时时间（可选）
+    """
+    config_manager = get_llm_config_manager()
+
+    # 只允许更新特定字段
+    allowed_fields = ["api_key", "model", "base_url", "enabled", "timeout", "max_retries"]
+    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+
+    success = config_manager.update_provider(provider_name, filtered_updates)
+    if success:
+        return {"message": f"Provider '{provider_name}' 更新成功"}
+    else:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+
+@router.delete("/llm/providers/{provider_name}")
+async def delete_llm_provider(provider_name: str) -> Dict[str, str]:
+    """
+    删除 LLM Provider 配置
+    """
+    config_manager = get_llm_config_manager()
+
+    if provider_name in ["openai", "anthropic"] and config_manager.load_config().get_provider(provider_name):
+        # 内置 Provider 不建议删除，改为禁用
+        config_manager.update_provider(provider_name, {"enabled": False})
+        return {"message": f"Provider '{provider_name}' 已禁用（内置 Provider 不建议删除）"}
+
+    success = config_manager.remove_provider(provider_name)
+    if success:
+        return {"message": f"Provider '{provider_name}' 已删除"}
+    else:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+
+@router.post("/llm/providers/{provider_name}/test")
+async def test_llm_provider(provider_name: str) -> Dict[str, Any]:
+    """
+    测试 LLM Provider 连接
+
+    发送一个简单的测试请求，验证 API Key 和配置是否正确
+    """
+    config_manager = get_llm_config_manager()
+    config = config_manager.load_config()
+
+    provider = config.get_provider(provider_name)
+    if not provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    if not provider.api_key:
+        raise HTTPException(status_code=400, detail="API Key 未配置")
+
+    # 创建临时客户端进行测试
+    from engine.llm.client import LLMClient
+
+    client = LLMClient(provider)
+
+    try:
+        import asyncio
+        response = await asyncio.wait_for(
+            client.chat(
+                messages=[{"role": "user", "content": "Hello, this is a test message."}],
+                max_tokens=50
+            ),
+            timeout=30
+        )
+        return {
+            "status": "success",
+            "message": "连接测试成功",
+            "response_preview": response[:200] if len(response) > 200 else response
+        }
+    except Exception as e:
+        return {
+            "status": "failed",
+            "message": f"连接测试失败：{str(e)}"
+        }
+
+
+@router.post("/llm/default-provider")
+async def set_default_llm_provider(data: Dict[str, str]) -> Dict[str, Any]:
+    """
+    设置默认 LLM Provider
+    """
+    config_manager = get_llm_config_manager()
+
+    provider_name = data.get("provider_name")
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="缺少 provider_name 参数")
+
+    success = config_manager.set_default_provider(provider_name)
+    if success:
+        return {"message": f"默认 Provider 已设置为 '{provider_name}'"}
+    else:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+
+@router.post("/llm/analyze")
+async def llm_analyze(
+    messages: List[Dict[str, str]] = Body(..., description="消息列表"),
+    provider: Optional[str] = Body(default=None, description="指定 Provider"),
+    temperature: float = Body(default=0.7, description="温度参数"),
+    max_tokens: int = Body(default=2000, description="最大 token 数")
+) -> Dict[str, Any]:
+    """
+    直接使用 LLM 进行分析
+
+    Request Body:
+        messages: 消息列表 [{"role": "user", "content": "..."}]
+        provider: 指定 Provider（可选，默认使用默认 Provider）
+        temperature: 温度参数（可选）
+        max_tokens: 最大 token 数（可选）
+
+    Returns:
+        LLM 响应内容
+    """
+    config_manager = get_llm_config_manager()
+    config = config_manager.load_config()
+
+    # 构建路由器
+    llm_clients = {}
+    for p in config.get_enabled_providers():
+        llm_clients[p.name] = LLMClient(p)
+
+    if not llm_clients:
+        raise HTTPException(status_code=500, detail="没有可用的 LLM Provider")
+
+    router = LLMRouter(llm_clients, config.default_provider)
+
+    try:
+        import asyncio
+        response = await asyncio.wait_for(
+            router.chat(messages, provider=provider, temperature=temperature, max_tokens=max_tokens),
+            timeout=60
+        )
+        return {
+            "content": response,
+            "provider": provider or config.default_provider
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM 调用失败：{str(e)}")

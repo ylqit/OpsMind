@@ -4,6 +4,7 @@ opsMind - 智能运维助手
 主程序入口
 """
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -26,8 +27,16 @@ from engine.capabilities.notification import (
     SendSlackNotification,
     AlertNotificationManager
 )
+from engine.capabilities.smart_alert import (
+    AlertAggregator,
+    AlertDeduplicator,
+    RootCauseAnalyzer,
+    SmartAlertEngine
+)
 from engine.storage.alert_store import AlertStore
 from engine.tasks import BackgroundTaskManager
+from engine.llm.config import get_llm_config_manager
+from engine.llm.client import LLMClient, LLMRouter
 
 # 导入 API 路由
 from api import routes
@@ -74,6 +83,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # 确保目录存在
     config.ensure_directories()
     logger.info("数据目录已准备")
+
+    # 初始化 LLM 配置和路由器
+    llm_config_manager = get_llm_config_manager(Path("config"))
+    llm_config = llm_config_manager.load_config()
+    llm_clients = {}
+    for provider_config in llm_config.get_enabled_providers():
+        llm_clients[provider_config.name] = LLMClient(provider_config)
+    llm_router = LLMRouter(llm_clients, llm_config.default_provider) if llm_clients else None
+    logger.info(f"LLM 路由器已初始化：{len(llm_clients)} 个 Provider")
 
     # 初始化能力注册表
     capability_registry = CapabilityRegistry()
@@ -130,6 +148,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     capability_registry.register(AlertNotificationManager())
     logger.info("已注册能力：manage_alert_notification")
+
+    # 注册智能分析能力
+    capability_registry.register(AlertAggregator())
+    logger.info("已注册能力：aggregate_alerts")
+
+    capability_registry.register(AlertDeduplicator())
+    logger.info("已注册能力：deduplicate_alerts")
+
+    capability_registry.register(RootCauseAnalyzer(llm_router))
+    logger.info("已注册能力：analyze_root_cause")
+
+    capability_registry.register(SmartAlertEngine())
+    logger.info("已注册能力：smart_alert_engine")
 
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")
@@ -253,6 +284,9 @@ async def get_capability_schema(name: str) -> dict:
 
 if __name__ == "__main__":
     import uvicorn
+    # 注意：config 在 lifespan 中加载，此处需要重新加载
+    from settings import RuntimeConfig
+    config = RuntimeConfig.load_from_env()
     uvicorn.run(
         "main:app",
         host=config.host,

@@ -1,0 +1,53 @@
+# LLM Provider 配置文件
+# 支持多个 LLM Provider 和动态切换
+
+llm:
+  # 默认 Provider 名称
+  default_provider: openai
+
+  # Provider 列表
+  providers:
+    # OpenAI Provider
+    - name: openai
+      type: openai
+      api_key: ""  # 通过环境变量 OPENAI_API_KEY 设置
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      enabled: true
+      timeout: 30
+      max_retries: 2
+
+    # Anthropic Provider
+    - name: anthropic
+      type: anthropic
+      api_key: ""  # 通过环境变量 ANTHROPIC_API_KEY 设置
+      model: "claude-sonnet-4-5-20251001"
+      enabled: true
+      timeout: 30
+      max_retries: 2
+
+    # 自定义 Provider (兼容 OpenAI API)
+    - name: custom
+      type: custom
+      api_key: ""  # 通过环境变量 CUSTOM_LLM_API_KEY 设置
+      base_url: ""  # 通过环境变量 CUSTOM_LLM_BASE_URL 设置
+      model: "custom-model"
+      enabled: false
+      timeout: 30
+      max_retries: 2
+
+# 环境变量优先级说明:
+# 1. 配置文件中的设置为基础配置
+# 2. 环境变量会自动覆盖配置文件中的对应设置
+# 3. 如果配置文件中没有对应 Provider，环境变量会创建新的 Provider
+
+# 支持的环境变量:
+# - OPENAI_API_KEY: OpenAI API Key
+# - OPENAI_BASE_URL: OpenAI API 基础 URL (可选)
+# - OPENAI_MODEL: OpenAI 默认模型 (可选)
+# - ANTHROPIC_API_KEY: Anthropic API Key
+# - ANTHROPIC_MODEL: Anthropic 默认模型 (可选)
+# - CUSTOM_LLM_API_KEY: 自定义 LLM API Key
+# - CUSTOM_LLM_BASE_URL: 自定义 LLM 基础 URL
+# - CUSTOM_LLM_MODEL: 自定义 LLM 模型名称
+# - LLM_DEFAULT_PROVIDER: 默认 Provider 名称

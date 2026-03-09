@@ -91,6 +91,7 @@ class RuntimeConfig(BaseSettings):
 
     # 目录配置
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent)
+    config_dir: Optional[Path] = None
     data_dir: Optional[Path] = None
     log_dir: Optional[Path] = None
 
@@ -161,9 +162,11 @@ class RuntimeConfig(BaseSettings):
 
         创建数据目录和日志目录。
         """
+        self.config_dir = self.base_dir / "config"
         self.data_dir = self.base_dir / "data"
         self.log_dir = self.base_dir / "logs"
 
+        self.config_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 

@@ -7,13 +7,15 @@ import {
   BoxPlotOutlined,
   SettingOutlined,
   ToolOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { Dashboard } from './components/Dashboard'
 import { AlertPanel } from './components/AlertPanel'
-import { ContainerList } from './components/ContainerList'
 import { AlertRules } from './components/AlertRules'
+import { ContainerList } from './components/ContainerList'
 import { SystemSettings } from './components/SystemSettings'
 import { CapabilityWorkbench } from './components/CapabilityWorkbench'
+import LLMSettings from './components/LLMSettings'
 import { RouteErrorBoundary, LoadingFallback } from './components/ErrorBoundary'
 
 const { Header, Content, Sider } = Layout
@@ -46,6 +48,11 @@ const App: React.FC = () => {
       key: '/workbench',
       icon: <ToolOutlined />,
       label: '能力调用',
+    },
+    {
+      key: '/llm-settings',
+      icon: <ThunderboltOutlined />,
+      label: 'LLM 配置',
     },
     {
       key: '/settings',
@@ -98,6 +105,7 @@ const App: React.FC = () => {
               <Route path="/alert-rules" element={<AlertRules />} />
               <Route path="/containers" element={<ContainerList />} />
               <Route path="/workbench" element={<CapabilityWorkbench />} />
+              <Route path="/llm-settings" element={<LLMSettings />} />
               <Route path="/settings" element={<SystemSettings />} />
               <Route path="/error" element={<RouteErrorBoundary />} />
               <Route path="*" element={<Navigate to="/" replace />} />
