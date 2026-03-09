@@ -24,6 +24,7 @@ from engine.tasks import BackgroundTaskManager
 
 # 导入 API 路由
 from api import routes
+from api import websocket
 
 # 配置日志
 logging.basicConfig(
@@ -38,6 +39,7 @@ config: RuntimeConfig
 capability_registry: CapabilityRegistry
 alert_store: AlertStore
 background_task_manager: BackgroundTaskManager
+alert_notifier: websocket.AlertNotifier
 
 
 @asynccontextmanager
@@ -93,11 +95,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     # 注册 API 路由
     app.include_router(routes.router, prefix="/api")
+    app.include_router(websocket.router, prefix="/api")
 
     # 启动后台任务
     background_task_manager = BackgroundTaskManager(alert_store)
     await background_task_manager.start()
     logger.info("后台任务已启动")
+
+    # 启动 WebSocket 通知器
+    alert_notifier = websocket.AlertNotifier(alert_store, check_interval=5)
+    await alert_notifier.start()
+    logger.info("WebSocket 通知器已启动")
 
     logger.info("opsMind 启动完成")
 
@@ -109,6 +117,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # 停止后台任务
     if background_task_manager:
         await background_task_manager.stop()
+
+    # 停止 WebSocket 通知器
+    if alert_notifier:
+        await alert_notifier.stop()
 
     logger.info("opsMind 已关闭")
 
