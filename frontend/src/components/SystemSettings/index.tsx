@@ -15,10 +15,31 @@ interface SystemInfo {
   alert_rules_count?: number
 }
 
+interface DiagnoseInfo {
+  system: {
+    cpu_usage: number
+    memory_usage: number
+    memory_available_mb: number
+    disk_usage: number
+    disk_free_gb: number
+  }
+  services: {
+    docker: {
+      status: string
+      containers: number
+    }
+    alerts: {
+      active: number
+      rules: number
+    }
+  }
+}
+
 export const SystemSettings: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [systemInfo, setSystemInfo] = useState<SystemInfo>({ version: '0.1.0' })
   const [healthStatus, setHealthStatus] = useState<'healthy' | 'unhealthy'>('healthy')
+  const [diagnoseInfo, setDiagnoseInfo] = useState<DiagnoseInfo | null>(null)
 
   useEffect(() => {
     loadSystemInfo()
@@ -44,12 +65,17 @@ export const SystemSettings: React.FC = () => {
       const rulesRes = await fetch('/api/alerts/rules')
       const rulesData = await rulesRes.json()
 
+      // 获取诊断信息
+      const diagnoseRes = await fetch('/api/diagnose')
+      const diagnoseData = await diagnoseRes.json()
+
       setSystemInfo({
         version: healthData.version || '0.1.0',
         capabilities_count: capsData.length,
         active_alerts: alertsData.total,
         alert_rules_count: rulesData.total,
       })
+      setDiagnoseInfo(diagnoseData)
     } catch (error) {
       console.error('加载系统信息失败:', error)
     } finally {
@@ -110,6 +136,53 @@ export const SystemSettings: React.FC = () => {
                 {systemInfo.alert_rules_count || 0}
               </Descriptions.Item>
             </Descriptions>
+
+            {/* 资源监控详情 */}
+            {diagnoseInfo && (
+              <>
+                <Descriptions
+                  title="资源使用"
+                  bordered
+                  column={{ xs: 1, sm: 2, md: 3 }}
+                  style={{ marginTop: 24 }}
+                >
+                  <Descriptions.Item label="CPU 使用率">
+                    {diagnoseInfo.system.cpu_usage}%
+                  </Descriptions.Item>
+                  <Descriptions.Item label="内存使用率">
+                    {diagnoseInfo.system.memory_usage}%
+                  </Descriptions.Item>
+                  <Descriptions.Item label="可用内存">
+                    {diagnoseInfo.system.memory_available_mb} GB
+                  </Descriptions.Item>
+                  <Descriptions.Item label="磁盘使用率">
+                    {diagnoseInfo.system.disk_usage}%
+                  </Descriptions.Item>
+                  <Descriptions.Item label="磁盘剩余">
+                    {diagnoseInfo.system.disk_free_gb} GB
+                  </Descriptions.Item>
+                </Descriptions>
+
+                {/* 服务状态 */}
+                <Descriptions
+                  title="服务状态"
+                  bordered
+                  column={{ xs: 1, sm: 2, md: 2 }}
+                  style={{ marginTop: 24 }}
+                >
+                  <Descriptions.Item label="Docker">
+                    <Tag color={diagnoseInfo.services.docker.status === 'available' ? 'green' : 'red'}>
+                      {diagnoseInfo.services.docker.status === 'available' ? '可用' : '不可用'}
+                    </Tag>
+                    {diagnoseInfo.services.docker.containers} 个容器
+                  </Descriptions.Item>
+                  <Descriptions.Item label="告警系统">
+                    <Tag color="blue">运行中</Tag>
+                    {diagnoseInfo.services.alerts.active} 活动 / {diagnoseInfo.services.alerts.rules} 规则
+                  </Descriptions.Item>
+                </Descriptions>
+              </>
+            )}
           </>
         )}
       </Card>

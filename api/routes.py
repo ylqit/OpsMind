@@ -275,10 +275,74 @@ async def get_host_metrics() -> Dict[str, Any]:
     获取主机资源指标
     """
     from engine.capabilities.host_monitor import HostMonitor
-    import asyncio
 
     monitor = HostMonitor()
     result = await asyncio.wait_for(monitor.dispatch(
         metrics=["cpu", "memory", "disk", "network"]
     ), timeout=30)
     return result.to_dict()
+
+
+@router.get("/diagnose")
+async def diagnose_system() -> Dict[str, Any]:
+    """
+    系统诊断端点
+
+    返回系统详细信息，包括：
+    - 主机资源状态
+    - 活动告警数量
+    - 告警规则数量
+    - Docker 容器状态
+    """
+    import psutil
+    from engine.capabilities.container_inspector import ContainerInspector
+    from engine.storage.alert_store import AlertStore
+    from main import alert_store
+
+    # 主机资源
+    cpu_percent = psutil.cpu_percent(interval=0.5)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('C:/')
+
+    # 容器状态
+    container_status = "unavailable"
+    container_count = 0
+    try:
+        inspector = ContainerInspector()
+        if inspector._is_docker_available():
+            container_status = "available"
+            result = inspector.list_containers(all=True)
+            if result.success:
+                container_count = result.data.get('total', 0)
+    except Exception:
+        pass
+
+    # 告警统计
+    active_alerts = 0
+    rules_count = 0
+    if alert_store:
+        alerts = await alert_store.query_alerts(status="active", limit=1)
+        active_alerts = len(alerts)
+        rules = await alert_store.get_rules()
+        rules_count = len(rules)
+
+    return {
+        "system": {
+            "cpu_usage": cpu_percent,
+            "memory_usage": memory.percent,
+            "memory_available_mb": round(memory.available / 1024 / 1024, 1),
+            "disk_usage": disk.percent,
+            "disk_free_gb": round(disk.free / 1024 / 1024 / 1024, 1),
+        },
+        "services": {
+            "docker": {
+                "status": container_status,
+                "containers": container_count,
+            },
+            "alerts": {
+                "active": active_alerts,
+                "rules": rules_count,
+            },
+        },
+        "timestamp": psutil.boot_time(),
+    }
