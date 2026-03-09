@@ -85,10 +85,7 @@ async def list_alerts(
     """
     查询告警列表
     """
-    import asyncio
-    alerts = asyncio.get_event_loop().run_until_complete(
-        store.query_alerts(status=status, severity=severity, limit=limit)
-    )
+    alerts = await store.query_alerts(status=status, severity=severity, limit=limit)
     return {"alerts": alerts, "total": len(alerts)}
 
 
@@ -101,10 +98,7 @@ async def acknowledge_alert(
     """
     确认告警
     """
-    import asyncio
-    success = asyncio.get_event_loop().run_until_complete(
-        store.acknowledge_alert(alert_id, acknowledged_by)
-    )
+    success = await store.acknowledge_alert(alert_id, acknowledged_by)
     if success:
         return {"message": "告警已确认", "alert_id": alert_id}
     raise HTTPException(status_code=404, detail="告警不存在")
@@ -119,10 +113,7 @@ async def resolve_alert(
     """
     解决告警
     """
-    import asyncio
-    success = asyncio.get_event_loop().run_until_complete(
-        store.resolve_alert(alert_id, resolved_by)
-    )
+    success = await store.resolve_alert(alert_id, resolved_by)
     if success:
         return {"message": "告警已解决", "alert_id": alert_id}
     raise HTTPException(status_code=404, detail="告警不存在")
@@ -143,10 +134,7 @@ async def create_alert_rule(
         operator: 比较运算符 (>, <, >=, <=, =)
         severity: 严重程度 (info, warning, critical)
     """
-    import asyncio
-    rule_id = asyncio.get_event_loop().run_until_complete(
-        store.create_rule(rule_data)
-    )
+    rule_id = await store.create_rule(rule_data)
     return {"rule_id": rule_id, "message": "规则创建成功"}
 
 
@@ -155,8 +143,7 @@ async def list_alert_rules(store=Depends(get_alert_store)) -> Dict[str, Any]:
     """
     列出所有告警规则
     """
-    import asyncio
-    rules = asyncio.get_event_loop().run_until_complete(store.get_rules())
+    rules = await store.get_rules()
     return {"rules": rules, "total": len(rules)}
 
 
@@ -168,10 +155,7 @@ async def delete_alert_rule(
     """
     删除告警规则
     """
-    import asyncio
-    success = asyncio.get_event_loop().run_until_complete(
-        store.delete_rule(rule_id)
-    )
+    success = await store.delete_rule(rule_id)
     if success:
         return {"message": "规则已删除", "rule_id": rule_id}
     raise HTTPException(status_code=404, detail="规则不存在")
