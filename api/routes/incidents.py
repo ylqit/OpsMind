@@ -1,0 +1,142 @@
+"""异常接口。"""
+from __future__ import annotations
+
+import json
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
+
+from .deps import (
+    get_alert_store,
+    get_asset_service,
+    get_incident_service,
+    get_recommendation_service,
+    get_resource_engine,
+    get_signal_service,
+    get_task_manager,
+    get_traffic_engine,
+    resolve_access_logs,
+)
+
+router = APIRouter(prefix="/incidents", tags=["incidents"])
+
+
+class IncidentAnalyzeRequest(BaseModel):
+    """异常分析请求。"""
+
+    service_key: str | None = Field(default=None, description="服务键")
+    asset_id: str | None = Field(default=None, description="资产 ID")
+    time_window: str = Field(default="1h", description="分析时间窗口")
+
+
+@router.get("")
+async def list_incidents(
+    status: str | None = None,
+    severity: str | None = None,
+    service_key: str | None = None,
+    time_range: str | None = None,
+    incident_service=Depends(get_incident_service),
+):
+    del time_range
+    incidents = incident_service.list_incidents(status=status, severity=severity, service_key=service_key)
+    return {"items": [incident.model_dump(mode="json") for incident in incidents], "total": len(incidents)}
+
+
+@router.get("/{incident_id}")
+async def get_incident_detail(
+    incident_id: str,
+    incident_service=Depends(get_incident_service),
+    recommendation_service=Depends(get_recommendation_service),
+):
+    incident = incident_service.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="异常不存在")
+    recommendations = recommendation_service.list_by_incident(incident_id)
+    return {
+        "incident": incident.model_dump(mode="json"),
+        "recommendations": [item.model_dump(mode="json") for item in recommendations],
+    }
+
+
+@router.post("/analyze")
+async def analyze_incident(
+    request: IncidentAnalyzeRequest,
+    task_manager=Depends(get_task_manager),
+    asset_service=Depends(get_asset_service),
+    traffic_engine=Depends(get_traffic_engine),
+    resource_engine=Depends(get_resource_engine),
+    incident_service=Depends(get_incident_service),
+    signal_service=Depends(get_signal_service),
+    alert_store=Depends(get_alert_store),
+):
+    service_key = request.service_key or "unknown/root"
+
+    async def runner(task):
+        await task_manager.set_stage(task.task_id, TaskStatus.COLLECTING, 15, "正在同步资产与采集流量数据")
+        assets = await asset_service.sync_assets(service_key=service_key)
+        related_asset_ids = [asset.asset_id for asset in assets if not request.asset_id or asset.asset_id == request.asset_id]
+        log_paths = resolve_access_logs()
+        traffic_summary = traffic_engine.summarize(log_paths, time_range=request.time_window, service_key=service_key)
+        resource_summary = await resource_engine.summarize(service_key=service_key)
+        active_alerts = await alert_store.query_alerts(status="active", limit=100)
+
+        await task_manager.append_trace(
+            task.task_id,
+            "collect",
+            "collect_signals",
+            TaskStatus.COLLECTING,
+            "已采集流量、资源和告警信号",
+            {"related_asset_ids": related_asset_ids, "alert_count": len(active_alerts)},
+        )
+        signal_service.capture_log_summary(traffic_summary, service_key=service_key, asset_id=request.asset_id)
+        signal_service.capture_resource_summary(resource_summary, service_key=service_key, asset_id=request.asset_id)
+        signal_service.capture_alerts(active_alerts, service_key=service_key, asset_id=request.asset_id)
+
+        await task_manager.set_stage(task.task_id, TaskStatus.ANALYZING, 70, "正在生成异常结论")
+        incident = incident_service.build_incident(
+            service_key=service_key,
+            traffic_summary=traffic_summary,
+            resource_summary=resource_summary,
+            related_asset_ids=related_asset_ids,
+        )
+        await task_manager.append_trace(
+            task.task_id,
+            "analyze",
+            "build_incident",
+            TaskStatus.ANALYZING,
+            incident.summary,
+            {"incident_id": incident.incident_id, "severity": incident.severity, "confidence": incident.confidence},
+        )
+
+        artifact = task_manager.artifact_store.write_text(
+            task_id=task.task_id,
+            kind=ArtifactKind.JSON,
+            content=json.dumps(
+                {
+                    "incident": incident.model_dump(mode="json"),
+                    "traffic_summary": traffic_summary,
+                    "resource_summary": resource_summary,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            filename=f"incident-{incident.incident_id}.json",
+        )
+        await task_manager.attach_artifact(task.task_id, artifact)
+        await task_manager.event_bus.publish(
+            {
+                "type": "incident_updated",
+                "incident": incident.model_dump(mode="json"),
+                "task_id": task.task_id,
+            }
+        )
+        return {"incident": incident.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")}
+
+    task = await task_manager.create_task(
+        task_type=TaskType.INCIDENT_ANALYSIS,
+        payload=request.model_dump(),
+        runner=runner,
+    )
+    return task.model_dump(mode="json")
