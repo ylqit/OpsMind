@@ -34,6 +34,16 @@ export interface IncidentRecord {
   updated_at: string
 }
 
+export interface TaskArtifact {
+  artifact_id: string
+  task_id: string
+  kind: string
+  path: string
+  preview: string
+  size_bytes: number
+  created_at: string
+}
+
 export interface RecommendationRecord {
   recommendation_id: string
   incident_id: string
@@ -43,19 +53,9 @@ export interface RecommendationRecord {
   observation: string
   recommendation: string
   risk_note: string
-  artifact_refs: Array<Record<string, unknown>>
+  artifact_refs: TaskArtifact[]
   created_at: string
   updated_at: string
-}
-
-export interface TaskArtifact {
-  artifact_id: string
-  task_id: string
-  kind: string
-  path: string
-  preview: string
-  size_bytes: number
-  created_at: string
 }
 
 export interface TaskRecord {
@@ -128,6 +128,13 @@ export interface TaskDetailResponse {
 export interface IncidentDetailResponse {
   incident: IncidentRecord
   recommendations: RecommendationRecord[]
+}
+
+export interface ArtifactContentResponse {
+  artifact: TaskArtifact
+  filename: string
+  content: string
+  content_type: string
 }
 
 const apiClient = axios.create({
@@ -239,6 +246,9 @@ export const tasksApi = {
   get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
   approve: (taskId: string) => apiClient.post(`/tasks/${taskId}/approve`),
   cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
+  getArtifact: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}`),
+  getArtifactContent: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}/content`),
+  getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}/tasks/${taskId}/artifacts/${artifactId}/download`,
 }
 
 export default apiClient

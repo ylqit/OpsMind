@@ -39,3 +39,7 @@ class ArtifactStore:
             size_bytes=len(content.encode("utf-8")),
             created_at=utc_now(),
         )
+
+    def read_text(self, artifact: ArtifactRef) -> str:
+        """读取文本产物内容。"""
+        return Path(artifact.path).read_text(encoding="utf-8")

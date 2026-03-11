@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from .deps import get_task_manager
 
@@ -23,6 +26,16 @@ def _read_trace_preview(task_id: str, task_manager) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return preview
+
+
+def _require_artifact(task_id: str, artifact_id: str, task_manager):
+    artifact = task_manager.artifact_repository.get(task_id, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="产物不存在")
+    path = Path(artifact.path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="产物文件不存在")
+    return artifact, path
 
 
 @router.get("")
@@ -46,6 +59,36 @@ async def get_task_detail(task_id: str, task_manager=Depends(get_task_manager)):
         "trace_preview": _read_trace_preview(task_id, task_manager),
         "artifacts": [artifact.model_dump(mode="json") for artifact in artifacts],
     }
+
+
+@router.get("/{task_id}/artifacts/{artifact_id}")
+async def get_task_artifact(task_id: str, artifact_id: str, task_manager=Depends(get_task_manager)):
+    artifact, path = _require_artifact(task_id, artifact_id, task_manager)
+    return {
+        "artifact": artifact.model_dump(mode="json"),
+        "filename": path.name,
+        "download_url": f"/api/tasks/{task_id}/artifacts/{artifact_id}/download",
+        "content_url": f"/api/tasks/{task_id}/artifacts/{artifact_id}/content",
+    }
+
+
+@router.get("/{task_id}/artifacts/{artifact_id}/content")
+async def get_task_artifact_content(task_id: str, artifact_id: str, task_manager=Depends(get_task_manager)):
+    artifact, path = _require_artifact(task_id, artifact_id, task_manager)
+    content = path.read_text(encoding="utf-8")
+    return {
+        "artifact": artifact.model_dump(mode="json"),
+        "filename": path.name,
+        "content": content,
+        "content_type": mimetypes.guess_type(path.name)[0] or "text/plain",
+    }
+
+
+@router.get("/{task_id}/artifacts/{artifact_id}/download")
+async def download_task_artifact(task_id: str, artifact_id: str, task_manager=Depends(get_task_manager)):
+    _, path = _require_artifact(task_id, artifact_id, task_manager)
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @router.post("/{task_id}/approve")

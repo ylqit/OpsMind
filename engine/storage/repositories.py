@@ -118,6 +118,23 @@ class ArtifactRepository:
         )
         return artifact
 
+    def get(self, task_id: str, artifact_id: str) -> Optional[ArtifactRef]:
+        row = self.db.fetchone(
+            "SELECT * FROM artifacts WHERE task_id = ? AND artifact_id = ?",
+            (task_id, artifact_id),
+        )
+        if not row:
+            return None
+        return ArtifactRef(
+            artifact_id=row["artifact_id"],
+            task_id=row["task_id"],
+            kind=row["kind"],
+            path=row["path"],
+            preview=row["preview"] or "",
+            size_bytes=row["size_bytes"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
     def list_by_task(self, task_id: str) -> List[ArtifactRef]:
         rows = self.db.fetchall("SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at ASC", (task_id,))
         return [
