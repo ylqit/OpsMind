@@ -1,9 +1,136 @@
 import axios from 'axios'
-import { ErrorType, getErrorMessage, getErrorType } from '../utils/errorHandler'
+import { getErrorMessage, getErrorType } from '../utils/errorHandler'
 
 const API_BASE_URL = '/api'
 
-export const apiClient = axios.create({
+export interface OverviewCard {
+  key: string
+  label: string
+  value: number | string
+  unit?: string
+  status: 'normal' | 'warning' | 'critical' | 'info'
+}
+
+export interface TimeSeriesPoint {
+  timestamp: string
+  value: number
+}
+
+export interface IncidentRecord {
+  incident_id: string
+  title: string
+  severity: string
+  status: string
+  service_key: string
+  summary: string
+  confidence: number
+  reasoning_tags: string[]
+  recommended_actions: string[]
+  evidence_refs: Array<Record<string, unknown>>
+  related_asset_ids: string[]
+  time_window_start: string
+  time_window_end: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RecommendationRecord {
+  recommendation_id: string
+  incident_id: string
+  target_asset_id?: string | null
+  kind: string
+  confidence: number
+  observation: string
+  recommendation: string
+  risk_note: string
+  artifact_refs: Array<Record<string, unknown>>
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskArtifact {
+  artifact_id: string
+  task_id: string
+  kind: string
+  path: string
+  preview: string
+  size_bytes: number
+  created_at: string
+}
+
+export interface TaskRecord {
+  task_id: string
+  task_type: string
+  status: string
+  current_stage: string
+  progress: number
+  progress_message: string
+  trace_id: string
+  payload: Record<string, unknown>
+  result_ref?: Record<string, unknown> | null
+  error?: {
+    error_code: string
+    error_message: string
+    failed_stage?: string | null
+  } | null
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}
+
+export interface DashboardOverview {
+  cards: OverviewCard[]
+  traffic_trend: TimeSeriesPoint[]
+  recent_incidents: IncidentRecord[]
+  hot_services: Array<{
+    service_key: string
+    score: number
+    reason: string
+    metric_value: number
+  }>
+  data_sources: Record<string, unknown>
+}
+
+export interface TrafficSummary {
+  total_requests: number
+  page_views: number
+  error_rate: number
+  avg_latency: number
+  top_paths: Array<{ path: string; count: number }>
+  top_ips: Array<{ ip: string; count: number }>
+  status_distribution: Array<{ status: string; count: number }>
+  geo_distribution: Array<{ name: string; value: number }>
+  ua_distribution: Array<{ name: string; value: number }>
+  trend: Array<{ timestamp: string; requests: number }>
+  records_sample?: Array<Record<string, unknown>>
+}
+
+export interface ResourceSummary {
+  host: Record<string, any>
+  alerts: Array<Record<string, unknown>>
+  containers: {
+    available: boolean
+    items: Array<Record<string, any>>
+  }
+  prometheus: {
+    available: boolean
+    metrics: Record<string, unknown>
+  }
+  hotspots: Array<{ name: string; type: string; score: number; reason: string }>
+}
+
+export interface TaskDetailResponse {
+  task: TaskRecord
+  trace_preview: Array<Record<string, unknown>>
+  artifacts: TaskArtifact[]
+}
+
+export interface IncidentDetailResponse {
+  incident: IncidentRecord
+  recommendations: RecommendationRecord[]
+}
+
+const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
@@ -11,7 +138,6 @@ export const apiClient = axios.create({
   },
 })
 
-// 响应拦截器
 apiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -30,74 +156,39 @@ apiClient.interceptors.response.use(
         throw new Error('无权访问')
       }
     }
-    // 网络错误处理
     if (!error.response && error.message) {
       const type = getErrorType(error)
       throw new Error(getErrorMessage(error, type))
     }
     throw error
-  }
+  },
 )
 
-// 能力相关 API
 export const capabilitiesApi = {
-  // 获取所有能力列表
   list: () => apiClient.get('/capabilities'),
-
-  // 获取能力 schema
   getSchema: (name: string) => apiClient.get(`/capabilities/${name}/schema`),
-
-  // 调用能力
-  dispatch: (name: string, params: Record<string, any>) =>
-    apiClient.post(`/capabilities/${name}/dispatch`, { params }),
+  dispatch: (name: string, params: Record<string, unknown>) => apiClient.post(`/capabilities/${name}/dispatch`, { params }),
 }
 
-// 告警相关 API
 export const alertsApi = {
-  // 查询告警列表
-  query: (status?: string, severity?: string, limit?: number) =>
-    apiClient.get('/alerts', { params: { status, severity, limit } }),
-
-  // 确认告警
+  query: (status?: string, severity?: string, limit?: number) => apiClient.get('/alerts', { params: { status, severity, limit } }),
   acknowledge: (alertId: string, acknowledgedBy?: string) =>
     apiClient.post('/alerts/acknowledge', null, {
       params: { alert_id: alertId, acknowledged_by: acknowledgedBy || 'user' },
     }),
-
-  // 解决告警
   resolve: (alertId: string, resolvedBy?: string) =>
     apiClient.post('/alerts/resolve', null, {
       params: { alert_id: alertId, resolved_by: resolvedBy || 'user' },
     }),
-
-  // 创建告警规则
-  createRule: (ruleData: Record<string, any>) =>
-    apiClient.post('/alerts/rules', ruleData),
-
-  // 获取告警规则列表
+  createRule: (ruleData: Record<string, unknown>) => apiClient.post('/alerts/rules', ruleData),
   listRules: () => apiClient.get('/alerts/rules'),
-
-  // 删除告警规则
-  deleteRule: (ruleId: string) =>
-    apiClient.delete(`/alerts/rules/${ruleId}`),
+  deleteRule: (ruleId: string) => apiClient.delete(`/alerts/rules/${ruleId}`),
 }
 
-// 修复预案相关 API
 export const remediationApi = {
-  // 获取所有预案列表
   listPlans: () => apiClient.get('/remediation/plans'),
-
-  // 获取预案详情
-  getPlan: (planId: string) =>
-    apiClient.get(`/remediation/plans/${planId}`),
-
-  // 执行修复
-  execute: (
-    planId: string,
-    stepIndices: number[],
-    dryRun?: boolean,
-    containerName?: string
-  ) =>
+  getPlan: (planId: string) => apiClient.get(`/remediation/plans/${planId}`),
+  execute: (planId: string, stepIndices: number[], dryRun?: boolean, containerName?: string) =>
     apiClient.post('/remediation/execute', null, {
       params: {
         plan_id: planId,
@@ -108,23 +199,46 @@ export const remediationApi = {
     }),
 }
 
-// 容器相关 API
 export const containersApi = {
-  // 获取容器列表
   list: () => apiClient.get('/containers'),
-
-  // 获取容器详情
   get: (name: string) => apiClient.get(`/containers/${name}`),
-
-  // 获取容器日志
-  getLogs: (name: string, lines?: number) =>
-    apiClient.get(`/containers/${name}/logs`, {
-      params: { lines: lines ?? 50 },
-    }),
+  getLogs: (name: string, lines?: number) => apiClient.get(`/containers/${name}/logs`, { params: { lines: lines ?? 50 } }),
 }
 
-// 主机监控相关 API
 export const hostApi = {
-  // 获取主机指标
   getMetrics: () => apiClient.get('/host/metrics'),
 }
+
+export const dashboardApi = {
+  getOverview: (params?: { time_range?: string; service_key?: string }) => apiClient.get('/dashboard/overview', { params }),
+  createDailyReport: (payload: { date: string; scope: string }) => apiClient.post('/reports/daily', payload),
+}
+
+export const trafficApi = {
+  getSummary: (params?: { time_range?: string; service_key?: string; asset_id?: string }) => apiClient.get('/traffic/summary', { params }),
+}
+
+export const resourcesApi = {
+  getSummary: (params?: { time_range?: string; service_key?: string; asset_id?: string }) => apiClient.get('/resources/summary', { params }),
+  listAssets: (params?: { asset_type?: string; service_key?: string; health_status?: string }) => apiClient.get('/assets', { params }),
+}
+
+export const incidentsApi = {
+  list: (params?: { status?: string; severity?: string; service_key?: string; time_range?: string }) => apiClient.get('/incidents', { params }),
+  get: (incidentId: string) => apiClient.get(`/incidents/${incidentId}`),
+  analyze: (payload: { service_key?: string; asset_id?: string; time_window: string }) => apiClient.post('/incidents/analyze', payload),
+}
+
+export const recommendationsApi = {
+  get: (recommendationId: string) => apiClient.get(`/recommendations/${recommendationId}`),
+  generate: (payload: { incident_id: string; kinds?: string[] }) => apiClient.post('/recommendations/generate', payload),
+}
+
+export const tasksApi = {
+  list: (params?: { task_type?: string; status?: string }) => apiClient.get('/tasks', { params }),
+  get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
+  approve: (taskId: string) => apiClient.post(`/tasks/${taskId}/approve`),
+  cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
+}
+
+export default apiClient

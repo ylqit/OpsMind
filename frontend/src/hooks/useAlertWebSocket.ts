@@ -33,8 +33,8 @@ interface UseWebSocketOptions {
 export const useAlertWebSocket = (options: UseWebSocketOptions = {}) => {
   const { onNewAlert, onAlertResolved, enabled = true } = options
   const wsRef = useRef<WebSocket | null>(null)
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout>()
+  const reconnectTimeoutRef = useRef<number | null>(null)
+  const heartbeatIntervalRef = useRef<number | null>(null)
 
   const connect = useCallback(() => {
     if (!enabled) return

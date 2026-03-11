@@ -5,101 +5,117 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f5f5f5;
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.16), transparent 32%),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 28%),
+    #f4f7fb;
+  color: #0f172a;
 }
 
 #root {
   min-height: 100vh;
 }
 
-/* 响应式布局 */
-@media (max-width: 768px) {
-  .ant-layout-sider {
-    position: fixed;
-    z-index: 999;
-  }
-
-  .dashboard .ant-card {
-    margin-bottom: 12px;
-  }
-
-  .ant-descriptions-item-label {
-    font-size: 12px;
-  }
-
-  .ant-descriptions-item-content {
-    font-size: 13px;
-  }
-
-  /* 移动端标题字体调小 */
-  .ant-card-head-title {
-    font-size: 16px !important;
-  }
-
-  /* 移动端内边距减小 */
-  .ant-card-body {
-    padding: 12px !important;
-  }
-
-  /* 移动端统计表滚动 */
-  .ant-table-wrapper {
-    overflow-x: auto;
-  }
+.ops-brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(15, 118, 110, 0.14));
 }
 
-@media (max-width: 576px) {
-  .ant-table {
-    font-size: 12px;
+.ops-brand-block__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #0f766e, #2563eb);
+  color: #fff;
+  font-weight: 700;
+}
+
+.ops-brand-block__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ops-brand-block__subtitle {
+  font-size: 12px;
+  color: rgba(15, 23, 42, 0.58);
+}
+
+.ops-app-header {
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.ops-app-header__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ops-app-header__subtitle {
+  font-size: 13px;
+  color: rgba(15, 23, 42, 0.58);
+}
+
+.ops-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ops-page__hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(240, 249, 255, 0.96));
+  border: 1px solid rgba(186, 230, 253, 0.8);
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.06);
+}
+
+.ops-surface-card {
+  border-radius: 22px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.06);
+}
+
+.ops-surface-card .ant-card-head {
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+@media (max-width: 768px) {
+  .ops-page__hero {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 18px;
   }
 
-  .ant-btn {
-    padding: 4px 8px;
-    font-size: 12px;
+  .ops-app-header {
+    padding: 0 16px;
   }
 
-  /* 移动端统计卡片 */
-  .ant-statistic-title {
-    font-size: 12px;
-  }
-
-  .ant-statistic-content {
+  .ops-app-header__title {
     font-size: 18px;
   }
 
-  /* 移动端 Progress 大小调整 */
-  .ant-progress-text {
-    font-size: 12px;
+  .ops-brand-block {
+    margin: 12px;
+    padding: 12px;
   }
-}
-
-/* 小屏幕优化 */
-@media (max-width: 768px) {
-  .alert-panel .ant-card-body,
-  .dashboard .ant-card-body {
-    padding: 12px !important;
-  }
-
-  /* 移动端表格滚动 */
-  .ant-table-scroll-horizontal {
-    overflow-x: auto;
-  }
-}
-
-/* 加载状态 */
-.loading-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 400px;
-}
-
-/* 错误状态 */
-.error-container {
-  padding: 48px 16px;
-  text-align: center;
 }
