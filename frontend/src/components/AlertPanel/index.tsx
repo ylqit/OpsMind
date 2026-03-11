@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Table, Tag, Button, Space, Modal, Typography, Drawer, Steps, StepProps, message } from 'antd'
+import { Card, Table, Tag, Button, Space, Modal, Typography, Drawer, Steps, message } from 'antd'
 import {
   WarningOutlined,
   CheckOutlined,
@@ -183,7 +183,7 @@ export const AlertPanel: React.FC = () => {
     },
   ]
 
-  const planSteps: StepProps[] = selectedPlan?.steps?.map((step, idx) => ({
+  const planSteps = selectedPlan?.steps?.map((step, idx) => ({
     key: idx,
     title: step.name,
     description: step.description,
