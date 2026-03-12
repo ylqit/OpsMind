@@ -53,6 +53,32 @@ const artifactLabelMap: Record<string, string> = {
   text: '文本内容',
 }
 
+const isApprovalRequired = (task: TaskRecord) => task.task_type === 'recommendation_generation'
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) {
+    return '-'
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const getApprovalMeta = (task: TaskRecord) => {
+  if (!isApprovalRequired(task)) {
+    return { color: 'default', label: '不需要审批', detail: '当前任务类型无需人工确认' }
+  }
+  if (task.approval) {
+    return { color: 'green', label: '已审批', detail: `由 ${task.approval.approved_by} 于 ${formatDateTime(task.approval.approved_at)} 确认` }
+  }
+  if (task.status === 'WAITING_CONFIRM') {
+    return { color: 'gold', label: '待审批', detail: '建议稿已生成，等待人工确认' }
+  }
+  return { color: 'blue', label: '未审批', detail: '任务尚未进入待确认阶段' }
+}
+
 export const TaskCenter: React.FC = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -93,6 +119,12 @@ export const TaskCenter: React.FC = () => {
   const groupedArtifacts = artifactGroups.length
     ? artifactGroups
     : [{ group_key: 'all', count: artifactItems.length, items: artifactItems }]
+  const selectedTaskApprovalMeta = useMemo(() => {
+    if (!selectedTask) {
+      return null
+    }
+    return getApprovalMeta(selectedTask.task)
+  }, [selectedTask])
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
@@ -306,6 +338,14 @@ export const TaskCenter: React.FC = () => {
                   dataIndex: 'status',
                   render: (value: string) => <Tag color={value === 'COMPLETED' ? 'green' : value === 'FAILED' ? 'red' : value === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{value}</Tag>,
                 },
+                {
+                  title: '审批',
+                  key: 'approval',
+                  render: (_, record: TaskRecord) => {
+                    const meta = getApprovalMeta(record)
+                    return <Tag color={meta.color}>{meta.label}</Tag>
+                  },
+                },
                 { title: '进度', dataIndex: 'progress', width: 100, render: (value: number) => `${value}%` },
               ]}
             />
@@ -338,14 +378,27 @@ export const TaskCenter: React.FC = () => {
                   <Descriptions.Item label="状态">{selectedTask.task.status}</Descriptions.Item>
                   <Descriptions.Item label="当前阶段">{selectedTask.task.current_stage}</Descriptions.Item>
                   <Descriptions.Item label="进度消息">{selectedTask.task.progress_message || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="确认人">{selectedTask.task.approval?.approved_by || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="确认时间">{selectedTask.task.approval?.approved_at || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="创建时间">{formatDateTime(selectedTask.task.created_at)}</Descriptions.Item>
+                  <Descriptions.Item label="更新时间">{formatDateTime(selectedTask.task.updated_at)}</Descriptions.Item>
                 </Descriptions>
-                {selectedTask.task.approval?.approval_note ? (
-                  <Card type="inner" title="确认备注" style={{ marginBottom: 16 }}>
-                    <Paragraph style={{ marginBottom: 0 }}>{selectedTask.task.approval.approval_note}</Paragraph>
-                  </Card>
-                ) : null}
+
+                <Card type="inner" title="审批记录" style={{ marginBottom: 16 }}>
+                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color={selectedTaskApprovalMeta?.color || 'default'}>{selectedTaskApprovalMeta?.label || '-'}</Tag>
+                      <Text type="secondary">{selectedTaskApprovalMeta?.detail || '-'}</Text>
+                    </Space>
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="审批人">{selectedTask.task.approval?.approved_by || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="审批时间">{formatDateTime(selectedTask.task.approval?.approved_at || null)}</Descriptions.Item>
+                      <Descriptions.Item label="审批备注">
+                        <Paragraph style={{ marginBottom: 0 }}>
+                          {selectedTask.task.approval?.approval_note || (isApprovalRequired(selectedTask.task) ? '暂无审批备注' : '当前任务无需审批')}
+                        </Paragraph>
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Space>
+                </Card>
                 {selectedTask.task.error ? (
                   <Card type="inner" title="失败信息" style={{ marginBottom: 16 }}>
                     <Descriptions column={1} size="small">

@@ -78,6 +78,19 @@ class TaskManager:
                 "approval": approval.model_dump(mode="json"),
             },
         )
+        # 审批动作追加进 trace，便于前端在任务详情里串联完整审计链路。
+        await self.append_trace(
+            task_id,
+            "confirm",
+            "approve_recommendation",
+            TaskStatus.COMPLETED,
+            f"建议稿已确认，确认人：{approval.approved_by}",
+            {
+                "approved_by": approval.approved_by,
+                "approval_note": approval.approval_note,
+                "approved_at": approval.approved_at.isoformat(),
+            },
+        )
         await self._publish("task_completed", task, extra={"approval": approval.model_dump(mode="json")})
         return task
 
