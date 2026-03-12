@@ -53,16 +53,90 @@ class CorrelationEngine:
             recommended_actions = ["提高内存 requests/limits", "检查应用内存占用趋势和探针配置"]
 
         if total_requests:
-            evidence_refs.append({"type": "traffic_summary", "metric": "total_requests", "value": total_requests})
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="traffic",
+                    evidence_type="traffic_summary",
+                    title="请求总量",
+                    summary=f"当前窗口累计请求 {total_requests} 次。",
+                    metric="total_requests",
+                    value=total_requests,
+                    unit="req",
+                )
+            )
         if error_rate:
-            evidence_refs.append({"type": "traffic_summary", "metric": "error_rate", "value": error_rate})
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="traffic",
+                    evidence_type="traffic_summary",
+                    title="错误率",
+                    summary=f"错误率达到 {error_rate:.2f}%，已经高于常规稳定阈值。",
+                    metric="error_rate",
+                    value=error_rate,
+                    unit="%",
+                )
+            )
         if avg_latency:
-            evidence_refs.append({"type": "traffic_summary", "metric": "avg_latency", "value": avg_latency})
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="traffic",
+                    evidence_type="traffic_summary",
+                    title="平均延迟",
+                    summary=f"平均请求耗时约 {avg_latency:.3f} 秒。",
+                    metric="avg_latency",
+                    value=avg_latency,
+                    unit="s",
+                )
+            )
         if host_cpu:
-            evidence_refs.append({"type": "resource_summary", "metric": "host_cpu", "value": host_cpu})
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="resource",
+                    evidence_type="resource_summary",
+                    title="主机 CPU 使用率",
+                    summary=f"主机 CPU 使用率约为 {host_cpu:.2f}%。",
+                    metric="host_cpu",
+                    value=host_cpu,
+                    unit="%",
+                )
+            )
         if host_memory:
-            evidence_refs.append({"type": "resource_summary", "metric": "host_memory", "value": host_memory})
-        evidence_refs.extend({"type": "hotspot", **item} for item in hotspots[:5])
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="resource",
+                    evidence_type="resource_summary",
+                    title="主机内存使用率",
+                    summary=f"主机内存使用率约为 {host_memory:.2f}%。",
+                    metric="host_memory",
+                    value=host_memory,
+                    unit="%",
+                )
+            )
+        for item in hotspots[:5]:
+            evidence_refs.append(
+                self._build_evidence(
+                    layer="resource",
+                    evidence_type="hotspot",
+                    title=str(item.get("name") or "热点对象"),
+                    summary=str(item.get("reason") or "检测到资源热点。"),
+                    metric=str(item.get("type") or "hotspot"),
+                    value=float(item.get("score") or 0),
+                    unit="score",
+                    extra=item,
+                )
+            )
+        evidence_refs.append(
+            self._build_evidence(
+                layer="diagnosis",
+                evidence_type="diagnosis",
+                title="关联判断",
+                summary=summary,
+                metric="confidence",
+                value=confidence,
+                unit="score",
+                extra={"reasoning_tags": reasoning_tags},
+            )
+        )
 
         return {
             "service_key": service_key,
@@ -77,3 +151,28 @@ class CorrelationEngine:
             "time_window_start": (datetime.utcnow() - timedelta(hours=1)).isoformat(),
             "time_window_end": datetime.utcnow().isoformat(),
         }
+
+    def _build_evidence(
+        self,
+        layer: str,
+        evidence_type: str,
+        title: str,
+        summary: str,
+        metric: str,
+        value: Any,
+        unit: str = "",
+        extra: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """构造统一证据对象，便于前端分层展示。"""
+        payload = {
+            "layer": layer,
+            "type": evidence_type,
+            "title": title,
+            "summary": summary,
+            "metric": metric,
+            "value": value,
+            "unit": unit,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
