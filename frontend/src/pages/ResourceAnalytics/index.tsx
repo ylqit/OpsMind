@@ -1,7 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { AutoComplete, Button, Card, Col, List, Row, Select, Space, Table, Tag, Typography } from 'antd'
 import { useSearchParams } from 'react-router-dom'
-import { resourcesApi, type ResourceSummary } from '@/api/client'
+import { resourcesApi, type ResourceHotspot, type ResourceHotspotLayers, type ResourceSummary } from '@/api/client'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -26,6 +26,14 @@ interface AssetListResponse {
   synced: number
 }
 
+const emptyHotspotLayers: ResourceHotspotLayers = {
+  host: [],
+  container: [],
+  pod: [],
+  service: [],
+  other: [],
+}
+
 const normalizeTimeRange = (value: string | null | undefined) => {
   if (!value || !allowedTimeRanges.has(value)) {
     return '1h'
@@ -38,6 +46,21 @@ const mergeServiceKeys = (base: string[], incoming: string[]) => {
   incoming.filter(Boolean).forEach((item) => set.add(item))
   return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-CN'))
 }
+
+const formatHotspotValue = (item: ResourceHotspot) => {
+  if (item.value === null || item.value === undefined || item.value === '') {
+    return '-'
+  }
+  return `${item.value}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+const layerMeta: Array<{ key: keyof ResourceHotspotLayers; title: string; color: string }> = [
+  { key: 'host', title: '主机热点', color: 'geekblue' },
+  { key: 'container', title: '容器热点', color: 'orange' },
+  { key: 'pod', title: 'Pod 热点', color: 'volcano' },
+  { key: 'service', title: 'Service 热点', color: 'cyan' },
+  { key: 'other', title: '其他热点', color: 'default' },
+]
 
 const ResourceAnalytics: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -54,6 +77,8 @@ const ResourceAnalytics: React.FC = () => {
     () => serviceKeys.map((item) => ({ value: item, label: item })),
     [serviceKeys],
   )
+
+  const hotspotLayers = summary?.hotspot_layers || emptyHotspotLayers
 
   const loadData = async (override?: { timeRange?: string; serviceKey?: string }) => {
     const activeTimeRange = override?.timeRange ?? timeRange
@@ -159,24 +184,50 @@ const ResourceAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card loading={loading} title="资源热点" className="ops-surface-card">
+          <Card loading={loading} title="分层热点概览" className="ops-surface-card">
             <List
-              dataSource={summary?.hotspots || []}
-              locale={{ emptyText: '当前没有热点' }}
+              dataSource={layerMeta}
               renderItem={(item) => (
                 <List.Item>
-                  <div style={{ width: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <Text strong>{item.name}</Text>
-                      <Tag color={item.score >= 90 ? 'red' : item.score >= 70 ? 'orange' : 'blue'}>{item.score.toFixed(0)}</Tag>
-                    </div>
-                    <Paragraph style={{ marginBottom: 0 }}>{item.reason}</Paragraph>
-                  </div>
+                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Tag color={item.color}>{item.title}</Tag>
+                    <Text strong>{hotspotLayers[item.key].length} 项</Text>
+                  </Space>
                 </List.Item>
               )}
             />
           </Card>
         </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        {layerMeta.map((layerItem) => (
+          <Col xs={24} lg={12} key={layerItem.key}>
+            <Card loading={loading} title={layerItem.title} className="ops-surface-card">
+              <List
+                dataSource={hotspotLayers[layerItem.key]}
+                locale={{ emptyText: `当前没有${layerItem.title}` }}
+                renderItem={(item) => (
+                  <List.Item>
+                    <div style={{ width: '100%' }}>
+                      <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
+                        <Text strong>{item.name}</Text>
+                        <Tag color={item.score >= 90 ? 'red' : item.score >= 70 ? 'orange' : 'blue'}>{item.score.toFixed(0)}</Tag>
+                      </Space>
+                      <Paragraph style={{ marginBottom: 6 }}>{item.reason}</Paragraph>
+                      <Space wrap>
+                        <Tag>{item.metric}</Tag>
+                        <Tag color="geekblue">{formatHotspotValue(item)}</Tag>
+                        {item.service_key ? <Tag color="cyan">{item.service_key}</Tag> : null}
+                        {item.namespace ? <Tag>{item.namespace}</Tag> : null}
+                      </Space>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </Card>
+          </Col>
+        ))}
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>

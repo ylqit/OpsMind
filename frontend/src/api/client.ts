@@ -128,6 +128,27 @@ export interface TrafficSummary {
   records_sample?: Array<Record<string, unknown>>
 }
 
+export interface ResourceHotspot {
+  name: string
+  type: string
+  layer: string
+  score: number
+  reason: string
+  metric: string
+  value: string | number
+  unit?: string
+  service_key?: string
+  namespace?: string
+}
+
+export interface ResourceHotspotLayers {
+  host: ResourceHotspot[]
+  container: ResourceHotspot[]
+  pod: ResourceHotspot[]
+  service: ResourceHotspot[]
+  other: ResourceHotspot[]
+}
+
 export interface ResourceSummary {
   host: Record<string, any>
   alerts: Array<Record<string, unknown>>
@@ -139,7 +160,8 @@ export interface ResourceSummary {
     available: boolean
     metrics: Record<string, unknown>
   }
-  hotspots: Array<{ name: string; type: string; score: number; reason: string }>
+  hotspots: ResourceHotspot[]
+  hotspot_layers: ResourceHotspotLayers
 }
 
 export interface TaskDetailResponse {
