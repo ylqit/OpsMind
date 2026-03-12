@@ -306,6 +306,34 @@ export interface IncidentDetailResponse {
   log_samples: IncidentLogSample[]
 }
 
+export interface IncidentAISummaryResponse {
+  incident_id: string
+  provider: string
+  summary: string
+  risk_level: 'high' | 'medium' | 'low'
+  confidence: number
+  primary_causes: string[]
+  recommended_actions: string[]
+  evidence_citations: string[]
+  parse_mode: string
+  log_sample_count: number
+  recommendation_count: number
+}
+
+export interface RecommendationAIReviewResponse {
+  recommendation_id: string
+  incident_id: string
+  provider: string
+  summary: string
+  risk_level: 'high' | 'medium' | 'low'
+  confidence: number
+  risk_assessment: string
+  rollback_plan: string[]
+  validation_checks: string[]
+  evidence_citations: string[]
+  parse_mode: string
+}
+
 export interface ArtifactContentResponse {
   artifact: TaskArtifact
   filename: string
@@ -455,6 +483,8 @@ export const incidentsApi = {
 export const recommendationsApi = {
   get: (recommendationId: string) => apiClient.get(`/recommendations/${encodePathSegment(recommendationId)}`),
   generate: (payload: { incident_id: string; kinds?: string[] }) => apiClient.post('/recommendations/generate', payload),
+  aiReview: (recommendationId: string, payload?: { provider?: string }) =>
+    apiClient.post(`/recommendations/${encodePathSegment(recommendationId)}/ai-review`, payload ?? {}),
 }
 
 export const tasksApi = {

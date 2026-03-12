@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,6 +40,22 @@ class IncidentAISummaryRequest(BaseModel):
     provider: str | None = Field(default=None, description="指定 Provider")
 
 
+class IncidentAISummaryPayload(BaseModel):
+    """结构化 AI 总结响应。"""
+
+    incident_id: str
+    provider: str
+    summary: str
+    risk_level: str = "medium"
+    confidence: float = 0.5
+    primary_causes: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    evidence_citations: list[str] = Field(default_factory=list)
+    parse_mode: str = "fallback"
+    log_sample_count: int = 0
+    recommendation_count: int = 0
+
+
 @router.get("")
 async def list_incidents(
     status: str | None = None,
@@ -52,7 +69,7 @@ async def list_incidents(
     return {"items": [incident.model_dump(mode="json") for incident in incidents], "total": len(incidents)}
 
 
-# 把原始访问记录压成适合异常详情阅读的样本结构，避免前端直接理解日志富化字段。
+# 把原始访问记录压成详情页可读样本，避免前端处理复杂日志字段。
 def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
     geo = record.get("geo") or {}
     ua = record.get("ua") or {}
@@ -73,6 +90,118 @@ def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
         "device": ua.get("device") or "Unknown",
         "service_key": record.get("service_key") or "unknown/root",
     }
+
+
+def _extract_json_payload(text: str) -> dict[str, Any] | None:
+    """从模型输出提取 JSON，兼容 fenced code block 与纯文本包裹。"""
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return None
+
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _to_string_list(value: Any, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        item_text = str(item).strip()
+        if item_text:
+            output.append(item_text)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _normalize_risk_level(value: Any) -> str:
+    risk = str(value or "").strip().lower()
+    if risk in {"high", "medium", "low"}:
+        return risk
+    return "medium"
+
+
+def _normalize_confidence(value: Any) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return max(0.0, min(1.0, score))
+
+
+def _build_fallback_payload(incident, recommendations: list[Any], samples: list[dict[str, Any]], summary_text: str) -> dict[str, Any]:
+    primary_causes = [tag.replace("_", " ") for tag in incident.reasoning_tags[:3]]
+    if not primary_causes:
+        primary_causes = ["需要结合更多证据进一步定位"]
+
+    recommended_actions = [str(item).strip() for item in incident.recommended_actions[:5] if str(item).strip()]
+    if not recommended_actions:
+        recommended_actions = [str(item.recommendation).strip() for item in recommendations[:3] if str(item.recommendation).strip()]
+
+    evidence_citations = []
+    for sample in samples[:3]:
+        evidence_citations.append(f"log:{sample.get('path') or '/'} status={sample.get('status')}")
+    if not evidence_citations:
+        evidence_citations = ["evidence:incident_summary"]
+
+    severity_to_risk = {
+        "critical": "high",
+        "warning": "medium",
+    }
+    risk_level = severity_to_risk.get(str(incident.severity).lower(), "low")
+
+    return {
+        "summary": summary_text.strip() or incident.summary,
+        "risk_level": risk_level,
+        "confidence": float(incident.confidence),
+        "primary_causes": primary_causes,
+        "recommended_actions": recommended_actions,
+        "evidence_citations": evidence_citations,
+    }
+
+
+def _build_structured_payload(
+    incident,
+    recommendations: list[Any],
+    samples: list[dict[str, Any]],
+    llm_text: str,
+) -> tuple[dict[str, Any], str]:
+    """规范化模型输出，保证前端拿到稳定结构。"""
+    parsed = _extract_json_payload(llm_text)
+    fallback = _build_fallback_payload(incident, recommendations, samples, llm_text)
+
+    if not parsed:
+        return fallback, "text_fallback"
+
+    summary = str(parsed.get("summary") or "").strip() or fallback["summary"]
+    primary_causes = _to_string_list(parsed.get("primary_causes"), limit=5) or fallback["primary_causes"]
+    recommended_actions = _to_string_list(parsed.get("recommended_actions"), limit=8) or fallback["recommended_actions"]
+    evidence_citations = _to_string_list(parsed.get("evidence_citations"), limit=8) or fallback["evidence_citations"]
+
+    payload = {
+        "summary": summary,
+        "risk_level": _normalize_risk_level(parsed.get("risk_level")),
+        "confidence": _normalize_confidence(parsed.get("confidence")),
+        "primary_causes": primary_causes,
+        "recommended_actions": recommended_actions,
+        "evidence_citations": evidence_citations,
+    }
+    return payload, "json"
 
 
 @router.get("/{incident_id}")
@@ -143,7 +272,13 @@ async def generate_incident_ai_summary(
     messages = [
         {
             "role": "system",
-            "content": "You are an SRE assistant. Summarize in Chinese with symptoms, causes, risk level, and actions.",
+            "content": (
+                "你是运维分析助手。"
+                "请严格输出 JSON 对象，字段固定为："
+                "summary(string), risk_level(high|medium|low), confidence(0-1),"
+                "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[])。"
+                "不要输出 markdown，不要输出额外字段。"
+            ),
         },
         {
             "role": "user",
@@ -161,24 +296,28 @@ async def generate_incident_ai_summary(
     ]
 
     try:
-        summary = await llm_router.chat(
+        llm_text = await llm_router.chat(
             messages,
             provider=request.provider,
-            temperature=0.2,
-            max_tokens=400,
+            temperature=0.1,
+            max_tokens=450,
             _source="incident_center",
             _endpoint="incident_ai_summary",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"AI 摘要生成失败：{exc}") from exc
 
-    return {
-        "incident_id": incident.incident_id,
-        "provider": request.provider or llm_router.default_client_name,
-        "summary": summary.strip(),
-        "log_sample_count": len(samples),
-        "recommendation_count": len(recommendations),
-    }
+    normalized, parse_mode = _build_structured_payload(incident, recommendations, samples, llm_text)
+
+    result = IncidentAISummaryPayload(
+        incident_id=incident.incident_id,
+        provider=request.provider or llm_router.default_client_name,
+        parse_mode=parse_mode,
+        log_sample_count=len(samples),
+        recommendation_count=len(recommendations),
+        **normalized,
+    )
+    return result.model_dump(mode="json")
 
 
 @router.post("/analyze")
@@ -195,7 +334,7 @@ async def analyze_incident(
     service_key = request.service_key or "unknown/root"
 
     async def runner(task):
-        await task_manager.set_stage(task.task_id, TaskStatus.COLLECTING, 15, "syncing assets and traffic signals")
+        await task_manager.set_stage(task.task_id, TaskStatus.COLLECTING, 15, "正在同步资产与采集流量数据")
         assets = await asset_service.sync_assets(service_key=service_key)
         related_asset_ids = [asset.asset_id for asset in assets if not request.asset_id or asset.asset_id == request.asset_id]
         log_paths = resolve_access_logs()

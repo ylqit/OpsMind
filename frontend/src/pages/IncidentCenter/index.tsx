@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   incidentsApi,
   recommendationsApi,
+  type IncidentAISummaryResponse,
   type IncidentDetailResponse,
   type IncidentLogSample,
   type IncidentRecord,
@@ -135,7 +136,7 @@ export const IncidentCenter: React.FC = () => {
   const [creating, setCreating] = useState(false)
   const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
-  const [aiSummary, setAiSummary] = useState('')
+  const [aiSummary, setAiSummary] = useState<IncidentAISummaryResponse | null>(null)
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
@@ -210,7 +211,7 @@ export const IncidentCenter: React.FC = () => {
   const loadIncidentDetail = useCallback(async (incidentId: string) => {
     const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelectedIncident(response)
-    setAiSummary('')
+    setAiSummary(null)
     return response
   }, [])
 
@@ -282,8 +283,8 @@ export const IncidentCenter: React.FC = () => {
     }
     setAiSummaryLoading(true)
     try {
-      const response = (await incidentsApi.aiSummary(selectedIncident.incident.incident_id)) as { summary?: string }
-      setAiSummary(response.summary || 'AI 未返回有效摘要，请稍后重试')
+      const response = (await incidentsApi.aiSummary(selectedIncident.incident.incident_id)) as IncidentAISummaryResponse
+      setAiSummary(response)
       message.success('已生成 AI 异常摘要')
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'AI 摘要生成失败')
@@ -468,7 +469,37 @@ export const IncidentCenter: React.FC = () => {
 
                 {aiSummary ? (
                   <Card type="inner" title="AI 异常总结" style={{ marginBottom: 16 }}>
-                    <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{aiSummary}</Paragraph>
+                    <Space style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+                      <Tag color={aiSummary.risk_level === 'high' ? 'red' : aiSummary.risk_level === 'medium' ? 'orange' : 'green'}>
+                        风险等级: {aiSummary.risk_level}
+                      </Tag>
+                      <Tag color="geekblue">AI 置信度: {Math.round(aiSummary.confidence * 100)}%</Tag>
+                      <Tag>{aiSummary.parse_mode === 'json' ? '结构化输出' : '降级输出'}</Tag>
+                    </Space>
+                    <Paragraph style={{ marginBottom: 12, whiteSpace: 'pre-wrap' }}>{aiSummary.summary}</Paragraph>
+                    <Text strong style={{ display: 'block', marginBottom: 8 }}>可能原因</Text>
+                    <List
+                      size="small"
+                      dataSource={aiSummary.primary_causes}
+                      locale={{ emptyText: '无' }}
+                      renderItem={(item) => <List.Item>{item}</List.Item>}
+                      style={{ marginBottom: 12 }}
+                    />
+                    <Text strong style={{ display: 'block', marginBottom: 8 }}>建议动作</Text>
+                    <List
+                      size="small"
+                      dataSource={aiSummary.recommended_actions}
+                      locale={{ emptyText: '无' }}
+                      renderItem={(item) => <List.Item>{item}</List.Item>}
+                      style={{ marginBottom: 12 }}
+                    />
+                    <Text strong style={{ display: 'block', marginBottom: 8 }}>证据引用</Text>
+                    <List
+                      size="small"
+                      dataSource={aiSummary.evidence_citations}
+                      locale={{ emptyText: '无' }}
+                      renderItem={(item) => <List.Item><Text code>{item}</Text></List.Item>}
+                    />
                   </Card>
                 ) : null}
 

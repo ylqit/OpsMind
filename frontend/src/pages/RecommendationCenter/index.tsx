@@ -8,6 +8,7 @@ import {
   type ArtifactContentResponse,
   type IncidentDetailResponse,
   type IncidentRecord,
+  type RecommendationAIReviewResponse,
   type RecommendationRecord,
   type TaskArtifact,
 } from '@/api/client'
@@ -71,6 +72,16 @@ const getDiffLineClassName = (line: string) => {
     return 'ops-artifact-line ops-artifact-line--removed'
   }
   return 'ops-artifact-line'
+}
+
+const getRiskLevelColor = (riskLevel: string) => {
+  if (riskLevel === 'high') {
+    return 'red'
+  }
+  if (riskLevel === 'medium') {
+    return 'orange'
+  }
+  return 'green'
 }
 
 const buildDiffSummary = (content: string): DiffSummary => {
@@ -264,6 +275,8 @@ export const RecommendationCenter: React.FC = () => {
   const [artifactCopyingId, setArtifactCopyingId] = useState('')
   const [bundleCopyingId, setBundleCopyingId] = useState('')
   const [bundleExportingId, setBundleExportingId] = useState('')
+  const [aiReviewLoadingId, setAiReviewLoadingId] = useState('')
+  const [aiReviewByRecommendationId, setAiReviewByRecommendationId] = useState<Record<string, RecommendationAIReviewResponse>>({})
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const activeRecommendation = useMemo(
@@ -273,6 +286,10 @@ export const RecommendationCenter: React.FC = () => {
   const previewArtifactGroup = useMemo(
     () => (activeRecommendation ? buildArtifactGroup(activeRecommendation.artifact_refs) : null),
     [activeRecommendation],
+  )
+  const activeAiReview = useMemo(
+    () => (activeRecommendation ? aiReviewByRecommendationId[activeRecommendation.recommendation_id] || null : null),
+    [activeRecommendation, aiReviewByRecommendationId],
   )
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
@@ -425,6 +442,7 @@ export const RecommendationCenter: React.FC = () => {
   const loadIncidentDetail = async (incidentId: string) => {
     const detail = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelected(detail)
+    setAiReviewByRecommendationId({})
     return detail
   }
 
@@ -472,6 +490,7 @@ export const RecommendationCenter: React.FC = () => {
         setSelected(null)
         setPreview(null)
         setActiveRecommendationId('')
+        setAiReviewByRecommendationId({})
         return
       }
       const targetIncidentId = searchParams.get('incidentId') || listResponse.items[0].incident_id
@@ -510,6 +529,22 @@ export const RecommendationCenter: React.FC = () => {
       await refreshIncidentWithRetry(selected.incident)
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const reviewRecommendationWithAi = async (recommendation: RecommendationRecord) => {
+    setAiReviewLoadingId(recommendation.recommendation_id)
+    try {
+      const response = (await recommendationsApi.aiReview(recommendation.recommendation_id)) as RecommendationAIReviewResponse
+      setAiReviewByRecommendationId((previous) => ({
+        ...previous,
+        [recommendation.recommendation_id]: response,
+      }))
+      message.success('AI 复核已生成')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'AI 复核失败')
+    } finally {
+      setAiReviewLoadingId('')
     }
   }
 
@@ -597,6 +632,7 @@ export const RecommendationCenter: React.FC = () => {
                             <Tag color="blue">{item.kind}</Tag>
                             <Text strong>{item.observation}</Text>
                             {isActiveRecommendation ? <Tag color="cyan">当前草稿</Tag> : null}
+                            {aiReviewByRecommendationId[item.recommendation_id] ? <Tag color="purple">已 AI 复核</Tag> : null}
                           </Space>
                           <Paragraph style={{ marginBottom: 8 }}>{item.recommendation}</Paragraph>
                           <Paragraph type="secondary" style={{ marginBottom: 12 }}>{item.risk_note}</Paragraph>
@@ -604,6 +640,12 @@ export const RecommendationCenter: React.FC = () => {
                             <Space wrap>
                               <Button onClick={() => void openRecommendationWorkspace(item)} disabled={!item.artifact_refs.length}>
                                 打开页内工作区
+                              </Button>
+                              <Button
+                                onClick={() => void reviewRecommendationWithAi(item)}
+                                loading={aiReviewLoadingId === item.recommendation_id}
+                              >
+                                AI 复核
                               </Button>
                               <Button
                                 onClick={() => void copyRecommendationBundle(item)}
@@ -655,6 +697,12 @@ export const RecommendationCenter: React.FC = () => {
                 <Space wrap>
                   <Button onClick={() => void copyPreviewContent()} loading={previewCopying}>{copyLabel}</Button>
                   <Button
+                    onClick={() => void reviewRecommendationWithAi(activeRecommendation)}
+                    loading={aiReviewLoadingId === activeRecommendation.recommendation_id}
+                  >
+                    AI 复核
+                  </Button>
+                  <Button
                     onClick={() => void copyRecommendationBundle(activeRecommendation)}
                     loading={bundleCopyingId === activeRecommendation.recommendation_id}
                   >
@@ -692,6 +740,45 @@ export const RecommendationCenter: React.FC = () => {
 
                   {previewViewOptions.length > 1 ? (
                     <Segmented block options={previewViewOptions} value={activeArtifactView} onChange={(value) => void switchPreviewView(String(value))} />
+                  ) : null}
+
+                  {activeAiReview ? (
+                    <Card type="inner" title="AI 复核" size="small">
+                      <Space wrap style={{ marginBottom: 10 }}>
+                        <Tag color={getRiskLevelColor(activeAiReview.risk_level)}>风险等级：{activeAiReview.risk_level}</Tag>
+                        <Tag color="geekblue">置信度：{Math.round(activeAiReview.confidence * 100)}%</Tag>
+                        <Tag>{activeAiReview.parse_mode === 'json' ? '结构化输出' : '降级输出'}</Tag>
+                      </Space>
+                      <Paragraph style={{ marginBottom: 8 }}>{activeAiReview.summary}</Paragraph>
+                      <Paragraph type="secondary" style={{ marginBottom: 12 }}>{activeAiReview.risk_assessment}</Paragraph>
+                      <Text strong style={{ display: 'block', marginBottom: 6 }}>验证检查</Text>
+                      <List
+                        size="small"
+                        dataSource={activeAiReview.validation_checks}
+                        locale={{ emptyText: '暂无' }}
+                        renderItem={(item) => <List.Item>{item}</List.Item>}
+                        style={{ marginBottom: 8 }}
+                      />
+                      <Text strong style={{ display: 'block', marginBottom: 6 }}>回滚步骤</Text>
+                      <List
+                        size="small"
+                        dataSource={activeAiReview.rollback_plan}
+                        locale={{ emptyText: '暂无' }}
+                        renderItem={(item) => <List.Item>{item}</List.Item>}
+                        style={{ marginBottom: 8 }}
+                      />
+                      <Text strong style={{ display: 'block', marginBottom: 6 }}>证据引用</Text>
+                      <List
+                        size="small"
+                        dataSource={activeAiReview.evidence_citations}
+                        locale={{ emptyText: '暂无' }}
+                        renderItem={(item) => (
+                          <List.Item>
+                            <Text code>{item}</Text>
+                          </List.Item>
+                        )}
+                      />
+                    </Card>
                   ) : null}
 
                   {isDiffPreview && diffSummary ? (
