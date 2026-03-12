@@ -1,6 +1,8 @@
 """建议接口。"""
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,6 +59,229 @@ class RecommendationAIReviewPayload(BaseModel):
     retry_count: int = 0
     guardrail_error_code: str = ""
     guardrail_error_message: str = ""
+
+
+def _artifact_filename(artifact: dict[str, Any]) -> str:
+    raw_path = str(artifact.get("path") or "").strip()
+    if not raw_path:
+        return str(artifact.get("artifact_id") or "artifact")
+    return Path(raw_path).name or raw_path
+
+
+def _build_incident_metric_evidence(incident) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    if not incident:
+        return refs
+
+    for index, item in enumerate(incident.evidence_refs[:8]):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("metric") or item.get("type") or f"evidence_{index + 1}")
+        summary = str(item.get("summary") or incident.summary or "").strip()
+        metric = str(item.get("metric") or "").strip()
+        value = item.get("value")
+        unit = str(item.get("unit") or "").strip()
+        value_text = ""
+        if value is not None and str(value).strip():
+            value_text = f"{value}{unit}" if unit else str(value)
+
+        refs.append(
+            {
+                "evidence_id": f"metric_{incident.incident_id}_{index}",
+                "source_type": "metric_snapshot",
+                "title": title,
+                "summary": summary or "指标快照证据",
+                "quote": value_text,
+                "metric": metric,
+                "priority": int(item.get("priority") or 60),
+                "signal_strength": str(item.get("signal_strength") or "medium"),
+                "artifact_ref": None,
+                "jump": {"kind": "none"},
+            }
+        )
+    return refs
+
+
+def _is_safe_artifact_path(path: Path, task_id: str) -> bool:
+    """仅允许读取任务目录下的产物文件。"""
+    if not task_id.strip():
+        return False
+    try:
+        resolved = path.resolve()
+    except Exception:  # noqa: BLE001
+        return False
+    lowered_parts = [part.lower() for part in resolved.parts]
+    return "tasks" in lowered_parts and task_id.lower() in lowered_parts
+
+
+def _read_artifact_excerpt(path: Path, max_lines: int = 12, max_chars: int = 420) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+    lines = [line.rstrip() for line in content.splitlines()[:max_lines]]
+    joined = "\n".join(lines).strip()
+    if len(joined) > max_chars:
+        return f"{joined[:max_chars]}..."
+    return joined
+
+
+def _extract_metric_quotes_from_text(text: str) -> list[tuple[str, str]]:
+    if not text.strip():
+        return []
+    patterns = [
+        ("error_rate", r"(?:error[_ ]?rate|错误率)[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)"),
+        ("latency", r"(?:latency|延迟|request_time|avg_latency)[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)"),
+        ("cpu", r"(?:cpu|CPU)[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)"),
+        ("memory", r"(?:memory|内存)[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)"),
+        ("restarts", r"(?:restart|重启)[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)"),
+    ]
+    found: list[tuple[str, str]] = []
+    for metric, pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        found.append((metric, match.group(1)))
+        if len(found) >= 4:
+            break
+    return found
+
+
+def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
+    artifact_id = str(artifact.get("artifact_id") or "")
+    task_id = str(artifact.get("task_id") or "")
+    kind = str(artifact.get("kind") or "")
+    preview = str(artifact.get("preview") or "").strip()
+    raw_path = str(artifact.get("path") or "").strip()
+    filename = _artifact_filename(artifact)
+
+    refs: list[dict[str, Any]] = [
+        {
+            "evidence_id": f"artifact_{artifact_id or filename}",
+            "source_type": "artifact",
+            "title": filename,
+            "summary": preview or f"任务产物（{kind or 'artifact'}）",
+            "quote": preview[:200],
+            "metric": "",
+            "priority": 78,
+            "signal_strength": "high" if kind in {"manifest", "diff", "json"} else "medium",
+            "artifact_ref": artifact,
+            "jump": {
+                "kind": "artifact",
+                "task_id": task_id,
+                "artifact_id": artifact_id,
+            },
+        }
+    ]
+
+    if not raw_path:
+        return refs
+    artifact_path = Path(raw_path)
+    if not artifact_path.exists() or not artifact_path.is_file():
+        return refs
+    if not _is_safe_artifact_path(artifact_path, task_id=task_id):
+        return refs
+
+    excerpt = _read_artifact_excerpt(artifact_path)
+    if excerpt:
+        if kind in {"log_snippet", "text"} or artifact_path.suffix.lower() == ".log" or "access" in filename.lower():
+            refs.append(
+                {
+                    "evidence_id": f"log_{artifact_id or filename}",
+                    "source_type": "log_snippet",
+                    "title": f"{filename} 日志片段",
+                    "summary": "来自任务产物的现场日志样本",
+                    "quote": excerpt,
+                    "metric": "",
+                    "priority": 84,
+                    "signal_strength": "high",
+                    "artifact_ref": artifact,
+                    "jump": {
+                        "kind": "artifact",
+                        "task_id": task_id,
+                        "artifact_id": artifact_id,
+                    },
+                }
+            )
+
+        for metric, value in _extract_metric_quotes_from_text(excerpt):
+            refs.append(
+                {
+                    "evidence_id": f"metric_{artifact_id or filename}_{metric}",
+                    "source_type": "metric_snapshot",
+                    "title": f"{filename} 指标快照",
+                    "summary": f"从产物中提取到 {metric}={value}",
+                    "quote": f"{metric}={value}",
+                    "metric": metric,
+                    "priority": 82,
+                    "signal_strength": "medium",
+                    "artifact_ref": artifact,
+                    "jump": {
+                        "kind": "artifact",
+                        "task_id": task_id,
+                        "artifact_id": artifact_id,
+                    },
+                }
+            )
+    return refs
+
+
+def _deduplicate_evidence(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in refs:
+        artifact_ref = item.get("artifact_ref") or {}
+        artifact_id = str(artifact_ref.get("artifact_id") or "")
+        key = (
+            str(item.get("source_type") or ""),
+            str(item.get("title") or ""),
+            str(item.get("quote") or "")[:120],
+            artifact_id,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(item)
+    return sorted(deduplicated, key=lambda item: int(item.get("priority") or 0), reverse=True)
+
+
+def _build_recommendation_evidence_payload(recommendation, incident) -> dict[str, Any]:
+    refs: list[dict[str, Any]] = []
+    refs.extend(_build_incident_metric_evidence(incident))
+    for artifact in recommendation.artifact_refs:
+        if isinstance(artifact, dict):
+            refs.extend(_build_artifact_evidence(artifact))
+
+    evidence_refs = _deduplicate_evidence(refs)
+    actionable_count = len(
+        [item for item in evidence_refs if str(item.get("source_type") or "") in {"artifact", "log_snippet", "metric_snapshot"}]
+    )
+    insufficient = actionable_count == 0
+
+    if insufficient:
+        return {
+            "evidence_refs": [],
+            "evidence_status": "insufficient",
+            "evidence_message": "证据不足：当前缺少可追溯的任务产物、日志片段或指标快照，暂不建议执行强变更。",
+            "confidence_effective": min(float(recommendation.confidence), 0.35),
+            "recommendation_effective": "证据不足：建议先补充日志与指标证据，再进行变更决策。",
+            "evidence_summary": {"total": 0, "artifact": 0, "log_snippet": 0, "metric_snapshot": 0},
+        }
+
+    summary = {
+        "total": len(evidence_refs),
+        "artifact": len([item for item in evidence_refs if item.get("source_type") == "artifact"]),
+        "log_snippet": len([item for item in evidence_refs if item.get("source_type") == "log_snippet"]),
+        "metric_snapshot": len([item for item in evidence_refs if item.get("source_type") == "metric_snapshot"]),
+    }
+    return {
+        "evidence_refs": evidence_refs,
+        "evidence_status": "sufficient",
+        "evidence_message": "已提取现场证据，可追溯到任务产物与指标快照。",
+        "confidence_effective": float(recommendation.confidence),
+        "recommendation_effective": recommendation.recommendation,
+        "evidence_summary": summary,
+    }
 
 
 def _to_string_list(value: Any, limit: int) -> list[str]:
@@ -134,11 +359,18 @@ def _normalize_review_payload(payload: dict[str, Any], fallback: dict[str, Any])
 async def get_recommendation_detail(
     recommendation_id: str,
     recommendation_service=Depends(get_recommendation_service),
+    incident_service=Depends(get_incident_service),
 ):
     recommendation = recommendation_service.repository.get(recommendation_id)
     if not recommendation:
         raise HTTPException(status_code=404, detail="建议不存在")
-    return recommendation.model_dump(mode="json")
+
+    incident = incident_service.get_incident(recommendation.incident_id)
+    evidence_payload = _build_recommendation_evidence_payload(recommendation, incident)
+
+    detail = recommendation.model_dump(mode="json")
+    detail.update(evidence_payload)
+    return detail
 
 
 @router.post("/{recommendation_id}/ai-review")

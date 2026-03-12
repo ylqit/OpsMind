@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, Empty, List, Row, Segmented, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Drawer, Empty, List, Row, Segmented, Space, Tag, Typography, message } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   incidentsApi,
@@ -9,6 +9,8 @@ import {
   type IncidentDetailResponse,
   type IncidentRecord,
   type RecommendationAIReviewResponse,
+  type RecommendationDetailResponse,
+  type RecommendationEvidenceRef,
   type RecommendationRecord,
   type TaskArtifact,
 } from '@/api/client'
@@ -82,6 +84,19 @@ const getRiskLevelColor = (riskLevel: string) => {
     return 'orange'
   }
   return 'green'
+}
+
+const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_type']) => {
+  if (sourceType === 'artifact') {
+    return '任务产物'
+  }
+  if (sourceType === 'log_snippet') {
+    return '日志片段'
+  }
+  if (sourceType === 'metric_snapshot') {
+    return '指标快照'
+  }
+  return '现场证据'
 }
 
 const buildDiffSummary = (content: string): DiffSummary => {
@@ -277,6 +292,9 @@ export const RecommendationCenter: React.FC = () => {
   const [bundleExportingId, setBundleExportingId] = useState('')
   const [aiReviewLoadingId, setAiReviewLoadingId] = useState('')
   const [aiReviewByRecommendationId, setAiReviewByRecommendationId] = useState<Record<string, RecommendationAIReviewResponse>>({})
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
+  const [evidenceLoadingId, setEvidenceLoadingId] = useState('')
+  const [detailByRecommendationId, setDetailByRecommendationId] = useState<Record<string, RecommendationDetailResponse>>({})
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const activeRecommendation = useMemo(
@@ -290,6 +308,10 @@ export const RecommendationCenter: React.FC = () => {
   const activeAiReview = useMemo(
     () => (activeRecommendation ? aiReviewByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, aiReviewByRecommendationId],
+  )
+  const activeRecommendationDetail = useMemo(
+    () => (activeRecommendation ? detailByRecommendationId[activeRecommendation.recommendation_id] || null : null),
+    [activeRecommendation, detailByRecommendationId],
   )
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
@@ -327,6 +349,7 @@ export const RecommendationCenter: React.FC = () => {
   const openRecommendationWorkspace = async (recommendation: RecommendationRecord, preferredArtifact?: TaskArtifact) => {
     const artifact = preferredArtifact || getPrimaryArtifact(recommendation.artifact_refs)
     setActiveRecommendationId(recommendation.recommendation_id)
+    void loadRecommendationDetail(recommendation.recommendation_id)
     if (!artifact) {
       setPreview(null)
       updateRouteState(selected?.incident.incident_id, null)
@@ -443,7 +466,58 @@ export const RecommendationCenter: React.FC = () => {
     const detail = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelected(detail)
     setAiReviewByRecommendationId({})
+    setDetailByRecommendationId({})
     return detail
+  }
+
+  const loadRecommendationDetail = async (recommendationId: string): Promise<RecommendationDetailResponse> => {
+    const existing = detailByRecommendationId[recommendationId]
+    if (existing) {
+      return existing
+    }
+    setEvidenceLoadingId(recommendationId)
+    try {
+      const detail = (await recommendationsApi.get(recommendationId)) as RecommendationDetailResponse
+      setDetailByRecommendationId((previous) => ({
+        ...previous,
+        [recommendationId]: detail,
+      }))
+      return detail
+    } finally {
+      setEvidenceLoadingId('')
+    }
+  }
+
+  const openEvidenceDrawer = async (recommendation: RecommendationRecord) => {
+    setActiveRecommendationId(recommendation.recommendation_id)
+    setEvidenceDrawerOpen(true)
+    try {
+      await loadRecommendationDetail(recommendation.recommendation_id)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '证据加载失败')
+    }
+  }
+
+  const jumpToEvidence = async (evidence: RecommendationEvidenceRef) => {
+    const jump = evidence.jump
+    if (!jump || jump.kind !== 'artifact' || !jump.task_id || !jump.artifact_id) {
+      return
+    }
+    if (!selected || !activeRecommendation) {
+      return
+    }
+    const owner = selectedRecommendations.find((item) =>
+      item.artifact_refs.some((artifact) => artifact.artifact_id === jump.artifact_id && artifact.task_id === jump.task_id),
+    )
+    const targetArtifact = owner?.artifact_refs.find(
+      (artifact) => artifact.artifact_id === jump.artifact_id && artifact.task_id === jump.task_id,
+    )
+    if (!owner || !targetArtifact) {
+      message.warning('引用产物不存在或已失效')
+      return
+    }
+    await previewArtifact(targetArtifact, owner.recommendation_id, selected.incident.incident_id)
+    setEvidenceDrawerOpen(false)
   }
 
   // 页内工作区需要始终有一个默认落点，优先打开建议稿，其次才是 diff 或基线。
@@ -648,6 +722,12 @@ export const RecommendationCenter: React.FC = () => {
                                 AI 复核
                               </Button>
                               <Button
+                                onClick={() => void openEvidenceDrawer(item)}
+                                loading={evidenceLoadingId === item.recommendation_id}
+                              >
+                                证据引用
+                              </Button>
+                              <Button
                                 onClick={() => void copyRecommendationBundle(item)}
                                 loading={bundleCopyingId === item.recommendation_id}
                                 disabled={!item.artifact_refs.length}
@@ -701,6 +781,12 @@ export const RecommendationCenter: React.FC = () => {
                     loading={aiReviewLoadingId === activeRecommendation.recommendation_id}
                   >
                     AI 复核
+                  </Button>
+                  <Button
+                    onClick={() => void openEvidenceDrawer(activeRecommendation)}
+                    loading={evidenceLoadingId === activeRecommendation.recommendation_id}
+                  >
+                    证据引用
                   </Button>
                   <Button
                     onClick={() => void copyRecommendationBundle(activeRecommendation)}
@@ -818,6 +904,72 @@ export const RecommendationCenter: React.FC = () => {
           </div>
         </Col>
       </Row>
+
+      <Drawer
+        title="证据引用"
+        open={evidenceDrawerOpen}
+        width={560}
+        onClose={() => setEvidenceDrawerOpen(false)}
+        destroyOnClose={false}
+      >
+        {!activeRecommendation ? (
+          <Empty description="请选择建议后查看证据引用" />
+        ) : !activeRecommendationDetail ? (
+          <Empty description={evidenceLoadingId === activeRecommendation.recommendation_id ? '正在加载证据...' : '暂无证据详情'} />
+        ) : (
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <Alert
+              type={activeRecommendationDetail.evidence_status === 'sufficient' ? 'success' : 'warning'}
+              showIcon
+              message={activeRecommendationDetail.evidence_status === 'sufficient' ? '证据链可追溯' : '证据不足'}
+              description={activeRecommendationDetail.evidence_message}
+            />
+            <Space wrap>
+              <Tag color={activeRecommendationDetail.evidence_status === 'sufficient' ? 'green' : 'orange'}>
+                状态：{activeRecommendationDetail.evidence_status === 'sufficient' ? '可追溯' : '证据不足'}
+              </Tag>
+              <Tag color="blue">有效置信度：{Math.round(activeRecommendationDetail.confidence_effective * 100)}%</Tag>
+              <Tag>证据总数：{activeRecommendationDetail.evidence_summary.total}</Tag>
+            </Space>
+            <Paragraph style={{ marginBottom: 0 }}>
+              <Text strong>建议结论：</Text>
+              {activeRecommendationDetail.recommendation_effective}
+            </Paragraph>
+            <List
+              size="small"
+              dataSource={activeRecommendationDetail.evidence_refs}
+              locale={{ emptyText: '暂无可展示证据' }}
+              renderItem={(item) => (
+                <List.Item
+                  actions={
+                    item.jump?.kind === 'artifact' && item.jump.artifact_id && item.jump.task_id
+                      ? [
+                          <Button key={`jump-${item.evidence_id}`} size="small" onClick={() => void jumpToEvidence(item)}>
+                            跳转产物
+                          </Button>,
+                        ]
+                      : []
+                  }
+                >
+                  <div style={{ width: '100%' }}>
+                    <Space wrap style={{ marginBottom: 6 }}>
+                      <Tag color="geekblue">{getEvidenceSourceLabel(item.source_type)}</Tag>
+                      <Text strong>{item.title}</Text>
+                      {item.metric ? <Text code>{item.metric}</Text> : null}
+                    </Space>
+                    <Paragraph style={{ marginBottom: 4 }}>{item.summary}</Paragraph>
+                    {item.quote ? (
+                      <Paragraph type="secondary" style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                        {item.quote}
+                      </Paragraph>
+                    ) : null}
+                  </div>
+                </List.Item>
+              )}
+            />
+          </Space>
+        )}
+      </Drawer>
     </div>
   )
 }

@@ -93,6 +93,37 @@ export interface RecommendationRecord {
   updated_at: string
 }
 
+export interface RecommendationEvidenceRef {
+  evidence_id: string
+  source_type: 'artifact' | 'log_snippet' | 'metric_snapshot' | 'incident_evidence'
+  title: string
+  summary: string
+  quote: string
+  metric?: string
+  priority?: number
+  signal_strength?: string
+  artifact_ref?: TaskArtifact | null
+  jump?: {
+    kind: 'artifact' | 'none'
+    task_id?: string
+    artifact_id?: string
+  }
+}
+
+export interface RecommendationDetailResponse extends RecommendationRecord {
+  evidence_refs: RecommendationEvidenceRef[]
+  evidence_status: 'sufficient' | 'insufficient'
+  evidence_message: string
+  confidence_effective: number
+  recommendation_effective: string
+  evidence_summary: {
+    total: number
+    artifact: number
+    log_snippet: number
+    metric_snapshot: number
+  }
+}
+
 export interface TaskApproval {
   approved_by: string
   approval_note: string
