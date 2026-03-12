@@ -40,6 +40,30 @@ interface ArtifactGroup {
   baseline?: TaskArtifact
   recommended?: TaskArtifact
   diff?: TaskArtifact
+  metadata?: TaskArtifact
+}
+
+interface ManifestMetadataDiff {
+  filename: string
+  added_lines: number
+  removed_lines: number
+  hunk_count: number
+}
+
+interface ManifestMetadataDocument {
+  filename: string
+  sha256: string
+  line_count: number
+  document_count: number
+}
+
+interface ManifestMetadata {
+  schema_version: string
+  generated_at: string
+  baseline: ManifestMetadataDocument
+  recommended: ManifestMetadataDocument
+  diff: ManifestMetadataDiff
+  risk_rules: string[]
 }
 
 interface BundleArtifactContent {
@@ -137,6 +161,10 @@ const buildArtifactGroup = (artifacts: TaskArtifact[]): ArtifactGroup => {
   const group: ArtifactGroup = {}
   for (const artifact of artifacts) {
     const filename = getArtifactFilename(artifact)
+    if (artifact.kind === 'json' && filename.includes('-manifest-meta') && !group.metadata) {
+      group.metadata = artifact
+      continue
+    }
     if (artifact.kind === 'diff' && !group.diff) {
       group.diff = artifact
       continue
@@ -190,7 +218,7 @@ const findRecommendationByArtifact = (
 // 导出与复制时保持稳定顺序：建议稿 -> 基线 -> diff -> 其他产物。
 const buildBundleArtifacts = (recommendation: RecommendationRecord): TaskArtifact[] => {
   const group = buildArtifactGroup(recommendation.artifact_refs)
-  const preferred = [group.recommended, group.baseline, group.diff].filter(Boolean) as TaskArtifact[]
+  const preferred = [group.recommended, group.baseline, group.diff, group.metadata].filter(Boolean) as TaskArtifact[]
   const seen = new Set<string>()
   const merged: TaskArtifact[] = []
   for (const artifact of [...preferred, ...recommendation.artifact_refs]) {
@@ -211,6 +239,51 @@ const getFenceLanguage = (artifact: TaskArtifact) => {
     return 'diff'
   }
   return 'text'
+}
+
+const parseManifestMetadata = (content: string): ManifestMetadata | null => {
+  try {
+    const parsed = JSON.parse(content) as Partial<ManifestMetadata>
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+    if (!parsed.baseline || !parsed.recommended || !parsed.diff) {
+      return null
+    }
+    return {
+      schema_version: String(parsed.schema_version || 'v1'),
+      generated_at: String(parsed.generated_at || ''),
+      baseline: {
+        filename: String(parsed.baseline.filename || ''),
+        sha256: String(parsed.baseline.sha256 || ''),
+        line_count: Number(parsed.baseline.line_count || 0),
+        document_count: Number(parsed.baseline.document_count || 0),
+      },
+      recommended: {
+        filename: String(parsed.recommended.filename || ''),
+        sha256: String(parsed.recommended.sha256 || ''),
+        line_count: Number(parsed.recommended.line_count || 0),
+        document_count: Number(parsed.recommended.document_count || 0),
+      },
+      diff: {
+        filename: String(parsed.diff.filename || ''),
+        added_lines: Number(parsed.diff.added_lines || 0),
+        removed_lines: Number(parsed.diff.removed_lines || 0),
+        hunk_count: Number(parsed.diff.hunk_count || 0),
+      },
+      risk_rules: Array.isArray(parsed.risk_rules) ? parsed.risk_rules.map((item) => String(item)).filter(Boolean) : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+const shortHash = (value: string, size: number = 12) => {
+  const text = String(value || '').trim()
+  if (!text) {
+    return '-'
+  }
+  return text.slice(0, size)
 }
 
 const downloadTextFile = (filename: string, content: string, mimeType: string = 'text/plain;charset=utf-8') => {
@@ -295,6 +368,7 @@ export const RecommendationCenter: React.FC = () => {
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [evidenceLoadingId, setEvidenceLoadingId] = useState('')
   const [detailByRecommendationId, setDetailByRecommendationId] = useState<Record<string, RecommendationDetailResponse>>({})
+  const [manifestMetaByRecommendationId, setManifestMetaByRecommendationId] = useState<Record<string, ManifestMetadata | null>>({})
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const activeRecommendation = useMemo(
@@ -312,6 +386,10 @@ export const RecommendationCenter: React.FC = () => {
   const activeRecommendationDetail = useMemo(
     () => (activeRecommendation ? detailByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, detailByRecommendationId],
+  )
+  const activeManifestMeta = useMemo(
+    () => (activeRecommendation ? manifestMetaByRecommendationId[activeRecommendation.recommendation_id] || null : null),
+    [activeRecommendation, manifestMetaByRecommendationId],
   )
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
@@ -350,6 +428,7 @@ export const RecommendationCenter: React.FC = () => {
     const artifact = preferredArtifact || getPrimaryArtifact(recommendation.artifact_refs)
     setActiveRecommendationId(recommendation.recommendation_id)
     void loadRecommendationDetail(recommendation.recommendation_id)
+    void loadManifestMetadata(recommendation)
     if (!artifact) {
       setPreview(null)
       updateRouteState(selected?.incident.incident_id, null)
@@ -467,6 +546,7 @@ export const RecommendationCenter: React.FC = () => {
     setSelected(detail)
     setAiReviewByRecommendationId({})
     setDetailByRecommendationId({})
+    setManifestMetaByRecommendationId({})
     return detail
   }
 
@@ -485,6 +565,27 @@ export const RecommendationCenter: React.FC = () => {
       return detail
     } finally {
       setEvidenceLoadingId('')
+    }
+  }
+
+  const loadManifestMetadata = async (recommendation: RecommendationRecord) => {
+    const recommendationId = recommendation.recommendation_id
+    if (Object.prototype.hasOwnProperty.call(manifestMetaByRecommendationId, recommendationId)) {
+      return manifestMetaByRecommendationId[recommendationId]
+    }
+    const metadataArtifact = buildArtifactGroup(recommendation.artifact_refs).metadata
+    if (!metadataArtifact) {
+      setManifestMetaByRecommendationId((previous) => ({ ...previous, [recommendationId]: null }))
+      return null
+    }
+    try {
+      const response = (await tasksApi.getArtifactContent(metadataArtifact.task_id, metadataArtifact.artifact_id)) as ArtifactContentResponse
+      const parsed = parseManifestMetadata(response.content)
+      setManifestMetaByRecommendationId((previous) => ({ ...previous, [recommendationId]: parsed }))
+      return parsed
+    } catch {
+      setManifestMetaByRecommendationId((previous) => ({ ...previous, [recommendationId]: null }))
+      return null
     }
   }
 
@@ -531,6 +632,8 @@ export const RecommendationCenter: React.FC = () => {
     }
     const artifact = getPrimaryArtifact(firstRecommendation.artifact_refs)
     setActiveRecommendationId(firstRecommendation.recommendation_id)
+    void loadRecommendationDetail(firstRecommendation.recommendation_id)
+    void loadManifestMetadata(firstRecommendation)
     if (!artifact) {
       updateRouteState(detail.incident.incident_id, null)
       return
@@ -549,6 +652,8 @@ export const RecommendationCenter: React.FC = () => {
     const recommendation = findRecommendationByArtifact(detail.recommendations, artifactId, taskId)
     const artifact = recommendation?.artifact_refs.find((item) => item.artifact_id === artifactId && item.task_id === taskId)
     if (artifact && recommendation) {
+      void loadRecommendationDetail(recommendation.recommendation_id)
+      void loadManifestMetadata(recommendation)
       await previewArtifact(artifact, recommendation.recommendation_id, detail.incident.incident_id)
       return
     }
@@ -631,7 +736,7 @@ export const RecommendationCenter: React.FC = () => {
       <Button
         size="small"
         type={preview?.artifact.artifact_id === artifact.artifact_id ? 'primary' : 'default'}
-        onClick={() => void previewArtifact(artifact, recommendation.recommendation_id, selected?.incident.incident_id)}
+        onClick={() => void openRecommendationWorkspace(recommendation, artifact)}
         loading={previewLoading && previewArtifactId === artifact.artifact_id}
       >
         打开工作区
@@ -826,6 +931,41 @@ export const RecommendationCenter: React.FC = () => {
 
                   {previewViewOptions.length > 1 ? (
                     <Segmented block options={previewViewOptions} value={activeArtifactView} onChange={(value) => void switchPreviewView(String(value))} />
+                  ) : null}
+
+                  {activeManifestMeta ? (
+                    <Card type="inner" title="草稿元数据" size="small">
+                      <Space wrap style={{ marginBottom: 10 }}>
+                        <Tag color="geekblue">Schema：{activeManifestMeta.schema_version}</Tag>
+                        <Tag color="blue">Diff +{activeManifestMeta.diff.added_lines} / -{activeManifestMeta.diff.removed_lines}</Tag>
+                        <Tag color="purple">变更块 {activeManifestMeta.diff.hunk_count}</Tag>
+                      </Space>
+                      <div className="ops-manifest-meta-grid">
+                        <div className="ops-manifest-meta-card">
+                          <Text strong>基线</Text>
+                          <Text code>{activeManifestMeta.baseline.filename || '-'}</Text>
+                          <Text type="secondary">
+                            文档 {activeManifestMeta.baseline.document_count} · 行数 {activeManifestMeta.baseline.line_count}
+                          </Text>
+                          <Text type="secondary">SHA {shortHash(activeManifestMeta.baseline.sha256)}</Text>
+                        </div>
+                        <div className="ops-manifest-meta-card">
+                          <Text strong>建议</Text>
+                          <Text code>{activeManifestMeta.recommended.filename || '-'}</Text>
+                          <Text type="secondary">
+                            文档 {activeManifestMeta.recommended.document_count} · 行数 {activeManifestMeta.recommended.line_count}
+                          </Text>
+                          <Text type="secondary">SHA {shortHash(activeManifestMeta.recommended.sha256)}</Text>
+                        </div>
+                      </div>
+                      {activeManifestMeta.risk_rules.length > 0 ? (
+                        <Space wrap style={{ marginTop: 10 }}>
+                          {activeManifestMeta.risk_rules.map((rule) => (
+                            <Tag key={rule}>{rule}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                    </Card>
                   ) : null}
 
                   {activeAiReview ? (

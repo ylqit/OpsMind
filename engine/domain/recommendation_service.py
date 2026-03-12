@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+import json
+import hashlib
+from datetime import datetime
 from difflib import unified_diff
 from typing import Any, Dict, List, Sequence
 
@@ -62,20 +65,28 @@ class RecommendationService:
                 llm_router=llm_router,
                 llm_provider=llm_provider,
             )
-            guardrail_items.append({"kind": kind.value, **guardrail_meta})
+            constrained_draft, risk_rules = self._apply_risk_constraints(kind=kind, incident=incident, draft=draft)
+            guardrail_items.append({"kind": kind.value, "risk_rules": risk_rules, **guardrail_meta})
 
             artifact_refs = []
             if kind == RecommendationKind.MANIFEST_DRAFT:
-                artifact_refs.extend(await self._build_manifest_artifacts(task_id=task_id, incident=incident, app_name=app_name))
+                artifact_refs.extend(
+                    await self._build_manifest_artifacts(
+                        task_id=task_id,
+                        incident=incident,
+                        app_name=app_name,
+                        risk_rules=risk_rules,
+                    )
+                )
 
             recommendation = Recommendation(
                 incident_id=incident.incident_id,
                 target_asset_id=target_asset_id,
                 kind=kind,
-                confidence=float(draft["confidence"]),
-                observation=str(draft["observation"]),
-                recommendation=str(draft["recommendation"]),
-                risk_note=str(draft["risk_note"]),
+                confidence=float(constrained_draft["confidence"]),
+                observation=str(constrained_draft["observation"]),
+                recommendation=str(constrained_draft["recommendation"]),
+                risk_note=str(constrained_draft["risk_note"]),
                 artifact_refs=artifact_refs,
             )
             recommendations.append(self.repository.save(recommendation))
@@ -150,16 +161,39 @@ class RecommendationService:
             "error_message": result.error_message,
         }
 
-    async def _build_manifest_artifacts(self, task_id: str, incident, app_name: str) -> List[Dict[str, str]]:
-        """生成基线草稿、建议草稿和差异结果。"""
+    async def _build_manifest_artifacts(
+        self,
+        task_id: str,
+        incident,
+        app_name: str,
+        risk_rules: list[str],
+    ) -> List[Dict[str, Any]]:
+        """生成基线草稿、建议草稿、差异结果和稳定化元数据。"""
         baseline_profile = self._build_profile(app_name=app_name, incident=incident, recommended=False)
         recommended_profile = self._build_profile(app_name=app_name, incident=incident, recommended=True)
-        baseline_manifest = await self._render_manifest(baseline_profile)
-        recommended_manifest = await self._render_manifest(recommended_profile)
+
+        baseline_manifest = self._ensure_manifest_stable(
+            app_name=app_name,
+            profile=baseline_profile,
+            rendered_manifest=await self._render_manifest(baseline_profile),
+        )
+        recommended_manifest = self._ensure_manifest_stable(
+            app_name=app_name,
+            profile=recommended_profile,
+            rendered_manifest=await self._render_manifest(recommended_profile),
+        )
 
         baseline_filename = f"{app_name}-baseline.yaml"
         recommended_filename = f"{app_name}-recommended.yaml"
         diff_filename = f"{app_name}-changes.diff"
+        metadata_filename = f"{app_name}-manifest-meta.json"
+
+        diff_content = self._build_manifest_diff(
+            baseline_manifest=baseline_manifest,
+            recommended_manifest=recommended_manifest,
+            baseline_filename=baseline_filename,
+            recommended_filename=recommended_filename,
+        )
 
         baseline_artifact = self.artifact_store.write_text(
             task_id=task_id,
@@ -176,18 +210,28 @@ class RecommendationService:
         diff_artifact = self.artifact_store.write_text(
             task_id=task_id,
             kind=ArtifactKind.DIFF,
-            content=self._build_manifest_diff(
+            content=diff_content,
+            filename=diff_filename,
+        )
+        metadata_artifact = self.artifact_store.write_text(
+            task_id=task_id,
+            kind=ArtifactKind.JSON,
+            content=self._build_manifest_metadata(
                 baseline_manifest=baseline_manifest,
                 recommended_manifest=recommended_manifest,
+                diff_content=diff_content,
                 baseline_filename=baseline_filename,
                 recommended_filename=recommended_filename,
+                diff_filename=diff_filename,
+                risk_rules=risk_rules,
             ),
-            filename=diff_filename,
+            filename=metadata_filename,
         )
         return [
             baseline_artifact.model_dump(mode="json"),
             recommended_artifact.model_dump(mode="json"),
             diff_artifact.model_dump(mode="json"),
+            metadata_artifact.model_dump(mode="json"),
         ]
 
     async def _render_manifest(self, profile: Dict[str, str | int]) -> str:
@@ -241,6 +285,237 @@ class RecommendationService:
             return "当前建议稿与基线一致，无需调整。\n"
         return "\n".join(diff_lines) + "\n"
 
+    def _ensure_manifest_stable(self, app_name: str, profile: Dict[str, str | int], rendered_manifest: str) -> str:
+        """确保 YAML 草稿稳定可读。"""
+        content = str(rendered_manifest or "").strip()
+        if self._looks_like_manifest(content):
+            return f"{content}\n"
+        return self._build_stable_manifest_fallback(app_name=app_name, profile=profile)
+
+    def _looks_like_manifest(self, content: str) -> bool:
+        if not content:
+            return False
+        sections = [item.strip() for item in content.split("\n---\n") if item.strip()]
+        if not sections:
+            return False
+        required_tokens = ("apiVersion:", "kind:", "metadata:")
+        for section in sections:
+            if not all(token in section for token in required_tokens):
+                return False
+        return True
+
+    def _build_stable_manifest_fallback(self, app_name: str, profile: Dict[str, str | int]) -> str:
+        """在生成失败或内容异常时返回稳定的 YAML 草稿。"""
+        replicas = int(profile.get("replicas", 1) or 1)
+        port = int(profile.get("port", 80) or 80)
+        image = str(profile.get("image", "nginx:latest"))
+        cpu_request = str(profile.get("cpu_request", "100m"))
+        memory_request = str(profile.get("memory_request", "128Mi"))
+        cpu_limit = str(profile.get("cpu_limit", "500m"))
+        memory_limit = str(profile.get("memory_limit", "512Mi"))
+
+        return (
+            f"apiVersion: apps/v1\n"
+            f"kind: Deployment\n"
+            f"metadata:\n"
+            f"  name: {app_name}\n"
+            f"  labels:\n"
+            f"    app: {app_name}\n"
+            f"spec:\n"
+            f"  replicas: {replicas}\n"
+            f"  selector:\n"
+            f"    matchLabels:\n"
+            f"      app: {app_name}\n"
+            f"  template:\n"
+            f"    metadata:\n"
+            f"      labels:\n"
+            f"        app: {app_name}\n"
+            f"    spec:\n"
+            f"      containers:\n"
+            f"      - name: {app_name}\n"
+            f"        image: {image}\n"
+            f"        ports:\n"
+            f"        - containerPort: {port}\n"
+            f"        resources:\n"
+            f"          requests:\n"
+            f"            cpu: {cpu_request}\n"
+            f"            memory: {memory_request}\n"
+            f"          limits:\n"
+            f"            cpu: {cpu_limit}\n"
+            f"            memory: {memory_limit}\n"
+            f"---\n"
+            f"apiVersion: v1\n"
+            f"kind: Service\n"
+            f"metadata:\n"
+            f"  name: {app_name}\n"
+            f"  labels:\n"
+            f"    app: {app_name}\n"
+            f"spec:\n"
+            f"  type: ClusterIP\n"
+            f"  selector:\n"
+            f"    app: {app_name}\n"
+            f"  ports:\n"
+            f"  - port: {port}\n"
+            f"    targetPort: {port}\n"
+            f"    protocol: TCP\n"
+        )
+
+    def _build_manifest_metadata(
+        self,
+        baseline_manifest: str,
+        recommended_manifest: str,
+        diff_content: str,
+        baseline_filename: str,
+        recommended_filename: str,
+        diff_filename: str,
+        risk_rules: list[str],
+    ) -> str:
+        diff_stats = self._summarize_diff(diff_content)
+        metadata = {
+            "schema_version": "v1",
+            "generated_at": f"{datetime.utcnow().isoformat()}Z",
+            "baseline": {
+                "filename": baseline_filename,
+                "sha256": self._sha256_text(baseline_manifest),
+                "line_count": self._count_non_empty_lines(baseline_manifest),
+                "document_count": self._count_manifest_documents(baseline_manifest),
+            },
+            "recommended": {
+                "filename": recommended_filename,
+                "sha256": self._sha256_text(recommended_manifest),
+                "line_count": self._count_non_empty_lines(recommended_manifest),
+                "document_count": self._count_manifest_documents(recommended_manifest),
+            },
+            "diff": {
+                "filename": diff_filename,
+                **diff_stats,
+            },
+            "risk_rules": risk_rules,
+        }
+        return json.dumps(metadata, ensure_ascii=False, indent=2)
+
+    def _summarize_diff(self, diff_content: str) -> dict[str, int]:
+        added_lines = 0
+        removed_lines = 0
+        hunk_count = 0
+        for line in diff_content.splitlines():
+            if line.startswith("@@"):
+                hunk_count += 1
+                continue
+            if line.startswith("+") and not line.startswith("+++"):
+                added_lines += 1
+                continue
+            if line.startswith("-") and not line.startswith("---"):
+                removed_lines += 1
+        return {
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+            "hunk_count": hunk_count,
+        }
+
+    def _sha256_text(self, content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _count_non_empty_lines(self, content: str) -> int:
+        return len([line for line in content.splitlines() if line.strip()])
+
+    def _count_manifest_documents(self, content: str) -> int:
+        return len([item for item in content.split("\n---\n") if item.strip()])
+
+    def _apply_risk_constraints(
+        self,
+        kind: RecommendationKind,
+        incident,
+        draft: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """对建议内容施加风险边界，减少误导性动作。"""
+        constrained = dict(draft)
+        tags = set(incident.reasoning_tags)
+        confidence = float(constrained.get("confidence", 0.6))
+        recommendation_text = str(constrained.get("recommendation") or "").strip()
+        risk_note = str(constrained.get("risk_note") or "").strip()
+        rules: list[str] = []
+
+        if kind == RecommendationKind.SCALE:
+            replica_cap = 6 if incident.severity == "critical" else 4
+            rules.append(f"scale_replicas_cap_{replica_cap}")
+            recommendation_text = self._append_sentence(
+                recommendation_text,
+                f"扩容建议采用分批发布，副本上限建议不超过 {replica_cap}。",
+            )
+            risk_note = self._append_sentence(
+                risk_note,
+                "扩容前先校验上游依赖与核心配置，避免误扩容放大成本。",
+            )
+            if "upstream_or_config_issue" in tags and "resource_bottleneck" not in tags:
+                confidence = min(confidence, 0.55)
+                recommendation_text = self._append_sentence(
+                    recommendation_text,
+                    "当前证据更偏向上游或配置问题，不建议将扩容作为首选动作。",
+                )
+                rules.append("scale_requires_resource_signal")
+
+        elif kind == RecommendationKind.RATE_LIMIT:
+            rules.append("rate_limit_timeboxed_window")
+            recommendation_text = self._append_sentence(
+                recommendation_text,
+                "限流策略建议设置短周期观察窗口，并预置自动回退阈值。",
+            )
+            risk_note = self._append_sentence(
+                risk_note,
+                "限流前需确认核心路径白名单，避免误伤登录、支付等关键流量。",
+            )
+            if "traffic_spike" not in tags:
+                confidence = min(confidence, 0.6)
+                recommendation_text = self._append_sentence(
+                    recommendation_text,
+                    "当前未观察到明显流量突增，限流仅建议作为保守兜底措施。",
+                )
+                rules.append("rate_limit_requires_traffic_spike")
+
+        elif kind == RecommendationKind.RESOURCE_TUNING:
+            rules.append("resource_tuning_step_ratio_le_30pct")
+            recommendation_text = self._append_sentence(
+                recommendation_text,
+                "资源调整建议采用小步快跑，单次 requests/limits 调整幅度建议不超过 30%。",
+            )
+            risk_note = self._append_sentence(
+                risk_note,
+                "资源参数变更后需持续观察错误率、延迟和重启次数是否同步改善。",
+            )
+            if "upstream_or_config_issue" in tags and not tags.intersection({"resource_bottleneck", "memory_pressure"}):
+                confidence = min(confidence, 0.62)
+                recommendation_text = self._append_sentence(
+                    recommendation_text,
+                    "当前证据更接近上游或配置异常，资源调优不应替代根因排查。",
+                )
+                rules.append("resource_tuning_secondary_for_upstream_issue")
+
+        elif kind == RecommendationKind.MANIFEST_DRAFT:
+            rules.append("manifest_requires_manual_review")
+            risk_note = self._append_sentence(
+                risk_note,
+                "YAML 草稿仅用于评审与演练，应用前必须完成人工复核。",
+            )
+
+        constrained["confidence"] = round(max(0.0, min(1.0, confidence)), 2)
+        constrained["recommendation"] = recommendation_text
+        constrained["risk_note"] = risk_note
+        return constrained, rules
+
+    def _append_sentence(self, base_text: str, sentence: str) -> str:
+        base = str(base_text or "").strip()
+        addon = str(sentence or "").strip()
+        if not addon:
+            return base
+        if addon in base:
+            return base
+        if not base:
+            return addon
+        if base.endswith(("。", "！", "？", ".", "!", "?")):
+            return f"{base}{addon}"
+        return f"{base}。{addon}"
+
     def _determine_kinds(self, incident) -> List[RecommendationKind]:
         tags = set(incident.reasoning_tags)
         results = [RecommendationKind.MANIFEST_DRAFT]
@@ -265,11 +540,15 @@ class RecommendationService:
         fallback_count = len([item for item in guardrail_items if item.get("validation_status") == "fallback_template"])
         retried_count = len([item for item in guardrail_items if item.get("validation_status") == "json_retried"])
         schema_error_count = len([item for item in guardrail_items if item.get("error_code") == "AI_OUTPUT_SCHEMA_INVALID"])
+        risk_rule_total = sum(len(item.get("risk_rules") or []) for item in guardrail_items)
+        risk_rule_covered = len([item for item in guardrail_items if item.get("risk_rules")])
         return {
             "total": len(guardrail_items),
             "fallback_count": fallback_count,
             "retried_count": retried_count,
             "schema_error_count": schema_error_count,
+            "risk_rule_total": risk_rule_total,
+            "risk_rule_covered": risk_rule_covered,
             "has_degraded": fallback_count > 0,
             "items": guardrail_items,
         }
