@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react'
-import { Button, Card, Col, Empty, Input, Row, Select, Space, Statistic, Table, Typography } from 'antd'
-import { Pie, Column } from '@ant-design/plots'
-import { trafficApi, type TrafficSummary } from '@/api/client'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Button, Card, Col, Empty, Input, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Column, Line, Pie } from '@ant-design/plots'
+import { trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
 
-const { Title, Paragraph } = Typography
+const { Title, Paragraph, Text } = Typography
 
 const timeRangeOptions = [
   { label: '最近 1 小时', value: '1h' },
@@ -11,7 +11,17 @@ const timeRangeOptions = [
   { label: '最近 24 小时', value: '24h' },
 ]
 
-export const TrafficAnalytics: React.FC = () => {
+const formatSampleTime = (value: string) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const formatLatency = (value: number) => `${Math.round(value * 1000)} ms`
+
+const TrafficAnalytics: React.FC = () => {
   const [timeRange, setTimeRange] = useState('1h')
   const [serviceKey, setServiceKey] = useState('')
   const [loading, setLoading] = useState(true)
@@ -34,13 +44,23 @@ export const TrafficAnalytics: React.FC = () => {
     void loadSummary()
   }, [timeRange])
 
+  // 把请求数和错误数压平成统一序列，图表层可以直接按类型分组绘制。
+  const trendData = useMemo(
+    () =>
+      summary?.trend.flatMap((point) => [
+        { timestamp: point.timestamp, value: point.requests, type: '请求数' },
+        { timestamp: point.timestamp, value: point.errors, type: '错误数' },
+      ]) ?? [],
+    [summary],
+  )
+
   return (
     <div className="ops-page">
       <div className="ops-page__hero">
         <div>
           <Title level={2} style={{ marginBottom: 8 }}>流量分析</Title>
           <Paragraph style={{ marginBottom: 0, color: 'rgba(15, 23, 42, 0.72)' }}>
-            观察请求量、状态码、热点路径和来源分布，快速定位入口异常与流量结构变化。
+            观察请求趋势、热点路径、异常来源 IP 和错误样本，快速判断入口异常集中在哪里、影响有多大。
           </Paragraph>
         </div>
         <Space wrap>
@@ -51,19 +71,38 @@ export const TrafficAnalytics: React.FC = () => {
       </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card loading={loading} className="ops-surface-card"><Statistic title="总请求数" value={summary?.total_requests || 0} /></Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card loading={loading} className="ops-surface-card"><Statistic title="页面浏览量" value={summary?.page_views || 0} /></Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card loading={loading} className="ops-surface-card"><Statistic title="错误率" value={summary?.error_rate || 0} precision={2} suffix="%" /></Card>
+        </Col>
+        <Col xs={24} sm={6}>
+          <Card loading={loading} className="ops-surface-card"><Statistic title="平均延迟" value={(summary?.avg_latency || 0) * 1000} precision={0} suffix="ms" /></Card>
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={14}>
+          <Card title="请求趋势" loading={loading} className="ops-surface-card">
+            {trendData.length ? (
+              <Line
+                data={trendData}
+                xField="timestamp"
+                yField="value"
+                seriesField="type"
+                height={280}
+                color={["#2563eb", "#ef4444"]}
+                point={{ size: 3 }}
+                smooth
+              />
+            ) : <Empty description="暂无趋势数据" />}
+          </Card>
+        </Col>
+        <Col xs={24} lg={10}>
           <Card title="状态码分布" loading={loading} className="ops-surface-card">
             {summary?.status_distribution?.length ? (
               <Pie
@@ -75,38 +114,113 @@ export const TrafficAnalytics: React.FC = () => {
             ) : <Empty description="暂无状态码数据" />}
           </Card>
         </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={12}>
-          <Card title="区域分布" loading={loading} className="ops-surface-card">
-            {summary?.geo_distribution?.length ? (
-              <Column data={summary.geo_distribution} xField="name" yField="value" color="#2563eb" height={280} />
-            ) : <Empty description="暂无地域数据" />}
+          <Card title="热点路径排行" loading={loading} className="ops-surface-card">
+            <Table
+              rowKey="path"
+              pagination={false}
+              dataSource={summary?.hot_paths || []}
+              locale={{ emptyText: <Empty description="暂无热点路径数据" /> }}
+              columns={[
+                {
+                  title: '路径',
+                  dataIndex: 'path',
+                  render: (value: string) => <Text code>{value}</Text>,
+                },
+                { title: '请求数', dataIndex: 'count', width: 96 },
+                { title: '错误数', dataIndex: 'error_count', width: 96 },
+                { title: '错误率', dataIndex: 'error_rate', width: 110, render: (value: number) => `${value}%` },
+                { title: '平均耗时', dataIndex: 'avg_latency', width: 120, render: (value: number) => formatLatency(value) },
+              ]}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="异常来源 IP" loading={loading} className="ops-surface-card">
+            <Table
+              rowKey="ip"
+              pagination={false}
+              dataSource={summary?.hot_ips || []}
+              locale={{ emptyText: <Empty description="暂无异常来源 IP" /> }}
+              columns={[
+                { title: 'IP', dataIndex: 'ip', width: 148 },
+                { title: '请求数', dataIndex: 'count', width: 84 },
+                { title: '错误数', dataIndex: 'error_count', width: 84 },
+                { title: '错误率', dataIndex: 'error_rate', width: 96, render: (value: number) => `${value}%` },
+                { title: '样本路径', dataIndex: 'sample_path', render: (value: string) => <Text code>{value}</Text> },
+                { title: '地域', dataIndex: 'geo_label', width: 140 },
+              ]}
+            />
           </Card>
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={12}>
-          <Card title="热点路径" loading={loading} className="ops-surface-card">
-            <Table
-              rowKey="path"
-              pagination={false}
-              dataSource={summary?.top_paths || []}
-              columns={[
-                { title: '路径', dataIndex: 'path' },
-                { title: '请求数', dataIndex: 'count', width: 120 },
-              ]}
-            />
+          <Card title="热门路径分布" loading={loading} className="ops-surface-card">
+            {summary?.top_paths?.length ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {summary.top_paths.map((item) => (
+                  <Tag key={item.path} color="blue" style={{ padding: '8px 12px', borderRadius: 999 }}>
+                    {item.path} · {item.count}
+                  </Tag>
+                ))}
+              </div>
+            ) : <Empty description="暂无路径分布" />}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="热点来源 IP" loading={loading} className="ops-surface-card">
+          <Card title="终端分布" loading={loading} className="ops-surface-card">
+            {summary?.ua_distribution?.length ? (
+              <Column data={summary.ua_distribution} xField="name" yField="count" color="#0f766e" height={240} />
+            ) : <Empty description="暂无终端分布" />}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24} lg={24}>
+          <Card title="错误请求样本" loading={loading} className="ops-surface-card">
             <Table
-              rowKey="ip"
+              rowKey={(record: TrafficErrorSample, index?: number) => `${record.timestamp}-${record.path}-${index || 0}`}
               pagination={false}
-              dataSource={summary?.top_ips || []}
+              dataSource={summary?.error_samples || []}
+              locale={{ emptyText: <Empty description="当前时间窗没有高风险请求样本" /> }}
               columns={[
-                { title: 'IP', dataIndex: 'ip' },
-                { title: '请求数', dataIndex: 'count', width: 120 },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 90,
+                  render: (value: number) => <Tag color={value >= 500 ? 'red' : value >= 400 ? 'orange' : 'blue'}>{value}</Tag>,
+                },
+                { title: '方法', dataIndex: 'method', width: 90 },
+                {
+                  title: '路径',
+                  dataIndex: 'path',
+                  render: (value: string) => <Text code>{value}</Text>,
+                },
+                {
+                  title: '耗时',
+                  dataIndex: 'latency_ms',
+                  width: 110,
+                  render: (value: number) => `${value} ms`,
+                },
+                { title: '来源 IP', dataIndex: 'client_ip', width: 150 },
+                { title: '地域', dataIndex: 'geo_label', width: 180 },
+                {
+                  title: '终端',
+                  key: 'ua',
+                  render: (_, record: TrafficErrorSample) => `${record.browser} / ${record.os} / ${record.device}`,
+                },
+                {
+                  title: '时间',
+                  dataIndex: 'timestamp',
+                  width: 180,
+                  render: (value: string) => formatSampleTime(value),
+                },
               ]}
             />
           </Card>

@@ -98,17 +98,33 @@ export interface DashboardOverview {
   data_sources: Record<string, unknown>
 }
 
+export interface TrafficErrorSample {
+  timestamp: string
+  method: string
+  path: string
+  status: number
+  latency_ms: number
+  client_ip: string
+  geo_label: string
+  browser: string
+  os: string
+  device: string
+}
+
 export interface TrafficSummary {
   total_requests: number
   page_views: number
   error_rate: number
   avg_latency: number
   top_paths: Array<{ path: string; count: number }>
+  hot_paths: Array<{ path: string; count: number; error_count: number; error_rate: number; avg_latency: number }>
   top_ips: Array<{ ip: string; count: number }>
+  hot_ips: Array<{ ip: string; count: number; error_count: number; error_rate: number; avg_latency: number; sample_path: string; geo_label: string }>
   status_distribution: Array<{ status: string; count: number }>
-  geo_distribution: Array<{ name: string; value: number }>
-  ua_distribution: Array<{ name: string; value: number }>
-  trend: Array<{ timestamp: string; requests: number }>
+  geo_distribution: Array<{ name: string; count: number }>
+  ua_distribution: Array<{ name: string; count: number }>
+  trend: Array<{ timestamp: string; requests: number; errors: number }>
+  error_samples: TrafficErrorSample[]
   records_sample?: Array<Record<string, unknown>>
 }
 
