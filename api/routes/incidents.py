@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -44,19 +45,54 @@ async def list_incidents(
     return {"items": [incident.model_dump(mode="json") for incident in incidents], "total": len(incidents)}
 
 
+# 把原始访问记录压成适合异常详情阅读的样本结构，避免前端直接理解日志富化字段。
+def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
+    geo = record.get("geo") or {}
+    ua = record.get("ua") or {}
+    return {
+        "timestamp": record.get("timestamp"),
+        "method": record.get("method") or "GET",
+        "path": record.get("path") or "/",
+        "status": int(record.get("status") or 0),
+        "latency_ms": round(float(record.get("request_time") or 0.0) * 1000, 2),
+        "client_ip": record.get("remote_addr") or "-",
+        "geo_label": "/".join(
+            [str(item) for item in [geo.get("country"), geo.get("region"), geo.get("city")] if item],
+        ) or "未知",
+        "user_agent": record.get("user_agent") or "Unknown",
+        "browser": ua.get("browser") or "Unknown",
+        "os": ua.get("os") or "Unknown",
+        "device": ua.get("device") or "Unknown",
+        "service_key": record.get("service_key") or "unknown/root",
+    }
+
+
 @router.get("/{incident_id}")
 async def get_incident_detail(
     incident_id: str,
     incident_service=Depends(get_incident_service),
     recommendation_service=Depends(get_recommendation_service),
+    traffic_engine=Depends(get_traffic_engine),
 ):
     incident = incident_service.get_incident(incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="异常不存在")
     recommendations = recommendation_service.list_by_incident(incident_id)
+    log_samples = []
+    log_paths = resolve_access_logs()
+    if log_paths:
+        samples = traffic_engine.sample_records(
+            log_paths,
+            service_key=incident.service_key,
+            start_time=incident.time_window_start,
+            end_time=incident.time_window_end,
+            limit=8,
+        )
+        log_samples = [_format_log_sample(item) for item in samples]
     return {
         "incident": incident.model_dump(mode="json"),
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
+        "log_samples": log_samples,
     }
 
 

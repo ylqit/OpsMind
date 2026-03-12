@@ -132,9 +132,25 @@ export interface TaskDetailResponse {
   artifacts: TaskArtifact[]
 }
 
+export interface IncidentLogSample {
+  timestamp: string
+  method: string
+  path: string
+  status: number
+  latency_ms: number
+  client_ip: string
+  geo_label: string
+  user_agent: string
+  browser: string
+  os: string
+  device: string
+  service_key: string
+}
+
 export interface IncidentDetailResponse {
   incident: IncidentRecord
   recommendations: RecommendationRecord[]
+  log_samples: IncidentLogSample[]
 }
 
 export interface ArtifactContentResponse {

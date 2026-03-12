@@ -5,6 +5,7 @@ import {
   incidentsApi,
   recommendationsApi,
   type IncidentDetailResponse,
+  type IncidentLogSample,
   type IncidentRecord,
   type RecommendationRecord,
   type TaskArtifact,
@@ -49,6 +50,14 @@ const formatEvidenceValue = (item: EvidenceItem) => {
 
 const pickRecommendationArtifact = (recommendation: RecommendationRecord): TaskArtifact | null => {
   return recommendation.artifact_refs.find((artifact) => artifact.kind === 'diff') || recommendation.artifact_refs.find((artifact) => artifact.kind === 'manifest') || null
+}
+
+const formatSampleTime = (value: string) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+  return parsed.toLocaleString('zh-CN', { hour12: false })
 }
 
 export const IncidentCenter: React.FC = () => {
@@ -259,6 +268,31 @@ export const IncidentCenter: React.FC = () => {
                       </Card>
                     ))}
                   </Space>
+                </Card>
+
+                <Card type="inner" title="日志证据样本" style={{ marginBottom: 16 }}>
+                  <List
+                    dataSource={selectedIncident.log_samples || []}
+                    locale={{ emptyText: '当前时间窗内没有可展示的访问样本' }}
+                    renderItem={(item: IncidentLogSample) => (
+                      <List.Item>
+                        <div style={{ width: '100%' }}>
+                          <Space style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+                            <Tag color={item.status >= 500 ? 'red' : item.status >= 400 ? 'orange' : 'blue'}>{item.status}</Tag>
+                            <Tag>{item.method}</Tag>
+                            <Text code>{item.path}</Text>
+                            <Tag color="geekblue">{item.latency_ms} ms</Tag>
+                          </Space>
+                          <Paragraph style={{ marginBottom: 8 }}>
+                            {formatSampleTime(item.timestamp)} · {item.client_ip} · {item.geo_label}
+                          </Paragraph>
+                          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                            {item.browser} / {item.os} / {item.device} · {item.user_agent}
+                          </Paragraph>
+                        </div>
+                      </List.Item>
+                    )}
+                  />
                 </Card>
 
                 <Card type="inner" title="推荐动作" style={{ marginBottom: 16 }}>
