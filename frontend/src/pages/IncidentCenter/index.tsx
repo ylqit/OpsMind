@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Timeline, Typography } from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography } from 'antd'
 import { incidentsApi, type IncidentDetailResponse, type IncidentRecord } from '@/api/client'
 
 const { Paragraph, Text, Title } = Typography
@@ -9,6 +9,36 @@ interface IncidentListResponse {
   total: number
 }
 
+interface EvidenceItem {
+  layer?: string
+  type?: string
+  title?: string
+  summary?: string
+  metric?: string
+  value?: unknown
+  unit?: string
+  reason?: string
+  name?: string
+  [key: string]: unknown
+}
+
+const layerMeta: Record<string, { title: string; color: string }> = {
+  traffic: { title: '流量证据', color: 'blue' },
+  resource: { title: '资源证据', color: 'orange' },
+  diagnosis: { title: '关联判断', color: 'purple' },
+  other: { title: '其他证据', color: 'default' },
+}
+
+const formatEvidenceValue = (item: EvidenceItem) => {
+  if (item.value === undefined || item.value === null || item.value === '') {
+    return '-'
+  }
+  if (typeof item.value === 'number') {
+    return `${item.value}${item.unit ? ` ${item.unit}` : ''}`
+  }
+  return `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`
+}
+
 export const IncidentCenter: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
@@ -16,6 +46,23 @@ export const IncidentCenter: React.FC = () => {
   const [serviceKey, setServiceKey] = useState('unknown/root')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+
+  const groupedEvidence = useMemo(() => {
+    const groups: Record<string, EvidenceItem[]> = {}
+    const items = (selectedIncident?.incident.evidence_refs || []) as EvidenceItem[]
+    for (const item of items) {
+      const layer = typeof item.layer === 'string'
+        ? item.layer
+        : item.type === 'traffic_summary'
+          ? 'traffic'
+          : item.type === 'resource_summary' || item.type === 'hotspot'
+            ? 'resource'
+            : 'other'
+      groups[layer] = groups[layer] || []
+      groups[layer].push(item)
+    }
+    return groups
+  }, [selectedIncident])
 
   const loadIncidents = async () => {
     setLoading(true)
@@ -98,17 +145,44 @@ export const IncidentCenter: React.FC = () => {
               <Empty description="请选择一个异常或先发起分析" />
             ) : (
               <div>
-                <Space style={{ marginBottom: 12 }}>
+                <Space style={{ marginBottom: 12, flexWrap: 'wrap' }}>
                   <Tag color={selectedIncident.incident.severity === 'critical' ? 'red' : 'orange'}>{selectedIncident.incident.severity}</Tag>
                   <Text strong>{selectedIncident.incident.title}</Text>
+                  <Tag color="geekblue">置信度 {Math.round(selectedIncident.incident.confidence * 100)}%</Tag>
                 </Space>
                 <Paragraph>{selectedIncident.incident.summary}</Paragraph>
                 <Paragraph type="secondary">服务键：{selectedIncident.incident.service_key}</Paragraph>
-                <Timeline
-                  items={selectedIncident.incident.evidence_refs.map((item, index) => ({
-                    children: `${String(item.metric || item.type || `evidence-${index}`)}: ${String(item.value || item.reason || '-')}`,
-                  }))}
-                />
+                <Space wrap style={{ marginBottom: 16 }}>
+                  {selectedIncident.incident.reasoning_tags.map((tag) => (
+                    <Tag key={tag}>{tag}</Tag>
+                  ))}
+                </Space>
+
+                <Card type="inner" title="证据链分层" style={{ marginBottom: 16 }}>
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    {Object.entries(groupedEvidence).map(([layer, items]) => (
+                      <Card key={layer} size="small" title={layerMeta[layer]?.title || layerMeta.other.title} extra={<Tag color={layerMeta[layer]?.color || layerMeta.other.color}>{items.length} 条</Tag>}>
+                        <List
+                          size="small"
+                          dataSource={items}
+                          renderItem={(item) => (
+                            <List.Item>
+                              <div style={{ width: '100%' }}>
+                                <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                  <Text strong>{String(item.title || item.name || item.metric || item.type || '证据项')}</Text>
+                                  <Tag>{String(item.metric || item.type || 'metric')}</Tag>
+                                  <Tag color="default">{formatEvidenceValue(item)}</Tag>
+                                </Space>
+                                <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || item.reason || '-')}</Paragraph>
+                              </div>
+                            </List.Item>
+                          )}
+                        />
+                      </Card>
+                    ))}
+                  </Space>
+                </Card>
+
                 <Card type="inner" title="推荐动作" style={{ marginBottom: 16 }}>
                   <List
                     dataSource={selectedIncident.incident.recommended_actions}

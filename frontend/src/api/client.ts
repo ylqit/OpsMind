@@ -58,6 +58,12 @@ export interface RecommendationRecord {
   updated_at: string
 }
 
+export interface TaskApproval {
+  approved_by: string
+  approval_note: string
+  approved_at: string
+}
+
 export interface TaskRecord {
   task_id: string
   task_type: string
@@ -73,6 +79,7 @@ export interface TaskRecord {
     error_message: string
     failed_stage?: string | null
   } | null
+  approval?: TaskApproval | null
   created_at: string
   updated_at: string
   completed_at?: string | null
@@ -244,7 +251,7 @@ export const recommendationsApi = {
 export const tasksApi = {
   list: (params?: { task_type?: string; status?: string }) => apiClient.get('/tasks', { params }),
   get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
-  approve: (taskId: string) => apiClient.post(`/tasks/${taskId}/approve`),
+  approve: (taskId: string, payload?: { approved_by?: string; approval_note?: string }) => apiClient.post(`/tasks/${taskId}/approve`, payload),
   cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
   getArtifact: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}`),
   getArtifactContent: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}/content`),

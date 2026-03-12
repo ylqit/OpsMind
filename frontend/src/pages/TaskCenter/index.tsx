@@ -1,40 +1,88 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Col, Descriptions, Empty, List, Row, Space, Table, Tag, Typography } from 'antd'
-import { tasksApi, type TaskDetailResponse, type TaskRecord } from '@/api/client'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Empty,
+  Input,
+  List,
+  Modal,
+  Row,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from 'antd'
+import { useNavigate } from 'react-router-dom'
+import { tasksApi, type ArtifactContentResponse, type TaskArtifact, type TaskDetailResponse, type TaskRecord } from '@/api/client'
 import { useTaskEventStream } from '@/hooks/useTaskEventStream'
 
 const { Paragraph, Text, Title } = Typography
+const { TextArea } = Input
 
 interface TaskListResponse {
   items: TaskRecord[]
   total: number
 }
 
+interface PreviewState {
+  artifact: TaskArtifact
+  content: string
+  filename: string
+}
+
+const artifactLabelMap: Record<string, string> = {
+  manifest: 'YAML 草稿',
+  diff: '变更差异',
+  report: '报告文件',
+  json: 'JSON 结果',
+  text: '文本内容',
+}
+
 export const TaskCenter: React.FC = () => {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskDetailResponse | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewArtifactId, setPreviewArtifactId] = useState('')
+  const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [approveModalOpen, setApproveModalOpen] = useState(false)
+  const [approveSubmitting, setApproveSubmitting] = useState(false)
+  const [approvedBy, setApprovedBy] = useState('operator')
+  const [approvalNote, setApprovalNote] = useState('')
+
+  const selectedTaskId = selectedTask?.task.task_id
+  const recommendationArtifact = useMemo(
+    () => selectedTask?.artifacts.find((artifact) => artifact.kind === 'diff') || selectedTask?.artifacts.find((artifact) => artifact.kind === 'manifest') || null,
+    [selectedTask],
+  )
+
+  const loadTaskDetail = useCallback(async (taskId: string) => {
+    const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
+    setSelectedTask(detail)
+    return detail
+  }, [])
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
     try {
       const response = (await tasksApi.list()) as TaskListResponse
       setTasks(response.items)
-      if (response.items[0]) {
-        const detail = (await tasksApi.get(response.items[0].task_id)) as TaskDetailResponse
-        setSelectedTask(detail)
+      const preferredTaskId = selectedTaskId && response.items.some((item) => item.task_id === selectedTaskId)
+        ? selectedTaskId
+        : response.items[0]?.task_id
+      if (preferredTaskId) {
+        await loadTaskDetail(preferredTaskId)
       } else {
         setSelectedTask(null)
       }
     } finally {
       setLoading(false)
     }
-  }, [])
-
-  const loadTaskDetail = useCallback(async (taskId: string) => {
-    const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
-    setSelectedTask(detail)
-  }, [])
+  }, [loadTaskDetail, selectedTaskId])
 
   useTaskEventStream({
     enabled: true,
@@ -53,9 +101,20 @@ export const TaskCenter: React.FC = () => {
     if (!selectedTask) {
       return
     }
-    await tasksApi.approve(selectedTask.task.task_id)
-    await loadTaskDetail(selectedTask.task.task_id)
-    await loadTasks()
+    setApproveSubmitting(true)
+    try {
+      await tasksApi.approve(selectedTask.task.task_id, {
+        approved_by: approvedBy,
+        approval_note: approvalNote,
+      })
+      message.success('任务已确认')
+      setApproveModalOpen(false)
+      setApprovalNote('')
+      await loadTaskDetail(selectedTask.task.task_id)
+      await loadTasks()
+    } finally {
+      setApproveSubmitting(false)
+    }
   }
 
   const cancelSelectedTask = async () => {
@@ -63,8 +122,53 @@ export const TaskCenter: React.FC = () => {
       return
     }
     await tasksApi.cancel(selectedTask.task.task_id)
+    message.success('任务已取消')
     await loadTaskDetail(selectedTask.task.task_id)
     await loadTasks()
+  }
+
+  const previewArtifact = async (artifact: TaskArtifact) => {
+    setPreviewLoading(true)
+    setPreviewArtifactId(artifact.artifact_id)
+    try {
+      const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
+      setPreview({ artifact, content: response.content, filename: response.filename })
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '读取产物失败')
+    } finally {
+      setPreviewLoading(false)
+      setPreviewArtifactId('')
+    }
+  }
+
+  const downloadArtifact = (artifact: TaskArtifact) => {
+    const url = tasksApi.getArtifactDownloadUrl(artifact.task_id, artifact.artifact_id)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = artifact.path.split(/[\\/]/).pop() || `${artifact.artifact_id}.txt`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }
+
+  const openRecommendationDraft = () => {
+    if (!selectedTask) {
+      return
+    }
+    const payloadIncidentValue = selectedTask.task.payload['incident_id']
+    const resultIncidentValue = selectedTask.task.result_ref?.['incident_id']
+    const payloadIncidentId = typeof payloadIncidentValue === 'string' ? payloadIncidentValue : ''
+    const resultIncidentId = typeof resultIncidentValue === 'string' ? resultIncidentValue : ''
+    const incidentId = payloadIncidentId || resultIncidentId
+    const params = new URLSearchParams()
+    if (incidentId) {
+      params.set('incidentId', incidentId)
+    }
+    if (recommendationArtifact) {
+      params.set('taskId', recommendationArtifact.task_id)
+      params.set('artifactId', recommendationArtifact.artifact_id)
+    }
+    navigate(`/recommendations${params.toString() ? `?${params.toString()}` : ''}`)
   }
 
   return (
@@ -73,7 +177,7 @@ export const TaskCenter: React.FC = () => {
         <div>
           <Title level={2} style={{ marginBottom: 8 }}>任务中心</Title>
           <Paragraph style={{ marginBottom: 0, color: 'rgba(15, 23, 42, 0.72)' }}>
-            跟踪分析、报表和建议任务的状态流、证据片段和产物输出，避免执行过程不可见。
+            跟踪分析、报表和建议任务的状态流、证据片段和产物输出，并支持直接跳转到建议草稿视图。
           </Paragraph>
         </div>
       </div>
@@ -91,7 +195,11 @@ export const TaskCenter: React.FC = () => {
               })}
               columns={[
                 { title: '任务类型', dataIndex: 'task_type' },
-                { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'COMPLETED' ? 'green' : value === 'FAILED' ? 'red' : value === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{value}</Tag> },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  render: (value: string) => <Tag color={value === 'COMPLETED' ? 'green' : value === 'FAILED' ? 'red' : value === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{value}</Tag>,
+                },
                 { title: '进度', dataIndex: 'progress', width: 100, render: (value: number) => `${value}%` },
               ]}
             />
@@ -104,7 +212,10 @@ export const TaskCenter: React.FC = () => {
             className="ops-surface-card"
             extra={
               <Space>
-                <Button onClick={() => void approveSelectedTask()} disabled={selectedTask?.task.status !== 'WAITING_CONFIRM'}>确认</Button>
+                <Button onClick={() => setApproveModalOpen(true)} disabled={selectedTask?.task.status !== 'WAITING_CONFIRM'}>确认</Button>
+                <Button onClick={openRecommendationDraft} disabled={!selectedTask || selectedTask.task.task_type !== 'recommendation_generation' || !recommendationArtifact}>
+                  查看建议草稿
+                </Button>
                 <Button danger onClick={() => void cancelSelectedTask()} disabled={!selectedTask}>取消</Button>
               </Space>
             }
@@ -118,7 +229,14 @@ export const TaskCenter: React.FC = () => {
                   <Descriptions.Item label="状态">{selectedTask.task.status}</Descriptions.Item>
                   <Descriptions.Item label="当前阶段">{selectedTask.task.current_stage}</Descriptions.Item>
                   <Descriptions.Item label="进度消息">{selectedTask.task.progress_message || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="确认人">{selectedTask.task.approval?.approved_by || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="确认时间">{selectedTask.task.approval?.approved_at || '-'}</Descriptions.Item>
                 </Descriptions>
+                {selectedTask.task.approval?.approval_note ? (
+                  <Card type="inner" title="确认备注" style={{ marginBottom: 16 }}>
+                    <Paragraph style={{ marginBottom: 0 }}>{selectedTask.task.approval.approval_note}</Paragraph>
+                  </Card>
+                ) : null}
                 <Card type="inner" title="Trace 预览" style={{ marginBottom: 16 }}>
                   <List
                     dataSource={selectedTask.trace_preview}
@@ -138,10 +256,22 @@ export const TaskCenter: React.FC = () => {
                     dataSource={selectedTask.artifacts}
                     locale={{ emptyText: '暂无任务产物' }}
                     renderItem={(artifact) => (
-                      <List.Item>
+                      <List.Item
+                        actions={[
+                          <Button key="preview" size="small" onClick={() => void previewArtifact(artifact)} loading={previewLoading && previewArtifactId === artifact.artifact_id}>
+                            预览
+                          </Button>,
+                          <Button key="download" size="small" type="primary" ghost onClick={() => downloadArtifact(artifact)}>
+                            下载
+                          </Button>,
+                        ]}
+                      >
                         <div>
-                          <Text code>{artifact.path}</Text>
-                          <Paragraph style={{ marginBottom: 0 }}>{artifact.preview}</Paragraph>
+                          <Space style={{ marginBottom: 6 }}>
+                            <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
+                            <Text code>{artifact.path.split(/[\\/]/).pop() || artifact.artifact_id}</Text>
+                          </Space>
+                          <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
                         </div>
                       </List.Item>
                     )}
@@ -152,6 +282,62 @@ export const TaskCenter: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        title="确认建议稿"
+        open={approveModalOpen}
+        onCancel={() => setApproveModalOpen(false)}
+        onOk={() => void approveSelectedTask()}
+        confirmLoading={approveSubmitting}
+        okText="确认任务"
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={16}>
+          <div>
+            <Text strong>确认人</Text>
+            <Input value={approvedBy} onChange={(event) => setApprovedBy(event.target.value)} placeholder="请输入确认人" />
+          </div>
+          <div>
+            <Text strong>确认备注</Text>
+            <TextArea
+              value={approvalNote}
+              onChange={(event) => setApprovalNote(event.target.value)}
+              placeholder="可填写审批意见、变更说明或风险提示"
+              autoSize={{ minRows: 3, maxRows: 6 }}
+            />
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={preview?.filename || '产物预览'}
+        open={Boolean(preview)}
+        onCancel={() => setPreview(null)}
+        footer={preview ? [
+          <Button key="download" type="primary" onClick={() => downloadArtifact(preview.artifact)}>
+            下载文件
+          </Button>,
+          <Button key="close" onClick={() => setPreview(null)}>
+            关闭
+          </Button>,
+        ] : null}
+        width={960}
+      >
+        <pre
+          style={{
+            margin: 0,
+            maxHeight: '65vh',
+            overflow: 'auto',
+            padding: 16,
+            borderRadius: 12,
+            background: '#0f172a',
+            color: '#e2e8f0',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {preview?.content || ''}
+        </pre>
+      </Modal>
     </div>
   )
 }

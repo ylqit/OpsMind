@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, Col, Empty, List, Modal, Row, Space, Tag, Typography, message } from 'antd'
+import { useSearchParams } from 'react-router-dom'
 import {
   incidentsApi,
   recommendationsApi,
@@ -26,12 +27,30 @@ interface PreviewState {
 
 const artifactLabelMap: Record<string, string> = {
   manifest: 'YAML 草稿',
+  diff: '变更差异',
   report: '报告文件',
   json: 'JSON 结果',
   text: '文本内容',
 }
 
+const getDiffLineClassName = (line: string) => {
+  if (line.startsWith('+++') || line.startsWith('---')) {
+    return 'ops-artifact-line ops-artifact-line--file'
+  }
+  if (line.startsWith('@@')) {
+    return 'ops-artifact-line ops-artifact-line--meta'
+  }
+  if (line.startsWith('+')) {
+    return 'ops-artifact-line ops-artifact-line--added'
+  }
+  if (line.startsWith('-')) {
+    return 'ops-artifact-line ops-artifact-line--removed'
+  }
+  return 'ops-artifact-line'
+}
+
 export const RecommendationCenter: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -39,19 +58,105 @@ export const RecommendationCenter: React.FC = () => {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [selected, setSelected] = useState<IncidentDetailResponse | null>(null)
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  const initialQueryHandledRef = useRef(false)
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
+  const isDiffPreview = preview?.artifact.kind === 'diff'
+  const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
+
+  const updateRouteState = (incidentId?: string, artifact?: TaskArtifact | null) => {
+    const nextParams = new URLSearchParams()
+    if (incidentId) {
+      nextParams.set('incidentId', incidentId)
+    }
+    if (artifact) {
+      nextParams.set('taskId', artifact.task_id)
+      nextParams.set('artifactId', artifact.artifact_id)
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
+
+  const previewArtifact = async (artifact: TaskArtifact, incidentId?: string) => {
+    setPreviewLoading(true)
+    setPreviewArtifactId(artifact.artifact_id)
+    try {
+      const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
+      setPreview({ artifact, content: response.content, filename: response.filename })
+      updateRouteState(incidentId || selected?.incident.incident_id, artifact)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '读取草稿失败')
+    } finally {
+      setPreviewLoading(false)
+      setPreviewArtifactId('')
+    }
+  }
+
+  const downloadArtifact = (artifact: TaskArtifact) => {
+    const url = tasksApi.getArtifactDownloadUrl(artifact.task_id, artifact.artifact_id)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = artifact.path.split(/[\\/]/).pop() || `${artifact.artifact_id}.txt`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }
+
+  const copyPreviewContent = async () => {
+    if (!preview) {
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(preview.content)
+      message.success(preview.artifact.kind === 'manifest' ? 'YAML 已复制' : '内容已复制')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '复制失败')
+    }
+  }
+
+  const copyArtifactContent = async (artifact: TaskArtifact) => {
+    try {
+      const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
+      await navigator.clipboard.writeText(response.content)
+      message.success(artifact.kind === 'manifest' ? 'YAML 已复制' : '内容已复制')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '复制失败')
+    }
+  }
+
+  const loadIncidentDetail = async (incidentId: string) => {
+    const detail = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
+    setSelected(detail)
+    return detail
+  }
+
+  const tryOpenArtifactFromQuery = async (detail: IncidentDetailResponse) => {
+    const artifactId = searchParams.get('artifactId')
+    const taskId = searchParams.get('taskId')
+    if (!artifactId || !taskId) {
+      return
+    }
+    const artifact = detail.recommendations
+      .flatMap((item) => item.artifact_refs)
+      .find((item) => item.artifact_id === artifactId && item.task_id === taskId)
+    if (artifact) {
+      await previewArtifact(artifact, detail.incident.incident_id)
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
     try {
       const listResponse = (await incidentsApi.list()) as IncidentListResponse
       setIncidents(listResponse.items)
-      if (listResponse.items[0]) {
-        const detail = (await incidentsApi.get(listResponse.items[0].incident_id)) as IncidentDetailResponse
-        setSelected(detail)
-      } else {
+      if (!listResponse.items.length) {
         setSelected(null)
+        return
+      }
+      const targetIncidentId = searchParams.get('incidentId') || listResponse.items[0].incident_id
+      const detail = await loadIncidentDetail(targetIncidentId)
+      if (!initialQueryHandledRef.current) {
+        initialQueryHandledRef.current = true
+        await tryOpenArtifactFromQuery(detail)
       }
     } finally {
       setLoading(false)
@@ -59,8 +164,8 @@ export const RecommendationCenter: React.FC = () => {
   }
 
   const selectIncident = async (incident: IncidentRecord) => {
-    const detail = (await incidentsApi.get(incident.incident_id)) as IncidentDetailResponse
-    setSelected(detail)
+    const detail = await loadIncidentDetail(incident.incident_id)
+    updateRouteState(detail.incident.incident_id, null)
   }
 
   const refreshIncidentWithRetry = async (incident: IncidentRecord) => {
@@ -88,39 +193,20 @@ export const RecommendationCenter: React.FC = () => {
     }
   }
 
-  const previewArtifact = async (artifact: TaskArtifact) => {
-    setPreviewLoading(true)
-    setPreviewArtifactId(artifact.artifact_id)
-    try {
-      const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
-      setPreview({ artifact, content: response.content, filename: response.filename })
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '读取草稿失败')
-    } finally {
-      setPreviewLoading(false)
-      setPreviewArtifactId('')
-    }
-  }
-
-  const downloadArtifact = (artifact: TaskArtifact) => {
-    const url = tasksApi.getArtifactDownloadUrl(artifact.task_id, artifact.artifact_id)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = artifact.path.split(/[\\/]/).pop() || `${artifact.artifact_id}.txt`
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-  }
-
   useEffect(() => {
     void loadData()
   }, [])
 
   const renderArtifactActions = (artifact: TaskArtifact) => (
     <Space>
-      <Button size="small" onClick={() => void previewArtifact(artifact)} loading={previewLoading && previewArtifactId === artifact.artifact_id}>
+      <Button size="small" onClick={() => void previewArtifact(artifact, selected?.incident.incident_id)} loading={previewLoading && previewArtifactId === artifact.artifact_id}>
         预览
       </Button>
+      {artifact.kind === 'manifest' ? (
+        <Button size="small" onClick={() => void copyArtifactContent(artifact)}>
+          复制 YAML
+        </Button>
+      ) : null}
       <Button size="small" type="primary" ghost onClick={() => downloadArtifact(artifact)}>
         下载
       </Button>
@@ -133,7 +219,7 @@ export const RecommendationCenter: React.FC = () => {
         <div>
           <Title level={2} style={{ marginBottom: 8 }}>建议中心</Title>
           <Paragraph style={{ marginBottom: 0, color: 'rgba(15, 23, 42, 0.72)' }}>
-            面向已归档的异常生成建议条目和草稿文件，支持直接预览和下载 YAML 草稿。
+            面向已归档的异常生成建议条目和草稿文件，支持自动打开 YAML 草稿和变更差异预览。
           </Paragraph>
         </div>
         <Space>
@@ -187,7 +273,7 @@ export const RecommendationCenter: React.FC = () => {
                           <List.Item actions={[renderArtifactActions(artifact)]}>
                             <div style={{ width: '100%' }}>
                               <Space style={{ marginBottom: 6 }}>
-                                <Tag color="geekblue">{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
+                                <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
                                 <Text code>{artifact.path.split(/[\\/]/).pop() || artifact.artifact_id}</Text>
                               </Space>
                               <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
@@ -207,32 +293,38 @@ export const RecommendationCenter: React.FC = () => {
       <Modal
         title={preview?.filename || '草稿预览'}
         open={Boolean(preview)}
-        onCancel={() => setPreview(null)}
+        onCancel={() => {
+          setPreview(null)
+          updateRouteState(selected?.incident.incident_id, null)
+        }}
         footer={preview ? [
+          <Button key="copy" onClick={() => void copyPreviewContent()}>
+            {copyLabel}
+          </Button>,
           <Button key="download" type="primary" onClick={() => downloadArtifact(preview.artifact)}>
             下载文件
           </Button>,
-          <Button key="close" onClick={() => setPreview(null)}>
+          <Button key="close" onClick={() => {
+            setPreview(null)
+            updateRouteState(selected?.incident.incident_id, null)
+          }}>
             关闭
           </Button>,
         ] : null}
         width={960}
       >
-        <pre
-          style={{
-            margin: 0,
-            maxHeight: '65vh',
-            overflow: 'auto',
-            padding: 16,
-            borderRadius: 12,
-            background: '#0f172a',
-            color: '#e2e8f0',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
-          {preview?.content || ''}
-        </pre>
+        {isDiffPreview ? (
+          <div className="ops-artifact-viewer ops-artifact-viewer--diff">
+            {preview?.content.split('\n').map((line, index) => (
+              <div key={`${index}-${line}`} className={getDiffLineClassName(line)}>
+                <span className="ops-artifact-line__number">{index + 1}</span>
+                <span className="ops-artifact-line__content">{line || ' '}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <pre className="ops-artifact-viewer">{preview?.content || ''}</pre>
+        )}
       </Modal>
     </div>
   )

@@ -99,6 +99,65 @@ body {
   border-bottom: 1px solid rgba(226, 232, 240, 0.9);
 }
 
+.ops-artifact-viewer {
+  margin: 0;
+  max-height: 65vh;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Consolas', 'SFMono-Regular', 'Microsoft YaHei UI', monospace;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.ops-artifact-viewer--diff {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ops-artifact-line {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  border-radius: 8px;
+}
+
+.ops-artifact-line__number {
+  padding: 0 12px;
+  color: rgba(148, 163, 184, 0.85);
+  user-select: none;
+  text-align: right;
+}
+
+.ops-artifact-line__content {
+  padding: 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.ops-artifact-line--added {
+  background: rgba(34, 197, 94, 0.16);
+  color: #dcfce7;
+}
+
+.ops-artifact-line--removed {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fee2e2;
+}
+
+.ops-artifact-line--meta {
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+}
+
+.ops-artifact-line--file {
+  background: rgba(168, 85, 247, 0.14);
+  color: #e9d5ff;
+}
+
 @media (max-width: 768px) {
   .ops-page__hero {
     flex-direction: column;
@@ -117,5 +176,9 @@ body {
   .ops-brand-block {
     margin: 12px;
     padding: 12px;
+  }
+
+  .ops-artifact-line {
+    grid-template-columns: 44px minmax(0, 1fr);
   }
 }
