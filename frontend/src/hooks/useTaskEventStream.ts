@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-interface TaskEventMessage {
+export interface TaskEventMessage {
   type: string
   task_id?: string
   task_type?: string
@@ -22,7 +22,12 @@ export const useTaskEventStream = (options: UseTaskEventStreamOptions = {}) => {
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
   const heartbeatTimerRef = useRef<number | null>(null)
+  const onEventRef = useRef<typeof onEvent>(onEvent)
   const [connected, setConnected] = useState(false)
+
+  useEffect(() => {
+    onEventRef.current = onEvent
+  }, [onEvent])
 
   useEffect(() => {
     if (!enabled) {
@@ -47,7 +52,7 @@ export const useTaskEventStream = (options: UseTaskEventStreamOptions = {}) => {
         try {
           const payload = JSON.parse(event.data) as TaskEventMessage
           if (payload.type !== 'pong') {
-            onEvent?.(payload)
+            onEventRef.current?.(payload)
           }
         } catch (error) {
           console.error('解析任务事件失败', error)
@@ -82,7 +87,7 @@ export const useTaskEventStream = (options: UseTaskEventStreamOptions = {}) => {
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [enabled, onEvent])
+  }, [enabled])
 
   return { connected }
 }

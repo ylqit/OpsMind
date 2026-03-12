@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -9,7 +9,9 @@ import {
   type IncidentRecord,
   type RecommendationRecord,
   type TaskArtifact,
+  type TaskRecord,
 } from '@/api/client'
+import { useTaskEventStream, type TaskEventMessage } from '@/hooks/useTaskEventStream'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -33,6 +35,19 @@ interface EvidenceItem {
   next_step?: string
   reasoning_tags?: string[]
   [key: string]: unknown
+}
+
+interface RecommendationTaskState {
+  taskId: string
+  incidentId: string
+  taskType: string
+  status: string
+  currentStage: string
+  progress: number
+  progressMessage: string
+  updatedAt?: string
+  errorMessage?: string
+  artifactReady: boolean
 }
 
 const layerMeta: Record<string, { title: string; color: string; order: number }> = {
@@ -81,6 +96,36 @@ const sortEvidenceItems = (items: EvidenceItem[]) => {
   })
 }
 
+// 把后端任务对象压成异常页可直接消费的轻量状态，避免页面处处判断原始字段。
+const buildRecommendationTaskState = (task: TaskRecord, incidentId: string): RecommendationTaskState => ({
+  taskId: task.task_id,
+  incidentId,
+  taskType: task.task_type,
+  status: task.status,
+  currentStage: task.current_stage,
+  progress: task.progress,
+  progressMessage: task.progress_message,
+  updatedAt: task.updated_at,
+  errorMessage: task.error?.error_message,
+  artifactReady: false,
+})
+
+const getTaskAlertMeta = (task: RecommendationTaskState) => {
+  if (task.status === 'FAILED') {
+    return { type: 'error' as const, title: '建议任务执行失败' }
+  }
+  if (task.status === 'WAITING_CONFIRM') {
+    return { type: 'success' as const, title: '建议稿已生成，等待人工确认' }
+  }
+  if (task.status === 'COMPLETED') {
+    return { type: 'success' as const, title: '建议任务已完成' }
+  }
+  if (task.status === 'CANCELLED') {
+    return { type: 'warning' as const, title: '建议任务已取消' }
+  }
+  return { type: 'info' as const, title: '建议任务正在处理中' }
+}
+
 export const IncidentCenter: React.FC = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -89,6 +134,7 @@ export const IncidentCenter: React.FC = () => {
   const [serviceKey, setServiceKey] = useState('unknown/root')
   const [creating, setCreating] = useState(false)
   const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
+  const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
   const groupedEvidence = useMemo(() => {
@@ -124,6 +170,23 @@ export const IncidentCenter: React.FC = () => {
     }
   }, [selectedIncident])
 
+  const visibleRecommendationTask = useMemo(() => {
+    if (!selectedIncident || !recommendationTask) {
+      return null
+    }
+    if (recommendationTask.incidentId !== selectedIncident.incident.incident_id) {
+      return null
+    }
+    return recommendationTask
+  }, [recommendationTask, selectedIncident])
+
+  const latestRecommendation = useMemo(() => {
+    if (!selectedIncident?.recommendations.length) {
+      return null
+    }
+    return selectedIncident.recommendations[0]
+  }, [selectedIncident])
+
   const loadIncidents = async () => {
     setLoading(true)
     setError('')
@@ -142,11 +205,11 @@ export const IncidentCenter: React.FC = () => {
     }
   }
 
-  const loadIncidentDetail = async (incidentId: string) => {
+  const loadIncidentDetail = useCallback(async (incidentId: string) => {
     const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelectedIncident(response)
     return response
-  }
+  }, [])
 
   const createIncidentTask = async () => {
     setCreating(true)
@@ -155,38 +218,6 @@ export const IncidentCenter: React.FC = () => {
       await loadIncidents()
     } finally {
       setCreating(false)
-    }
-  }
-
-  const generateRecommendationForIncident = async () => {
-    if (!selectedIncident) {
-      return
-    }
-    setGeneratingRecommendation(true)
-    try {
-      await recommendationsApi.generate({ incident_id: selectedIncident.incident.incident_id })
-      message.success('建议生成任务已提交')
-      let latestDetail = selectedIncident
-      for (let index = 0; index < 3; index += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 800))
-        latestDetail = await loadIncidentDetail(selectedIncident.incident.incident_id)
-        if (latestDetail.recommendations.length > 0) {
-          break
-        }
-      }
-      if (latestDetail.recommendations.length > 0) {
-        const recommendation = latestDetail.recommendations[0]
-        const artifact = pickRecommendationArtifact(recommendation)
-        const params = new URLSearchParams()
-        params.set('incidentId', latestDetail.incident.incident_id)
-        if (artifact) {
-          params.set('taskId', artifact.task_id)
-          params.set('artifactId', artifact.artifact_id)
-        }
-        navigate(`/recommendations?${params.toString()}`)
-      }
-    } finally {
-      setGeneratingRecommendation(false)
     }
   }
 
@@ -206,6 +237,62 @@ export const IncidentCenter: React.FC = () => {
     }
     navigate(`/recommendations?${params.toString()}`)
   }
+
+  const openLatestRecommendationDraft = () => {
+    if (latestRecommendation) {
+      openRecommendationCenter(latestRecommendation)
+    }
+  }
+
+  const generateRecommendationForIncident = async () => {
+    if (!selectedIncident) {
+      return
+    }
+    setGeneratingRecommendation(true)
+    try {
+      const task = (await recommendationsApi.generate({ incident_id: selectedIncident.incident.incident_id })) as TaskRecord
+      setRecommendationTask(buildRecommendationTaskState(task, selectedIncident.incident.incident_id))
+      message.success('建议生成任务已提交，详情会在当前页面持续更新')
+    } finally {
+      setGeneratingRecommendation(false)
+    }
+  }
+
+  // 当前页只消费自己发起的建议任务事件，并在关键节点回刷异常详情拿到最新草稿。
+  const handleTaskEvent = useCallback((event: TaskEventMessage) => {
+    if (!recommendationTask || event.task_id !== recommendationTask.taskId) {
+      return
+    }
+
+    setRecommendationTask((previous) => {
+      if (!previous || event.task_id !== previous.taskId) {
+        return previous
+      }
+      const next: RecommendationTaskState = {
+        ...previous,
+        status: typeof event.status === 'string' ? event.status : previous.status,
+        currentStage: typeof event.current_stage === 'string' ? event.current_stage : previous.currentStage,
+        progress: typeof event.progress === 'number' ? event.progress : previous.progress,
+        progressMessage: typeof event.progress_message === 'string' ? event.progress_message : previous.progressMessage,
+        updatedAt: typeof event.updated_at === 'string' ? event.updated_at : previous.updatedAt,
+        artifactReady: previous.artifactReady || event.type === 'task_artifact_ready',
+      }
+      const eventError = event.error as { error_message?: string } | undefined
+      if (event.type === 'task_failed') {
+        next.errorMessage = typeof eventError?.error_message === 'string' ? eventError.error_message : next.progressMessage
+      }
+      return next
+    })
+
+    if (['task_artifact_ready', 'task_waiting_confirm', 'task_completed', 'task_failed'].includes(event.type)) {
+      void loadIncidentDetail(recommendationTask.incidentId)
+    }
+  }, [loadIncidentDetail, recommendationTask])
+
+  const { connected: taskEventConnected } = useTaskEventStream({
+    enabled: true,
+    onEvent: handleTaskEvent,
+  })
 
   useEffect(() => {
     void loadIncidents()
@@ -281,6 +368,39 @@ export const IncidentCenter: React.FC = () => {
                     <Tag key={tag}>{tag}</Tag>
                   ))}
                 </Space>
+
+                {visibleRecommendationTask ? (
+                  <Alert
+                    showIcon
+                    type={getTaskAlertMeta(visibleRecommendationTask).type}
+                    message={getTaskAlertMeta(visibleRecommendationTask).title}
+                    description={
+                      <div>
+                        <Paragraph style={{ marginBottom: 8 }}>
+                          当前阶段：{visibleRecommendationTask.currentStage} · 进度 {visibleRecommendationTask.progress}% · {visibleRecommendationTask.progressMessage || '等待任务更新'}
+                        </Paragraph>
+                        <Space wrap>
+                          <Tag color={taskEventConnected ? 'green' : 'default'}>{taskEventConnected ? '事件流已连接' : '事件流重连中'}</Tag>
+                          <Tag color={visibleRecommendationTask.artifactReady ? 'cyan' : 'default'}>{visibleRecommendationTask.artifactReady ? '草稿已产出' : '草稿生成中'}</Tag>
+                          <Tag color={visibleRecommendationTask.status === 'FAILED' ? 'red' : visibleRecommendationTask.status === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{visibleRecommendationTask.status}</Tag>
+                        </Space>
+                        {visibleRecommendationTask.errorMessage ? (
+                          <Paragraph type="danger" style={{ marginTop: 8, marginBottom: 0 }}>
+                            失败原因：{visibleRecommendationTask.errorMessage}
+                          </Paragraph>
+                        ) : null}
+                      </div>
+                    }
+                    action={
+                      <Space direction="vertical" size={8}>
+                        <Button size="small" onClick={openLatestRecommendationDraft} disabled={!latestRecommendation}>
+                          打开最新草稿
+                        </Button>
+                      </Space>
+                    }
+                    style={{ marginBottom: 16 }}
+                  />
+                ) : null}
 
                 {diagnosisSummary ? (
                   <Card type="inner" title="诊断摘要" style={{ marginBottom: 16 }}>
