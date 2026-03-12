@@ -387,9 +387,9 @@ class AICallLogRepository:
             """
             INSERT OR REPLACE INTO ai_call_logs (
                 call_id, provider_name, model, source, endpoint, task_id,
-                prompt_preview, response_preview, status, error_message,
+                prompt_preview, response_preview, status, error_code, error_message,
                 latency_ms, request_tokens, response_tokens, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 call_log.call_id,
@@ -401,6 +401,7 @@ class AICallLogRepository:
                 call_log.prompt_preview,
                 call_log.response_preview,
                 call_log.status.value,
+                call_log.error_code,
                 call_log.error_message,
                 call_log.latency_ms,
                 call_log.request_tokens,
@@ -437,6 +438,7 @@ class AICallLogRepository:
                 prompt_preview=row["prompt_preview"] or "",
                 response_preview=row["response_preview"] or "",
                 status=row["status"],
+                error_code=row["error_code"] or "",
                 error_message=row["error_message"] or "",
                 latency_ms=row["latency_ms"],
                 request_tokens=row["request_tokens"],

@@ -124,6 +124,7 @@ class SQLiteDatabase:
                 prompt_preview TEXT,
                 response_preview TEXT,
                 status TEXT NOT NULL,
+                error_code TEXT,
                 error_message TEXT,
                 latency_ms INTEGER NOT NULL,
                 request_tokens INTEGER,
@@ -136,6 +137,7 @@ class SQLiteDatabase:
             """
         )
         self._ensure_column('tasks', 'approval_json', 'TEXT')
+        self._ensure_column('ai_call_logs', 'error_code', 'TEXT')
         self.connection.commit()
 
     def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:

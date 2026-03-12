@@ -62,6 +62,7 @@ interface LLMCallLog {
   source: string;
   endpoint: string;
   status: 'success' | 'error';
+  error_code?: string;
   latency_ms: number;
   error_message: string;
   created_at: string;
@@ -245,6 +246,7 @@ const LLMSettings: React.FC = () => {
         const typeMap: Record<string, { color: string; text: string }> = {
           openai: { color: 'green', text: 'OpenAI' },
           anthropic: { color: 'orange', text: 'Anthropic' },
+          qwen: { color: 'cyan', text: 'Qwen' },
           custom: { color: 'blue', text: '自定义' }
         };
         const t = typeMap[type] || { color: 'default', text: type };
@@ -375,6 +377,13 @@ const LLMSettings: React.FC = () => {
       render: (value: number) => `${value} ms`
     },
     {
+      title: '错误码',
+      dataIndex: 'error_code',
+      key: 'error_code',
+      width: 140,
+      render: (value?: string) => value || '-'
+    },
+    {
       title: '错误信息',
       dataIndex: 'error_message',
       key: 'error_message',
@@ -469,6 +478,7 @@ const LLMSettings: React.FC = () => {
             <Select>
               <Select.Option value="openai">OpenAI（兼容 OpenAI API）</Select.Option>
               <Select.Option value="anthropic">Anthropic（Claude API）</Select.Option>
+              <Select.Option value="qwen">Qwen（阿里云兼容模式）</Select.Option>
               <Select.Option value="custom">自定义（其他 OpenAI 兼容 API）</Select.Option>
             </Select>
           </Form.Item>

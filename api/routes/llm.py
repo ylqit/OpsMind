@@ -83,6 +83,7 @@ def _record_call_log(call_log_repository, payload: dict[str, Any]) -> None:
                 prompt_preview=str(payload.get("prompt_preview") or "")[:200],
                 response_preview=str(payload.get("response_preview") or "")[:200],
                 status="error" if status == "error" else "success",
+                error_code=str(payload.get("error_code") or "")[:120],
                 error_message=str(payload.get("error_message") or "")[:500],
                 latency_ms=max(0, int(payload.get("latency_ms") or 0)),
                 request_tokens=int(payload["request_tokens"]) if payload.get("request_tokens") is not None else None,

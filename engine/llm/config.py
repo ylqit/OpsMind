@@ -14,6 +14,7 @@ class LLMProviderType(str, Enum):
     """LLM Provider 类型"""
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    QWEN = "qwen"
     CUSTOM = "custom"
 
 
@@ -129,6 +130,26 @@ class LLMConfigManager:
                     provider_type=LLMProviderType.ANTHROPIC,
                     api_key=anthropic_key,
                     model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-5-20251001'),
+                    enabled=True
+                ))
+
+        # Qwen（OpenAI 兼容模式）
+        qwen_key = os.getenv('QWEN_API_KEY')
+        if qwen_key:
+            qwen_provider = next((p for p in providers if p.name == 'qwen'), None)
+            if qwen_provider:
+                qwen_provider.api_key = qwen_key
+                if not qwen_provider.base_url:
+                    qwen_provider.base_url = os.getenv('QWEN_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+                if not qwen_provider.model:
+                    qwen_provider.model = os.getenv('QWEN_MODEL', 'qwen3.5-plus')
+            else:
+                providers.append(LLMProviderConfig(
+                    name='qwen',
+                    provider_type=LLMProviderType.QWEN,
+                    api_key=qwen_key,
+                    base_url=os.getenv('QWEN_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
+                    model=os.getenv('QWEN_MODEL', 'qwen3.5-plus'),
                     enabled=True
                 ))
 

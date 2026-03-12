@@ -1,23 +1,17 @@
-"""
-LLM 客户端模块
-支持多个 LLM Provider 的统一调用接口
-"""
+"""LLM 客户端与路由器。"""
+from __future__ import annotations
+
 import time
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 import httpx
-from typing import Dict, Any, List, Optional, AsyncGenerator, Callable
+
 from .config import LLMProviderConfig, LLMProviderType
+from .providers import AnthropicProvider, OpenAICompatibleProvider, ProviderResponse, QwenProvider
 
 
 class LLMClient:
-    """
-    LLM 客户端
-
-    提供统一的 LLM 调用接口，支持：
-    - OpenAI 兼容 API
-    - Anthropic API
-    - 自定义 API
-    """
+    """统一 LLM 客户端。"""
 
     def __init__(self, config: LLMProviderConfig):
         self.config = config
@@ -25,99 +19,33 @@ class LLMClient:
         self.api_key = config.api_key
         self.model = config.model
         self.timeout = config.timeout
+        self.provider = self._build_provider()
 
-    async def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """
-        发送聊天请求
-
-        Args:
-            messages: 消息列表 [{"role": "user", "content": "..."}]
-            **kwargs: 其他参数（temperature, max_tokens 等）
-
-        Returns:
-            LLM 响应内容
-        """
+    def _build_provider(self):
+        """根据配置构建对应 Provider 实现。"""
         if self.config.provider_type == LLMProviderType.ANTHROPIC:
-            return await self._chat_anthropic(messages, **kwargs)
-        else:
-            return await self._chat_openai_compatible(messages, **kwargs)
+            return AnthropicProvider(api_key=self.api_key, model=self.model, timeout=self.timeout)
+        if self.config.provider_type == LLMProviderType.QWEN:
+            return QwenProvider(base_url=self.base_url, api_key=self.api_key, model=self.model, timeout=self.timeout)
+        return OpenAICompatibleProvider(base_url=self.base_url, api_key=self.api_key, model=self.model, timeout=self.timeout)
 
-    async def _chat_openai_compatible(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """调用 OpenAI 兼容 API"""
-        url = f"{self.base_url}/chat/completions" if self.base_url else "https://api.openai.com/v1/chat/completions"
+    async def chat_with_meta(self, messages: List[Dict[str, str]], **kwargs: Any) -> ProviderResponse:
+        """返回带 token 元数据的响应。"""
+        return await self.provider.chat(messages, **kwargs)
 
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": kwargs.get("temperature", 0.7),
-            "max_tokens": kwargs.get("max_tokens", 2000),
-        }
+    async def chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> str:
+        """发送聊天请求，仅返回文本。"""
+        response = await self.chat_with_meta(messages, **kwargs)
+        return response.content
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-
-    async def _chat_anthropic(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """调用 Anthropic API"""
-        url = "https://api.anthropic.com/v1/messages"
-
-        # 转换消息格式
-        system_prompt = ""
-        anthropic_messages = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_prompt = msg["content"]
-            else:
-                anthropic_messages.append({
-                    "role": msg["role"] if msg["role"] != "assistant" else "assistant",
-                    "content": msg["content"]
-                })
-
-        payload = {
-            "model": self.model,
-            "messages": anthropic_messages,
-            "max_tokens": kwargs.get("max_tokens", 2000),
-            "temperature": kwargs.get("temperature", 0.7),
-        }
-
-        if system_prompt:
-            payload["system"] = system_prompt
-
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01"
-        }
-
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            return data["content"][0]["text"]
-
-    async def chat_stream(self, messages: List[Dict[str, str]], **kwargs) -> AsyncGenerator[str, None]:
-        """流式聊天"""
-        # 简化实现，非流式
+    async def chat_stream(self, messages: List[Dict[str, str]], **kwargs: Any) -> AsyncGenerator[str, None]:
+        """流式聊天（当前为非流式兼容实现）。"""
         content = await self.chat(messages, **kwargs)
         yield content
 
 
 class LLMRouter:
-    """
-    LLM 路由器
-
-    管理多个 LLM Provider，支持：
-    - 自动故障转移
-    - 负载均衡
-    - Provider 选择
-    """
+    """LLM 路由器，支持重试、超时与 fallback。"""
 
     def __init__(
         self,
@@ -131,16 +59,16 @@ class LLMRouter:
         self.call_observer = call_observer
 
     def get_client(self, name: Optional[str] = None) -> Optional[LLMClient]:
-        """获取指定客户端"""
+        """获取指定客户端。"""
         client_name = name or self.default_client_name
         return self.clients.get(client_name)
 
     def get_enabled_clients(self) -> List[LLMClient]:
-        """获取所有启用的客户端"""
+        """获取所有启用客户端。"""
         return list(self.clients.values())
 
     async def _notify_call_observer(self, payload: Dict[str, Any]) -> None:
-        """记录 LLM 调用信息，避免日志异常中断主流程。"""
+        """记录调用日志，异常不影响主流程。"""
         if not self.call_observer:
             return
         try:
@@ -148,10 +76,31 @@ class LLMRouter:
             if hasattr(result, "__await__"):
                 await result
         except Exception:
-            # 日志记录失败不影响主链路。
             return
 
-    async def _chat_with_client(
+    @staticmethod
+    def _extract_error_code(error: Exception) -> str:
+        """把异常映射成稳定错误码。"""
+        if isinstance(error, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException, TimeoutError)):
+            return "AI_TIMEOUT"
+        if isinstance(error, httpx.HTTPStatusError):
+            status_code = error.response.status_code if error.response is not None else 0
+            return f"AI_HTTP_{status_code}"
+        if isinstance(error, httpx.RequestError):
+            return "AI_NETWORK_ERROR"
+        if isinstance(error, ValueError):
+            return "AI_VALIDATION_ERROR"
+        if isinstance(error, RuntimeError):
+            return "AI_RUNTIME_ERROR"
+        return "AI_UNKNOWN_ERROR"
+
+    @staticmethod
+    def _build_prompt_preview(messages: List[Dict[str, str]]) -> str:
+        if not messages:
+            return ""
+        return str(messages[-1].get("content", ""))[:200]
+
+    async def _chat_with_client_once(
         self,
         client_name: str,
         client: LLMClient,
@@ -159,11 +108,13 @@ class LLMRouter:
         source: str,
         endpoint: str,
         task_id: Optional[str],
-        **kwargs,
-    ) -> str:
+        attempt: int,
+        **kwargs: Any,
+    ) -> ProviderResponse:
         started = time.perf_counter()
+        prompt_preview = self._build_prompt_preview(messages)
         try:
-            content = await client.chat(messages, **kwargs)
+            response = await client.chat_with_meta(messages, **kwargs)
             latency_ms = int((time.perf_counter() - started) * 1000)
             await self._notify_call_observer(
                 {
@@ -172,14 +123,18 @@ class LLMRouter:
                     "source": source,
                     "endpoint": endpoint,
                     "task_id": task_id,
-                    "prompt_preview": (messages[-1].get("content", "") if messages else "")[:200],
-                    "response_preview": content[:200],
+                    "prompt_preview": prompt_preview,
+                    "response_preview": response.content[:200],
                     "status": "success",
+                    "error_code": "",
                     "error_message": "",
                     "latency_ms": latency_ms,
+                    "request_tokens": response.request_tokens,
+                    "response_tokens": response.response_tokens,
+                    "attempt": attempt,
                 }
             )
-            return content
+            return response
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             await self._notify_call_observer(
@@ -189,86 +144,104 @@ class LLMRouter:
                     "source": source,
                     "endpoint": endpoint,
                     "task_id": task_id,
-                    "prompt_preview": (messages[-1].get("content", "") if messages else "")[:200],
+                    "prompt_preview": prompt_preview,
                     "response_preview": "",
                     "status": "error",
+                    "error_code": self._extract_error_code(exc),
                     "error_message": str(exc)[:300],
                     "latency_ms": latency_ms,
+                    "request_tokens": None,
+                    "response_tokens": None,
+                    "attempt": attempt,
                 }
             )
             raise
 
-    async def chat(self, messages: List[Dict[str, str]], provider: Optional[str] = None, **kwargs) -> str:
-        """
-        发送聊天请求（带故障转移）
+    async def _chat_with_retry(
+        self,
+        client_name: str,
+        client: LLMClient,
+        messages: List[Dict[str, str]],
+        source: str,
+        endpoint: str,
+        task_id: Optional[str],
+        **kwargs: Any,
+    ) -> ProviderResponse:
+        max_retries = max(0, int(client.config.max_retries or 0))
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 2):
+            try:
+                return await self._chat_with_client_once(
+                    client_name,
+                    client,
+                    messages,
+                    source,
+                    endpoint,
+                    task_id,
+                    attempt,
+                    **kwargs,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt > max_retries:
+                    break
+        if last_error:
+            raise last_error
+        raise RuntimeError("LLM 请求失败")
 
-        Args:
-            messages: 消息列表
-            provider: 指定 Provider（可选）
-            **kwargs: 其他参数
+    def _build_candidate_order(self, provider: Optional[str]) -> list[str]:
+        """构建路由候选顺序：指定 -> 默认 -> 其他。"""
+        ordered: list[str] = []
 
-        Returns:
-            LLM 响应
-        """
+        def add(name: Optional[str]) -> None:
+            if name and name in self.clients and name not in ordered:
+                ordered.append(name)
+
+        add(provider)
+        add(self.default_client_name)
+        for name in self.fallback_order:
+            add(name)
+        for name in self.clients.keys():
+            add(name)
+        return ordered
+
+    async def chat(self, messages: List[Dict[str, str]], provider: Optional[str] = None, **kwargs: Any) -> str:
+        """发送聊天请求（重试 + fallback）。"""
         source = str(kwargs.pop("_source", "runtime"))
         endpoint = str(kwargs.pop("_endpoint", "chat"))
         task_id_value = kwargs.pop("_task_id", None)
         task_id = str(task_id_value) if task_id_value else None
 
-        # 尝试指定 Provider
-        if provider:
-            client = self.get_client(provider)
-            if client:
-                try:
-                    return await self._chat_with_client(
-                        provider,
-                        client,
-                        messages,
-                        source,
-                        endpoint,
-                        task_id,
-                        **kwargs,
-                    )
-                except Exception:
-                    # 失败后尝试默认 Provider
-                    pass
+        candidate_order = self._build_candidate_order(provider)
+        if not candidate_order:
+            raise RuntimeError("当前没有可用 LLM Provider")
 
-        # 尝试默认 Provider
-        default_client = self.get_client()
-        if default_client:
+        last_error: Exception | None = None
+        for client_name in candidate_order:
+            client = self.clients.get(client_name)
+            if not client:
+                continue
             try:
-                return await self._chat_with_client(
-                    self.default_client_name,
-                    default_client,
+                response = await self._chat_with_retry(
+                    client_name,
+                    client,
                     messages,
                     source,
                     endpoint,
                     task_id,
                     **kwargs,
                 )
-            except Exception:
-                pass
+                return response.content
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
 
-        # 尝试其他 Provider（故障转移）
-        for name, client in self.clients.items():
-            if name != self.default_client_name and name != provider:
-                try:
-                    return await self._chat_with_client(
-                        name,
-                        client,
-                        messages,
-                        source,
-                        endpoint,
-                        task_id,
-                        **kwargs,
-                    )
-                except Exception:
-                    continue
-
+        if last_error:
+            raise RuntimeError(f"所有 LLM Provider 都不可用: {last_error}") from last_error
         raise RuntimeError("所有 LLM Provider 都不可用")
 
     def set_default(self, name: str) -> bool:
-        """设置默认 Provider"""
+        """设置默认 Provider。"""
         if name in self.clients:
             self.default_client_name = name
             return True

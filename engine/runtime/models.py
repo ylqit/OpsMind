@@ -148,6 +148,7 @@ class AICallLog(BaseModel):
     prompt_preview: str = ""
     response_preview: str = ""
     status: AICallLogStatus = AICallLogStatus.SUCCESS
+    error_code: str = ""
     error_message: str = ""
     latency_ms: int = 0
     request_tokens: Optional[int] = None

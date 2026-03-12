@@ -362,6 +362,7 @@ export interface LLMCallLogRecord {
   prompt_preview: string
   response_preview: string
   status: 'success' | 'error'
+  error_code?: string
   error_message: string
   latency_ms: number
   request_tokens?: number | null
@@ -500,6 +501,17 @@ export const tasksApi = {
   getArtifactContent: (taskId: string, artifactId: string) =>
     apiClient.get(`${buildTaskArtifactPath(taskId, artifactId)}/content`),
   getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}${buildTaskArtifactPath(taskId, artifactId)}/download`,
+}
+
+export const aiApi = {
+  chat: (payload: {
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
+    provider?: string
+    temperature?: number
+    max_tokens?: number
+    task_id?: string
+  }) => apiClient.post('/ai/chat', payload),
+  testProvider: (payload: { provider_name?: string; message?: string }) => apiClient.post('/ai/providers/test', payload),
 }
 
 export const llmApi = {
