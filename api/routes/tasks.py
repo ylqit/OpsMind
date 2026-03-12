@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +133,50 @@ def _build_failure_diagnosis(task, trace_preview: list[dict], artifacts: list[An
     }
 
 
+# 按类型和关键词做轻量筛选，便于前端在任务内快速检索目标产物。
+def _filter_artifacts(artifacts: list[Any], kind: str | None = None, query: str | None = None) -> list[Any]:
+    filtered = artifacts
+    normalized_kind = (kind or "").strip().lower()
+    normalized_query = (query or "").strip().lower()
+
+    if normalized_kind:
+        filtered = [artifact for artifact in filtered if str(artifact.kind).lower() == normalized_kind]
+
+    if normalized_query:
+        filtered = [
+            artifact
+            for artifact in filtered
+            if normalized_query in str(artifact.path).lower()
+            or normalized_query in str(artifact.preview).lower()
+            or normalized_query in str(artifact.kind).lower()
+        ]
+
+    return filtered
+
+
+# 分组结果直接携带分组内条目，前端无需二次聚合。
+def _group_artifacts(artifacts: list[Any], group_by: str) -> list[dict[str, Any]]:
+    if group_by == "none":
+        return []
+
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for artifact in artifacts:
+        key = str(artifact.kind or "unknown")
+        grouped[key].append(artifact)
+
+    groups = []
+    for group_key in sorted(grouped.keys()):
+        items = grouped[group_key]
+        groups.append(
+            {
+                "group_key": group_key,
+                "count": len(items),
+                "items": [item.model_dump(mode="json") for item in items],
+            }
+        )
+    return groups
+
+
 def _require_artifact(task_id: str, artifact_id: str, task_manager):
     artifact = task_manager.artifact_repository.get(task_id, artifact_id)
     if not artifact:
@@ -185,6 +229,36 @@ async def get_task_diagnosis(task_id: str, task_manager=Depends(get_task_manager
     trace_preview = _read_trace_preview(task_id, task_manager, limit=80)
     artifacts = task_manager.list_artifacts(task_id)
     return _build_failure_diagnosis(task, trace_preview, artifacts)
+
+
+@router.get("/{task_id}/artifacts")
+async def list_task_artifacts(
+    task_id: str,
+    kind: str | None = None,
+    query: str | None = None,
+    group_by: str = "kind",
+    task_manager=Depends(get_task_manager),
+):
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if group_by not in {"kind", "none"}:
+        raise HTTPException(status_code=400, detail="group_by 仅支持 kind 或 none")
+
+    artifacts = task_manager.list_artifacts(task_id)
+    filtered_artifacts = _filter_artifacts(artifacts, kind=kind, query=query)
+    grouped = _group_artifacts(filtered_artifacts, group_by=group_by)
+
+    return {
+        "items": [artifact.model_dump(mode="json") for artifact in filtered_artifacts],
+        "total": len(artifacts),
+        "filtered": len(filtered_artifacts),
+        "kind": kind or "",
+        "query": query or "",
+        "group_by": group_by,
+        "groups": grouped,
+    }
 
 
 @router.get("/{task_id}/artifacts/{artifact_id}")

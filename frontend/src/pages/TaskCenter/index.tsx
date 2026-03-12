@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Card,
@@ -9,6 +9,7 @@ import {
   List,
   Modal,
   Row,
+  Select,
   Space,
   Table,
   Tag,
@@ -20,6 +21,8 @@ import {
   tasksApi,
   type ArtifactContentResponse,
   type TaskArtifact,
+  type TaskArtifactGroup,
+  type TaskArtifactListResponse,
   type TaskDetailResponse,
   type TaskFailureDiagnosis,
   type TaskRecord,
@@ -40,6 +43,8 @@ interface PreviewState {
   filename: string
 }
 
+const emptyArtifactGroups: TaskArtifactGroup[] = []
+
 const artifactLabelMap: Record<string, string> = {
   manifest: 'YAML 草稿',
   diff: '变更差异',
@@ -56,11 +61,19 @@ export const TaskCenter: React.FC = () => {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewArtifactId, setPreviewArtifactId] = useState('')
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [artifactLoading, setArtifactLoading] = useState(false)
+  const [artifactKindFilter, setArtifactKindFilter] = useState('all')
+  const [artifactQueryInput, setArtifactQueryInput] = useState('')
+  const [artifactQuery, setArtifactQuery] = useState('')
+  const [artifactItems, setArtifactItems] = useState<TaskArtifact[]>([])
+  const [artifactGroups, setArtifactGroups] = useState<TaskArtifactGroup[]>(emptyArtifactGroups)
+  const [artifactTotal, setArtifactTotal] = useState(0)
   const [diagnosisLoading, setDiagnosisLoading] = useState(false)
   const [approveModalOpen, setApproveModalOpen] = useState(false)
   const [approveSubmitting, setApproveSubmitting] = useState(false)
   const [approvedBy, setApprovedBy] = useState('operator')
   const [approvalNote, setApprovalNote] = useState('')
+  const previousTaskIdRef = useRef<string | undefined>(undefined)
 
   const selectedTaskId = selectedTask?.task.task_id
   const failureDiagnosis = selectedTask?.failure_diagnosis || null
@@ -68,12 +81,41 @@ export const TaskCenter: React.FC = () => {
     () => selectedTask?.artifacts.find((artifact) => artifact.kind === 'diff') || selectedTask?.artifacts.find((artifact) => artifact.kind === 'manifest') || null,
     [selectedTask],
   )
+  const artifactKindOptions = useMemo(() => {
+    const kinds = new Set((selectedTask?.artifacts || []).map((artifact) => artifact.kind))
+    return [
+      { label: '全部类型', value: 'all' },
+      ...Array.from(kinds)
+        .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+        .map((kind) => ({ label: artifactLabelMap[kind] || kind, value: kind })),
+    ]
+  }, [selectedTask])
+  const groupedArtifacts = artifactGroups.length
+    ? artifactGroups
+    : [{ group_key: 'all', count: artifactItems.length, items: artifactItems }]
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
     setSelectedTask(detail)
     return detail
   }, [])
+
+  // 任务详情与产物检索分离加载，保证筛选变更时无需重拉整页详情。
+  const loadArtifacts = useCallback(async (taskId: string) => {
+    setArtifactLoading(true)
+    try {
+      const response = (await tasksApi.listArtifacts(taskId, {
+        kind: artifactKindFilter === 'all' ? undefined : artifactKindFilter,
+        query: artifactQuery || undefined,
+        group_by: 'kind',
+      })) as TaskArtifactListResponse
+      setArtifactItems(response.items)
+      setArtifactGroups(response.groups)
+      setArtifactTotal(response.total)
+    } finally {
+      setArtifactLoading(false)
+    }
+  }, [artifactKindFilter, artifactQuery])
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -105,6 +147,22 @@ export const TaskCenter: React.FC = () => {
   useEffect(() => {
     void loadTasks()
   }, [loadTasks])
+
+  useEffect(() => {
+    const taskChanged = previousTaskIdRef.current !== selectedTaskId
+    previousTaskIdRef.current = selectedTaskId
+
+    if (taskChanged) {
+      setArtifactItems([])
+      setArtifactGroups(emptyArtifactGroups)
+      setArtifactTotal(0)
+    }
+
+    if (!selectedTaskId) {
+      return
+    }
+    void loadArtifacts(selectedTaskId)
+  }, [selectedTaskId, loadArtifacts])
 
   const approveSelectedTask = async () => {
     if (!selectedTask) {
@@ -163,6 +221,16 @@ export const TaskCenter: React.FC = () => {
     } finally {
       setDiagnosisLoading(false)
     }
+  }
+
+  const applyArtifactSearch = () => {
+    setArtifactQuery(artifactQueryInput.trim())
+  }
+
+  const resetArtifactSearch = () => {
+    setArtifactKindFilter('all')
+    setArtifactQueryInput('')
+    setArtifactQuery('')
   }
 
   const previewArtifact = async (artifact: TaskArtifact) => {
@@ -353,31 +421,70 @@ export const TaskCenter: React.FC = () => {
                     )}
                   />
                 </Card>
-                <Card type="inner" title="任务产物">
-                  <List
-                    dataSource={selectedTask.artifacts}
-                    locale={{ emptyText: '暂无任务产物' }}
-                    renderItem={(artifact) => (
-                      <List.Item
-                        actions={[
-                          <Button key="preview" size="small" onClick={() => void previewArtifact(artifact)} loading={previewLoading && previewArtifactId === artifact.artifact_id}>
-                            预览
-                          </Button>,
-                          <Button key="download" size="small" type="primary" ghost onClick={() => downloadArtifact(artifact)}>
-                            下载
-                          </Button>,
-                        ]}
-                      >
-                        <div>
-                          <Space style={{ marginBottom: 6 }}>
-                            <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
-                            <Text code>{artifact.path.split(/[\\/]/).pop() || artifact.artifact_id}</Text>
-                          </Space>
-                          <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
-                        </div>
-                      </List.Item>
-                    )}
-                  />
+                <Card
+                  type="inner"
+                  title="任务产物"
+                  extra={<Tag color="blue">{artifactItems.length} / {artifactTotal}</Tag>}
+                >
+                  <Space wrap style={{ marginBottom: 12 }}>
+                    <Select
+                      value={artifactKindFilter}
+                      options={artifactKindOptions}
+                      style={{ width: 160 }}
+                      onChange={setArtifactKindFilter}
+                    />
+                    <Input.Search
+                      allowClear
+                      value={artifactQueryInput}
+                      onChange={(event) => setArtifactQueryInput(event.target.value)}
+                      onSearch={applyArtifactSearch}
+                      placeholder="按文件名、类型或预览检索"
+                      style={{ width: 280 }}
+                    />
+                    <Button onClick={applyArtifactSearch}>检索</Button>
+                    <Button onClick={resetArtifactSearch}>重置</Button>
+                  </Space>
+
+                  {groupedArtifacts.length === 0 || (groupedArtifacts.length === 1 && groupedArtifacts[0].items.length === 0) ? (
+                    <Empty description="暂无匹配产物" />
+                  ) : (
+                    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                      {groupedArtifacts.map((group) => (
+                        <Card
+                          key={group.group_key}
+                          size="small"
+                          type="inner"
+                          title={`${group.group_key === 'all' ? '全部产物' : (artifactLabelMap[group.group_key] || group.group_key)} (${group.count})`}
+                        >
+                          <List
+                            loading={artifactLoading}
+                            dataSource={group.items}
+                            locale={{ emptyText: '暂无任务产物' }}
+                            renderItem={(artifact) => (
+                              <List.Item
+                                actions={[
+                                  <Button key="preview" size="small" onClick={() => void previewArtifact(artifact)} loading={previewLoading && previewArtifactId === artifact.artifact_id}>
+                                    预览
+                                  </Button>,
+                                  <Button key="download" size="small" type="primary" ghost onClick={() => downloadArtifact(artifact)}>
+                                    下载
+                                  </Button>,
+                                ]}
+                              >
+                                <div>
+                                  <Space style={{ marginBottom: 6 }}>
+                                    <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
+                                    <Text code>{artifact.path.split(/[\\/]/).pop() || artifact.artifact_id}</Text>
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
+                                </div>
+                              </List.Item>
+                            )}
+                          />
+                        </Card>
+                      ))}
+                    </Space>
+                  )}
                 </Card>
               </div>
             )}

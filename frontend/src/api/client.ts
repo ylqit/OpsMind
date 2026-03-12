@@ -227,6 +227,22 @@ export interface TaskFailureDiagnosis {
   suggested_actions: string[]
 }
 
+export interface TaskArtifactGroup {
+  group_key: string
+  count: number
+  items: TaskArtifact[]
+}
+
+export interface TaskArtifactListResponse {
+  items: TaskArtifact[]
+  total: number
+  filtered: number
+  kind: string
+  query: string
+  group_by: string
+  groups: TaskArtifactGroup[]
+}
+
 export interface TaskDetailResponse {
   task: TaskRecord
   trace_preview: Array<Record<string, unknown>>
@@ -369,6 +385,7 @@ export const recommendationsApi = {
 export const tasksApi = {
   list: (params?: { task_type?: string; status?: string }) => apiClient.get('/tasks', { params }),
   get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
+  listArtifacts: (taskId: string, params?: { kind?: string; query?: string; group_by?: 'kind' | 'none' }) => apiClient.get(`/tasks/${taskId}/artifacts`, { params }),
   getDiagnosis: (taskId: string) => apiClient.get(`/tasks/${taskId}/diagnosis`),
   approve: (taskId: string, payload?: { approved_by?: string; approval_note?: string }) => apiClient.post(`/tasks/${taskId}/approve`, payload),
   cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
