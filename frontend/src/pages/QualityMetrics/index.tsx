@@ -1,0 +1,370 @@
+import React, { useEffect, useMemo, useState } from 'react'
+import { AutoComplete, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd'
+import { Line } from '@ant-design/plots'
+import { useSearchParams } from 'react-router-dom'
+import {
+  metricsApi,
+  resourcesApi,
+  type AIUsageMetricsResponse,
+  type RecommendationMetricsResponse,
+} from '@/api/client'
+
+const { Title, Paragraph } = Typography
+
+interface AssetLite {
+  service_key?: string
+}
+
+interface AssetListResponse {
+  items: AssetLite[]
+}
+
+const windowOptions = [
+  { label: '最近 7 天', value: '7d' },
+  { label: '最近 14 天', value: '14d' },
+  { label: '最近 30 天', value: '30d' },
+]
+
+const allowedWindows = new Set(windowOptions.map((item) => item.value))
+
+const normalizeWindow = (value: string | null | undefined) => {
+  if (!value || !allowedWindows.has(value)) {
+    return '7d'
+  }
+  return value
+}
+
+const resolveDateRange = (windowValue: string) => {
+  const now = new Date()
+  const endDate = now.toISOString().slice(0, 10)
+  const offsetDays = windowValue === '30d' ? 29 : windowValue === '14d' ? 13 : 6
+  const start = new Date(now)
+  start.setUTCDate(start.getUTCDate() - offsetDays)
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate,
+  }
+}
+
+const formatCost = (value: number) => `¥${value.toFixed(4)}`
+
+const formatDuration = (value: number) => `${Math.round(value)} ms`
+
+const mergeServiceKeys = (base: string[], incoming: string[]) => {
+  const set = new Set(base)
+  incoming.filter(Boolean).forEach((item) => set.add(item))
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+const QualityMetrics: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [windowSize, setWindowSize] = useState(() => normalizeWindow(searchParams.get('window')))
+  const [serviceKey, setServiceKey] = useState(() => searchParams.get('service_key') || '')
+  const [model, setModel] = useState(() => searchParams.get('model') || '')
+
+  const [loading, setLoading] = useState(true)
+  const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationMetricsResponse | null>(null)
+  const [aiUsageMetrics, setAiUsageMetrics] = useState<AIUsageMetricsResponse | null>(null)
+  const [serviceKeys, setServiceKeys] = useState<string[]>([])
+
+  const serviceOptions = useMemo(() => serviceKeys.map((item) => ({ label: item, value: item })), [serviceKeys])
+  const modelOptions = useMemo(
+    () => (aiUsageMetrics?.model_breakdown || []).map((item) => ({ label: item.model || '-', value: item.model || '' })).filter((item) => item.value),
+    [aiUsageMetrics],
+  )
+
+  const recommendationTrendData = useMemo(() => {
+    return (
+      recommendationMetrics?.trend.flatMap((item) => [
+        { date: item.date, value: item.adopt_rate, type: '采纳率' },
+        { date: item.date, value: item.reject_rate, type: '拒绝率' },
+        { date: item.date, value: item.task_success_rate, type: '任务成功率' },
+      ]) || []
+    )
+  }, [recommendationMetrics])
+
+  const aiUsageTrendData = useMemo(() => {
+    return (
+      aiUsageMetrics?.trend.flatMap((item) => [
+        { date: item.date, value: item.ai_call_total, type: '调用次数' },
+        { date: item.date, value: item.ai_error_count, type: '错误次数' },
+      ]) || []
+    )
+  }, [aiUsageMetrics])
+
+  const loadServiceKeys = async () => {
+    try {
+      const response = (await resourcesApi.listAssets()) as AssetListResponse
+      const keys = response.items
+        .map((item) => item.service_key)
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+      setServiceKeys((prev) => mergeServiceKeys(prev, keys))
+    } catch {
+      // 资产列表不是主链路，不影响质量看板主流程。
+    }
+  }
+
+  const loadMetrics = async (override?: { windowSize?: string; serviceKey?: string; model?: string }) => {
+    const activeWindow = override?.windowSize ?? windowSize
+    const activeService = override?.serviceKey ?? serviceKey
+    const activeModel = override?.model ?? model
+    const { startDate, endDate } = resolveDateRange(activeWindow)
+
+    setLoading(true)
+    try {
+      const [recommendationResponse, aiUsageResponse] = await Promise.all([
+        metricsApi.getRecommendation({
+          start_date: startDate,
+          end_date: endDate,
+          service_key: activeService || undefined,
+        }) as Promise<RecommendationMetricsResponse>,
+        metricsApi.getAiUsage({
+          start_date: startDate,
+          end_date: endDate,
+          service_key: activeService || undefined,
+          model: activeModel || undefined,
+          sync_daily: true,
+        }) as Promise<AIUsageMetricsResponse>,
+      ])
+
+      setRecommendationMetrics(recommendationResponse)
+      setAiUsageMetrics(aiUsageResponse)
+      setServiceKeys((prev) => mergeServiceKeys(prev, recommendationResponse.service_breakdown.map((item) => item.service_key)))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '质量看板数据加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadServiceKeys()
+  }, [])
+
+  useEffect(() => {
+    void loadMetrics()
+  }, [windowSize, serviceKey, model])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    next.set('window', windowSize)
+    if (serviceKey) {
+      next.set('service_key', serviceKey)
+    } else {
+      next.delete('service_key')
+    }
+    if (model) {
+      next.set('model', model)
+    } else {
+      next.delete('model')
+    }
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [windowSize, serviceKey, model, searchParams, setSearchParams])
+
+  const resetFilters = () => {
+    setWindowSize('7d')
+    setServiceKey('')
+    setModel('')
+  }
+
+  return (
+    <div className="ops-page">
+      <div className="ops-page__hero">
+        <div>
+          <Title level={2} style={{ marginBottom: 8 }}>质量看板</Title>
+          <Paragraph style={{ marginBottom: 0, color: 'rgba(15, 23, 42, 0.72)' }}>
+            按时间窗与服务维度观察建议采纳质量、任务执行稳定性和 AI 调用成本，支持版本回归与效果对比。
+          </Paragraph>
+        </div>
+        <Space wrap>
+          <Select value={windowSize} options={windowOptions} style={{ width: 132 }} onChange={setWindowSize} />
+          <AutoComplete
+            value={serviceKey}
+            options={serviceOptions}
+            onChange={setServiceKey}
+            placeholder="全部服务"
+            style={{ width: 220 }}
+            filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
+          />
+          <Select
+            allowClear
+            value={model || undefined}
+            options={modelOptions}
+            style={{ width: 200 }}
+            placeholder="全部模型"
+            onChange={(value) => setModel(value || '')}
+          />
+          <Button onClick={resetFilters}>重置</Button>
+          <Button type="link" onClick={() => void loadMetrics()}>刷新</Button>
+        </Space>
+      </div>
+
+      <Space wrap style={{ marginBottom: 4 }}>
+        <Tag color="blue">时间窗：{windowSize}</Tag>
+        <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
+        <Tag color={model ? 'purple' : 'default'}>模型：{model || '全部'}</Tag>
+      </Space>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="建议采纳率" value={recommendationMetrics?.summary.adopt_rate || 0} precision={2} suffix="%" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="任务成功率" value={recommendationMetrics?.summary.task_success_rate || 0} precision={2} suffix="%" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="平均任务耗时" value={recommendationMetrics?.summary.avg_task_duration_ms || 0} precision={0} suffix="ms" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="反馈总数" value={recommendationMetrics?.summary.feedback_total || 0} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="AI 调用次数" value={aiUsageMetrics?.summary.ai_call_total || 0} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="AI 错误率" value={aiUsageMetrics?.summary.ai_error_rate || 0} precision={2} suffix="%" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="平均调用延迟" value={aiUsageMetrics?.summary.ai_avg_latency_ms || 0} precision={0} suffix="ms" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="总成本估算" value={aiUsageMetrics?.summary.ai_total_cost || 0} precision={4} prefix="¥" />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24} lg={12}>
+          <Card title="建议与任务质量趋势" loading={loading} className="ops-surface-card">
+            {recommendationTrendData.length ? (
+              <Line
+                data={recommendationTrendData}
+                xField="date"
+                yField="value"
+                seriesField="type"
+                color={["#16a34a", "#ef4444", "#2563eb"]}
+                height={300}
+                smooth
+              />
+            ) : (
+              <Empty description="暂无 recommendation 指标数据" />
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="AI 调用趋势" loading={loading} className="ops-surface-card">
+            {aiUsageTrendData.length ? (
+              <Line
+                data={aiUsageTrendData}
+                xField="date"
+                yField="value"
+                seriesField="type"
+                color={["#0ea5e9", "#f97316"]}
+                height={300}
+                smooth
+              />
+            ) : (
+              <Empty description="暂无 AI 调用数据" />
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24} lg={12}>
+          <Card title="服务质量下钻" loading={loading} className="ops-surface-card">
+            <Table
+              size="small"
+              rowKey="service_key"
+              pagination={false}
+              dataSource={recommendationMetrics?.service_breakdown || []}
+              columns={[
+                {
+                  title: '服务',
+                  dataIndex: 'service_key',
+                  render: (value: string) => <Tag color="geekblue">{value}</Tag>,
+                },
+                {
+                  title: '反馈总数',
+                  dataIndex: 'feedback_total',
+                },
+                {
+                  title: '采纳率',
+                  dataIndex: 'adopt_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '任务成功率',
+                  dataIndex: 'task_success_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '平均任务耗时',
+                  dataIndex: 'avg_task_duration_ms',
+                  render: (value: number) => formatDuration(value),
+                },
+              ]}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="模型与 Provider 下钻" loading={loading} className="ops-surface-card">
+            <Table
+              size="small"
+              rowKey={(record) => `${record.provider_name || '-'}-${record.model || '-'}`}
+              pagination={false}
+              dataSource={aiUsageMetrics?.provider_breakdown || []}
+              columns={[
+                {
+                  title: 'Provider',
+                  dataIndex: 'provider_name',
+                  render: (value: string) => <Tag color="blue">{value || '-'}</Tag>,
+                },
+                {
+                  title: '调用次数',
+                  dataIndex: 'ai_call_total',
+                },
+                {
+                  title: '错误率',
+                  dataIndex: 'ai_error_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '总 Token',
+                  dataIndex: 'ai_total_tokens',
+                },
+                {
+                  title: '成本估算',
+                  dataIndex: 'ai_total_cost',
+                  render: (value: number) => formatCost(value),
+                },
+              ]}
+            />
+          </Card>
+        </Col>
+      </Row>
+    </div>
+  )
+}
+
+export default QualityMetrics

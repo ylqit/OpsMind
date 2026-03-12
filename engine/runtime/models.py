@@ -171,6 +171,20 @@ class AICallLog(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class UsageMetricsDailyRecord(BaseModel):
+    metric_date: str
+    service_key: str = "all"
+    model: str = "all"
+    provider_name: str = "all"
+    ai_call_total: int = 0
+    ai_error_count: int = 0
+    ai_success_count: int = 0
+    ai_avg_latency_ms: float = 0.0
+    ai_total_tokens: int = 0
+    ai_total_cost: float = 0.0
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Asset(BaseModel):
     asset_id: str = Field(default_factory=lambda: f"asset_{uuid4().hex[:12]}")
     asset_type: AssetType

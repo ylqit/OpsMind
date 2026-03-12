@@ -159,6 +159,21 @@ class SQLiteDatabase:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS usage_metrics_daily (
+                metric_date TEXT NOT NULL,
+                service_key TEXT NOT NULL,
+                model TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                ai_call_total INTEGER NOT NULL,
+                ai_error_count INTEGER NOT NULL,
+                ai_success_count INTEGER NOT NULL,
+                ai_avg_latency_ms REAL NOT NULL,
+                ai_total_tokens INTEGER NOT NULL,
+                ai_total_cost REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (metric_date, service_key, model, provider_name)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_recommendation ON recommendation_feedback(recommendation_id);
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_incident ON recommendation_feedback(incident_id);
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_created_at ON recommendation_feedback(created_at DESC);
@@ -166,6 +181,8 @@ class SQLiteDatabase:
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created_at ON ai_call_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_provider ON ai_call_logs(provider_name);
             CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_default ON ai_provider_configs(is_default);
+            CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_service ON usage_metrics_daily(service_key);
+            CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_model ON usage_metrics_daily(model);
             """
         )
         self._ensure_column('tasks', 'approval_json', 'TEXT')

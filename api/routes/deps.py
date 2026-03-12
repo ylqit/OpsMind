@@ -83,6 +83,11 @@ def get_recommendation_feedback_repository_dep():
     return recommendation_feedback_repository
 
 
+def get_usage_metrics_daily_repository_dep():
+    from main import usage_metrics_daily_repository
+    return usage_metrics_daily_repository
+
+
 def get_llm_router_dep():
     from main import llm_router_instance
     return llm_router_instance

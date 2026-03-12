@@ -21,6 +21,7 @@ from engine.runtime.models import (
     TaskApproval,
     TaskError,
     TaskRecord,
+    UsageMetricsDailyRecord,
 )
 
 from .sqlite import SQLiteDatabase
@@ -107,6 +108,22 @@ class TaskRepository:
             params.append(status)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self.db.fetchall(f"SELECT task_id FROM tasks {where_clause} ORDER BY updated_at DESC", params)
+        items: List[TaskRecord] = []
+        for row in rows:
+            task = self.get(row["task_id"])
+            if task:
+                items.append(task)
+        return items
+
+    def list_by_created_range(self, start_at: datetime, end_at: datetime) -> List[TaskRecord]:
+        rows = self.db.fetchall(
+            """
+            SELECT task_id FROM tasks
+            WHERE created_at >= ? AND created_at < ?
+            ORDER BY created_at ASC
+            """,
+            (start_at.isoformat(), end_at.isoformat()),
+        )
         items: List[TaskRecord] = []
         for row in rows:
             task = self.get(row["task_id"])
@@ -333,6 +350,22 @@ class IncidentRepository:
                 items.append(incident)
         return items
 
+    def list_by_ids(self, incident_ids: List[str]) -> List[Incident]:
+        unique_ids = [item for item in dict.fromkeys(incident_ids) if item]
+        if not unique_ids:
+            return []
+        placeholders = ",".join(["?"] * len(unique_ids))
+        rows = self.db.fetchall(
+            f"SELECT incident_id FROM incidents WHERE incident_id IN ({placeholders})",
+            unique_ids,
+        )
+        items: List[Incident] = []
+        for row in rows:
+            incident = self.get(row["incident_id"])
+            if incident:
+                items.append(incident)
+        return items
+
 
 class RecommendationRepository:
     def __init__(self, db: SQLiteDatabase):
@@ -485,6 +518,30 @@ class RecommendationFeedbackRepository:
                 summary[action] = int(row["count"])
         return summary
 
+    def list_by_created_range(self, start_at: datetime, end_at: datetime) -> List[RecommendationFeedback]:
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM recommendation_feedback
+            WHERE created_at >= ? AND created_at < ?
+            ORDER BY created_at ASC
+            """,
+            (start_at.isoformat(), end_at.isoformat()),
+        )
+        return [
+            RecommendationFeedback(
+                feedback_id=row["feedback_id"],
+                recommendation_id=row["recommendation_id"],
+                incident_id=row["incident_id"],
+                task_id=row["task_id"],
+                action=row["action"],
+                reason_code=row["reason_code"] or "",
+                comment=row["comment"] or "",
+                operator=row["operator"] or "anonymous",
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
 
 class AICallLogRepository:
     def __init__(self, db: SQLiteDatabase):
@@ -552,6 +609,108 @@ class AICallLogRepository:
                 request_tokens=row["request_tokens"],
                 response_tokens=row["response_tokens"],
                 created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def list_by_created_range(self, start_at: datetime, end_at: datetime) -> List[AICallLog]:
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM ai_call_logs
+            WHERE created_at >= ? AND created_at < ?
+            ORDER BY created_at ASC
+            """,
+            (start_at.isoformat(), end_at.isoformat()),
+        )
+        return [
+            AICallLog(
+                call_id=row["call_id"],
+                provider_name=row["provider_name"],
+                model=row["model"],
+                source=row["source"],
+                endpoint=row["endpoint"],
+                task_id=row["task_id"],
+                prompt_preview=row["prompt_preview"] or "",
+                response_preview=row["response_preview"] or "",
+                status=row["status"],
+                error_code=row["error_code"] or "",
+                error_message=row["error_message"] or "",
+                latency_ms=row["latency_ms"],
+                request_tokens=row["request_tokens"],
+                response_tokens=row["response_tokens"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+
+class UsageMetricsDailyRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    def upsert(self, record: UsageMetricsDailyRecord) -> UsageMetricsDailyRecord:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO usage_metrics_daily (
+                metric_date, service_key, model, provider_name,
+                ai_call_total, ai_error_count, ai_success_count,
+                ai_avg_latency_ms, ai_total_tokens, ai_total_cost, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.metric_date,
+                record.service_key,
+                record.model,
+                record.provider_name,
+                record.ai_call_total,
+                record.ai_error_count,
+                record.ai_success_count,
+                record.ai_avg_latency_ms,
+                record.ai_total_tokens,
+                record.ai_total_cost,
+                record.updated_at.isoformat(),
+            ),
+        )
+        return record
+
+    def list(
+        self,
+        start_date: str,
+        end_date: str,
+        service_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> List[UsageMetricsDailyRecord]:
+        clauses = ["metric_date >= ?", "metric_date <= ?"]
+        params: List[Any] = [start_date, end_date]
+
+        if service_key:
+            clauses.append("service_key = ?")
+            params.append(service_key)
+        if model:
+            clauses.append("model = ?")
+            params.append(model)
+
+        rows = self.db.fetchall(
+            f"""
+            SELECT * FROM usage_metrics_daily
+            WHERE {' AND '.join(clauses)}
+            ORDER BY metric_date ASC, service_key ASC, model ASC, provider_name ASC
+            """,
+            params,
+        )
+        return [
+            UsageMetricsDailyRecord(
+                metric_date=row["metric_date"],
+                service_key=row["service_key"],
+                model=row["model"],
+                provider_name=row["provider_name"],
+                ai_call_total=int(row["ai_call_total"]),
+                ai_error_count=int(row["ai_error_count"]),
+                ai_success_count=int(row["ai_success_count"]),
+                ai_avg_latency_ms=float(row["ai_avg_latency_ms"]),
+                ai_total_tokens=int(row["ai_total_tokens"]),
+                ai_total_cost=float(row["ai_total_cost"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
             )
             for row in rows
         ]

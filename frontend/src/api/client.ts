@@ -406,6 +406,104 @@ export interface RecommendationAIReviewResponse {
   guardrail_error_message?: string
 }
 
+export interface RecommendationMetricsTrendItem {
+  date: string
+  feedback_total: number
+  adopt: number
+  reject: number
+  rewrite: number
+  adopt_rate: number
+  reject_rate: number
+  rewrite_rate: number
+  task_total: number
+  task_success: number
+  task_failed: number
+  task_success_rate: number
+  avg_task_duration_ms: number
+}
+
+export interface RecommendationMetricsServiceItem {
+  service_key: string
+  feedback_total: number
+  adopt: number
+  reject: number
+  rewrite: number
+  adopt_rate: number
+  task_total: number
+  task_success: number
+  task_failed: number
+  task_success_rate: number
+  avg_task_duration_ms: number
+}
+
+export interface RecommendationMetricsResponse {
+  start_date: string
+  end_date: string
+  service_key: string
+  summary: {
+    feedback_total: number
+    adopt: number
+    reject: number
+    rewrite: number
+    adopt_rate: number
+    reject_rate: number
+    rewrite_rate: number
+    task_total: number
+    task_success: number
+    task_failed: number
+    task_success_rate: number
+    avg_task_duration_ms: number
+  }
+  trend: RecommendationMetricsTrendItem[]
+  service_breakdown: RecommendationMetricsServiceItem[]
+}
+
+export interface AIUsageMetricsTrendItem {
+  date: string
+  ai_call_total: number
+  ai_error_count: number
+  ai_success_count: number
+  ai_error_rate: number
+  ai_avg_latency_ms: number
+  ai_total_tokens: number
+  ai_total_cost: number
+}
+
+export interface AIUsageMetricsGroupItem {
+  service_key?: string
+  model?: string
+  provider_name?: string
+  ai_call_total: number
+  ai_error_count: number
+  ai_success_count: number
+  ai_error_rate: number
+  ai_avg_latency_ms: number
+  ai_total_tokens: number
+  ai_total_cost: number
+}
+
+export interface AIUsageMetricsResponse {
+  start_date: string
+  end_date: string
+  service_key: string
+  model: string
+  summary: {
+    ai_call_total: number
+    ai_error_count: number
+    ai_success_count: number
+    ai_error_rate: number
+    ai_avg_latency_ms: number
+    ai_total_tokens: number
+    ai_total_cost: number
+    ai_cost_per_call: number
+  }
+  trend: AIUsageMetricsTrendItem[]
+  service_breakdown: AIUsageMetricsGroupItem[]
+  model_breakdown: AIUsageMetricsGroupItem[]
+  provider_breakdown: AIUsageMetricsGroupItem[]
+  records_count: number
+}
+
 export interface ArtifactContentResponse {
   artifact: TaskArtifact
   filename: string
@@ -587,6 +685,13 @@ export const tasksApi = {
   getArtifactContent: (taskId: string, artifactId: string) =>
     apiClient.get(`${buildTaskArtifactPath(taskId, artifactId)}/content`),
   getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}${buildTaskArtifactPath(taskId, artifactId)}/download`,
+}
+
+export const metricsApi = {
+  getRecommendation: (params?: { start_date?: string; end_date?: string; service_key?: string }) =>
+    apiClient.get('/metrics/recommendation', { params }),
+  getAiUsage: (params?: { start_date?: string; end_date?: string; service_key?: string; model?: string; sync_daily?: boolean }) =>
+    apiClient.get('/metrics/ai-usage', { params }),
 }
 
 export const aiApi = {
