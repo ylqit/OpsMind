@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Col, Empty, List, Modal, Row, Space, Tag, Typography, message } from 'antd'
+import { Button, Card, Col, Empty, List, Modal, Row, Segmented, Space, Tag, Typography, message } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   incidentsApi,
@@ -31,6 +31,12 @@ interface DiffSummary {
   addedLines: number
   removedLines: number
   hunkCount: number
+}
+
+interface ArtifactGroup {
+  baseline?: TaskArtifact
+  recommended?: TaskArtifact
+  diff?: TaskArtifact
 }
 
 const artifactLabelMap: Record<string, string> = {
@@ -78,16 +84,53 @@ const buildDiffSummary = (content: string): DiffSummary => {
       hunkCount += 1
       continue
     }
-    if (line.startsWith('+')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
       addedLines += 1
       continue
     }
-    if (line.startsWith('-')) {
+    if (line.startsWith('-') && !line.startsWith('---')) {
       removedLines += 1
     }
   }
 
   return { fromFile, toFile, addedLines, removedLines, hunkCount }
+}
+
+const buildArtifactGroup = (artifacts: TaskArtifact[]): ArtifactGroup => {
+  const group: ArtifactGroup = {}
+  for (const artifact of artifacts) {
+    const filename = artifact.path.split(/[\\/]/).pop() || ''
+    if (artifact.kind === 'diff' && !group.diff) {
+      group.diff = artifact
+      continue
+    }
+    if (artifact.kind === 'manifest' && filename.includes('-baseline') && !group.baseline) {
+      group.baseline = artifact
+      continue
+    }
+    if (artifact.kind === 'manifest' && filename.includes('-recommended') && !group.recommended) {
+      group.recommended = artifact
+      continue
+    }
+    if (artifact.kind === 'manifest' && !group.recommended) {
+      group.recommended = artifact
+    }
+  }
+  if (!group.baseline && group.recommended) {
+    group.baseline = group.recommended
+  }
+  return group
+}
+
+const detectViewKey = (artifact: TaskArtifact): 'baseline' | 'recommended' | 'diff' => {
+  if (artifact.kind === 'diff') {
+    return 'diff'
+  }
+  const filename = artifact.path.split(/[\\/]/).pop() || ''
+  if (filename.includes('-baseline')) {
+    return 'baseline'
+  }
+  return 'recommended'
 }
 
 export const RecommendationCenter: React.FC = () => {
@@ -99,12 +142,17 @@ export const RecommendationCenter: React.FC = () => {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [selected, setSelected] = useState<IncidentDetailResponse | null>(null)
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [activeArtifactView, setActiveArtifactView] = useState<'baseline' | 'recommended' | 'diff'>('recommended')
   const initialQueryHandledRef = useRef(false)
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
   const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
+  const previewArtifactGroup = useMemo(
+    () => (preview && selected ? buildArtifactGroup(selected.recommendations.flatMap((item) => item.artifact_refs).filter((item) => item.task_id === preview.artifact.task_id)) : null),
+    [preview, selected],
+  )
 
   const updateRouteState = (incidentId?: string, artifact?: TaskArtifact | null) => {
     const nextParams = new URLSearchParams()
@@ -124,6 +172,7 @@ export const RecommendationCenter: React.FC = () => {
     try {
       const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
       setPreview({ artifact, content: response.content, filename: response.filename })
+      setActiveArtifactView(detectViewKey(artifact))
       updateRouteState(incidentId || selected?.incident.incident_id, artifact)
     } catch (error) {
       message.error(error instanceof Error ? error.message : '读取草稿失败')
@@ -131,6 +180,21 @@ export const RecommendationCenter: React.FC = () => {
       setPreviewLoading(false)
       setPreviewArtifactId('')
     }
+  }
+
+  const switchPreviewView = async (viewKey: string) => {
+    if (!previewArtifactGroup || !selected) {
+      return
+    }
+    const artifact = viewKey === 'baseline'
+      ? previewArtifactGroup.baseline
+      : viewKey === 'diff'
+        ? previewArtifactGroup.diff
+        : previewArtifactGroup.recommended
+    if (!artifact) {
+      return
+    }
+    await previewArtifact(artifact, selected.incident.incident_id)
   }
 
   const downloadArtifact = (artifact: TaskArtifact) => {
@@ -255,6 +319,12 @@ export const RecommendationCenter: React.FC = () => {
     </Space>
   )
 
+  const previewViewOptions = [
+    previewArtifactGroup?.baseline ? { label: '基线', value: 'baseline' } : null,
+    previewArtifactGroup?.recommended ? { label: '建议', value: 'recommended' } : null,
+    previewArtifactGroup?.diff ? { label: 'Diff', value: 'diff' } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string }>
+
   return (
     <div className="ops-page">
       <div className="ops-page__hero">
@@ -355,6 +425,11 @@ export const RecommendationCenter: React.FC = () => {
         ] : null}
         width={960}
       >
+        {preview && previewViewOptions.length > 1 ? (
+          <div style={{ marginBottom: 12 }}>
+            <Segmented block options={previewViewOptions} value={activeArtifactView} onChange={(value) => void switchPreviewView(String(value))} />
+          </div>
+        ) : null}
         {isDiffPreview && diffSummary ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="ops-diff-summary">
