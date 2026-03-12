@@ -185,6 +185,57 @@ class UsageMetricsDailyRecord(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class ExecutorPluginKey(str, Enum):
+    LINUX = "linux"
+    K8S = "k8s"
+    DOCKER = "docker"
+
+
+class ExecutorHealthStatus(str, Enum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    DISABLED = "disabled"
+
+
+class ExecutorRunStatus(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    REJECTED = "rejected"
+    CIRCUIT_OPEN = "circuit_open"
+
+
+class ExecutorPluginRecord(BaseModel):
+    plugin_key: str
+    display_name: str
+    description: str = ""
+    enabled: bool = True
+    readonly_only: bool = True
+    write_enabled: bool = False
+    failure_count: int = 0
+    circuit_open_until: Optional[datetime] = None
+    last_error: str = ""
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ExecutorAuditRecord(BaseModel):
+    execution_id: str = Field(default_factory=lambda: f"exec_{uuid4().hex[:12]}")
+    task_id: Optional[str] = None
+    plugin_key: str
+    command: str
+    readonly: bool = True
+    status: ExecutorRunStatus = ExecutorRunStatus.SUCCESS
+    exit_code: Optional[int] = None
+    stdout_preview: str = ""
+    stderr_preview: str = ""
+    duration_ms: int = 0
+    error_code: str = ""
+    error_message: str = ""
+    operator: str = "system"
+    approval_ticket: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Asset(BaseModel):
     asset_id: str = Field(default_factory=lambda: f"asset_{uuid4().hex[:12]}")
     asset_type: AssetType

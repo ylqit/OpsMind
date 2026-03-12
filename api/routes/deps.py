@@ -103,6 +103,11 @@ def get_refresh_llm_router_dep():
     return refresh_llm_router_from_db
 
 
+def get_executor_service_dep():
+    from main import executor_service
+    return executor_service
+
+
 def resolve_access_logs() -> List[str]:
     cfg = get_runtime_config()
     configured = [item for item in cfg.access_log_path_list if Path(item).exists()]

@@ -542,6 +542,59 @@ export interface LLMCallLogRecord {
   created_at: string
 }
 
+export type ExecutorHealthStatus = 'healthy' | 'degraded' | 'disabled'
+export type ExecutorRunStatus = 'success' | 'error' | 'timeout' | 'rejected' | 'circuit_open'
+
+export interface ExecutorPluginStatus {
+  plugin_key: string
+  display_name: string
+  description: string
+  enabled: boolean
+  readonly_only: boolean
+  write_enabled: boolean
+  failure_count: number
+  circuit_open_until: string | null
+  circuit_remaining_seconds: number
+  last_error: string
+  health_status: ExecutorHealthStatus
+  readonly_examples: string[]
+  write_examples: string[]
+  updated_at: string
+}
+
+export interface ExecutorAuditLog {
+  execution_id: string
+  task_id?: string | null
+  plugin_key: string
+  command: string
+  readonly: boolean
+  status: ExecutorRunStatus
+  exit_code: number | null
+  stdout_preview: string
+  stderr_preview: string
+  duration_ms: number
+  error_code: string
+  error_message: string
+  operator: string
+  approval_ticket: string
+  created_at: string
+}
+
+export interface ExecutorStatusResponse {
+  plugins: ExecutorPluginStatus[]
+  recent_logs: ExecutorAuditLog[]
+  summary: {
+    total: number
+    enabled: number
+    degraded: number
+  }
+}
+
+export interface ExecutorRunResponse {
+  execution: ExecutorAuditLog
+  plugin: ExecutorPluginStatus
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -692,6 +745,27 @@ export const metricsApi = {
     apiClient.get('/metrics/recommendation', { params }),
   getAiUsage: (params?: { start_date?: string; end_date?: string; service_key?: string; model?: string; sync_daily?: boolean }) =>
     apiClient.get('/metrics/ai-usage', { params }),
+}
+
+export const executorsApi = {
+  getStatus: (params?: { limit?: number }) => apiClient.get('/executors/status', { params }),
+  run: (payload: {
+    plugin_key: string
+    command: string
+    readonly?: boolean
+    timeout_seconds?: number
+    task_id?: string
+    operator?: string
+    approval_ticket?: string
+  }) => apiClient.post('/executors/run', payload),
+  patchPlugin: (
+    pluginKey: string,
+    payload: {
+      enabled?: boolean
+      write_enabled?: boolean
+      approval_ticket?: string
+    },
+  ) => apiClient.patch(`/executors/plugins/${encodePathSegment(pluginKey)}`, payload),
 }
 
 export const aiApi = {

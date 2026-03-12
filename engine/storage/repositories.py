@@ -14,6 +14,8 @@ from engine.runtime.models import (
     AIProviderConfigRecord,
     ArtifactRef,
     Asset,
+    ExecutorAuditRecord,
+    ExecutorPluginRecord,
     Incident,
     Recommendation,
     RecommendationFeedback,
@@ -833,3 +835,159 @@ class AIProviderConfigRepository:
             if fallback:
                 self.set_default(str(fallback["provider_id"]))
         return True
+
+
+class ExecutorPluginRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    @staticmethod
+    def _from_row(row) -> ExecutorPluginRecord:
+        return ExecutorPluginRecord(
+            plugin_key=row["plugin_key"],
+            display_name=row["display_name"],
+            description=row["description"] or "",
+            enabled=bool(row["enabled"]),
+            readonly_only=bool(row["readonly_only"]),
+            write_enabled=bool(row["write_enabled"]),
+            failure_count=int(row["failure_count"] or 0),
+            circuit_open_until=_parse_dt(row["circuit_open_until"]),
+            last_error=row["last_error"] or "",
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def list(self) -> List[ExecutorPluginRecord]:
+        rows = self.db.fetchall("SELECT * FROM executor_plugins ORDER BY plugin_key ASC")
+        return [self._from_row(row) for row in rows]
+
+    def get(self, plugin_key: str) -> Optional[ExecutorPluginRecord]:
+        row = self.db.fetchone("SELECT * FROM executor_plugins WHERE plugin_key = ?", (plugin_key,))
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def save(self, record: ExecutorPluginRecord) -> ExecutorPluginRecord:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO executor_plugins (
+                plugin_key, display_name, description, enabled, readonly_only,
+                write_enabled, failure_count, circuit_open_until, last_error, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.plugin_key,
+                record.display_name,
+                record.description,
+                1 if record.enabled else 0,
+                1 if record.readonly_only else 0,
+                1 if record.write_enabled else 0,
+                record.failure_count,
+                record.circuit_open_until.isoformat() if record.circuit_open_until else None,
+                record.last_error,
+                record.updated_at.isoformat(),
+            ),
+        )
+        latest = self.get(record.plugin_key)
+        return latest if latest else record
+
+    def ensure_seed(self, defaults: List[ExecutorPluginRecord]) -> None:
+        for item in defaults:
+            current = self.get(item.plugin_key)
+            if current:
+                continue
+            self.save(item)
+
+    def update(self, plugin_key: str, updates: dict[str, Any]) -> Optional[ExecutorPluginRecord]:
+        current = self.get(plugin_key)
+        if not current:
+            return None
+        merged = current.model_copy(update=updates)
+        merged.updated_at = datetime.utcnow()
+        return self.save(merged)
+
+
+class ExecutorAuditLogRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    @staticmethod
+    def _from_row(row) -> ExecutorAuditRecord:
+        return ExecutorAuditRecord(
+            execution_id=row["execution_id"],
+            task_id=row["task_id"],
+            plugin_key=row["plugin_key"],
+            command=row["command"],
+            readonly=bool(row["readonly"]),
+            status=row["status"],
+            exit_code=row["exit_code"],
+            stdout_preview=row["stdout_preview"] or "",
+            stderr_preview=row["stderr_preview"] or "",
+            duration_ms=int(row["duration_ms"] or 0),
+            error_code=row["error_code"] or "",
+            error_message=row["error_message"] or "",
+            operator=row["operator"] or "system",
+            approval_ticket=row["approval_ticket"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def save(self, item: ExecutorAuditRecord) -> ExecutorAuditRecord:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO executor_audit_logs (
+                execution_id, task_id, plugin_key, command, readonly,
+                status, exit_code, stdout_preview, stderr_preview, duration_ms,
+                error_code, error_message, operator, approval_ticket, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.execution_id,
+                item.task_id,
+                item.plugin_key,
+                item.command,
+                1 if item.readonly else 0,
+                item.status.value,
+                item.exit_code,
+                item.stdout_preview,
+                item.stderr_preview,
+                item.duration_ms,
+                item.error_code,
+                item.error_message,
+                item.operator,
+                item.approval_ticket,
+                item.created_at.isoformat(),
+            ),
+        )
+        latest = self.get(item.execution_id)
+        return latest if latest else item
+
+    def get(self, execution_id: str) -> Optional[ExecutorAuditRecord]:
+        row = self.db.fetchone(
+            "SELECT * FROM executor_audit_logs WHERE execution_id = ?",
+            (execution_id,),
+        )
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def list(
+        self,
+        limit: int = 100,
+        plugin_key: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> List[ExecutorAuditRecord]:
+        safe_limit = max(1, min(limit, 500))
+        clauses = []
+        params: List[Any] = []
+        if plugin_key:
+            clauses.append("plugin_key = ?")
+            params.append(plugin_key)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self.db.fetchall(
+            f"SELECT * FROM executor_audit_logs {where_clause} ORDER BY created_at DESC LIMIT ?",
+            [*params, safe_limit],
+        )
+        return [self._from_row(row) for row in rows]

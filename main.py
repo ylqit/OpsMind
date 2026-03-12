@@ -37,6 +37,7 @@ from engine.domain.recommendation_service import RecommendationService
 from engine.domain.signal_service import SignalService
 from engine.llm.client import LLMClient, LLMRouter
 from engine.llm.config import LLMProviderConfig, LLMProviderType, get_llm_config_manager
+from engine.operations.executor_service import ExecutorService
 from engine.operations.incident_reporter import IncidentReporter
 from engine.operations.skill_orchestrator import SkillOrchestrator
 from engine.runtime.artifact_store import ArtifactStore
@@ -56,6 +57,8 @@ from engine.storage.repositories import (
     SignalRepository,
     TaskRepository,
     UsageMetricsDailyRepository,
+    ExecutorAuditLogRepository,
+    ExecutorPluginRepository,
 )
 from engine.storage.sqlite import SQLiteDatabase
 from engine.tasks import BackgroundTaskManager
@@ -86,6 +89,7 @@ usage_metrics_daily_repository: UsageMetricsDailyRepository | None = None
 llm_config_manager_instance = None
 llm_router_instance: LLMRouter | None = None
 ai_provider_config_repository: AIProviderConfigRepository | None = None
+executor_service: ExecutorService | None = None
 
 
 def _record_llm_call(payload: dict[str, Any]) -> None:
@@ -255,6 +259,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global runtime_db, event_bus, task_manager, asset_service, signal_service
     global incident_service, recommendation_service, traffic_analytics_engine, resource_analytics_engine, summary_builder, data_sources_status
     global ai_call_log_repository, recommendation_feedback_repository, usage_metrics_daily_repository, ai_provider_config_repository, llm_config_manager_instance, llm_router_instance
+    global executor_service
 
     logger.info("正在启动 opsMind")
     config = RuntimeConfig.load_from_env()
@@ -278,6 +283,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ai_call_log_repository = AICallLogRepository(runtime_db)
     usage_metrics_daily_repository = UsageMetricsDailyRepository(runtime_db)
     ai_provider_config_repository = AIProviderConfigRepository(runtime_db)
+    executor_plugin_repository = ExecutorPluginRepository(runtime_db)
+    executor_audit_log_repository = ExecutorAuditLogRepository(runtime_db)
 
     _seed_provider_configs_if_needed(ai_provider_config_repository, llm_config)
     llm_router = _build_llm_router_from_provider_configs(ai_provider_config_repository)
@@ -308,6 +315,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     resource_analytics_engine = ResourceAnalyticsEngine(config.docker_host, config.prometheus_url, config.prometheus_api_key)
     summary_builder = SummaryBuilder()
     data_sources_status = _build_data_sources_status(config)
+    executor_service = ExecutorService(executor_plugin_repository, executor_audit_log_repository)
 
     app.state.runtime_config = config
     app.state.capability_registry = capability_registry
@@ -327,6 +335,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.ai_provider_config_repository = ai_provider_config_repository
     app.state.llm_config_manager = llm_config_manager_instance
     app.state.llm_router = llm_router_instance
+    app.state.executor_service = executor_service
 
     websocket.bind_event_bus(event_bus)
     background_task_manager = BackgroundTaskManager(alert_store)

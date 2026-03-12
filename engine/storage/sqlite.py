@@ -174,6 +174,37 @@ class SQLiteDatabase:
                 PRIMARY KEY (metric_date, service_key, model, provider_name)
             );
 
+            CREATE TABLE IF NOT EXISTS executor_plugins (
+                plugin_key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                readonly_only INTEGER NOT NULL,
+                write_enabled INTEGER NOT NULL,
+                failure_count INTEGER NOT NULL,
+                circuit_open_until TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS executor_audit_logs (
+                execution_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                plugin_key TEXT NOT NULL,
+                command TEXT NOT NULL,
+                readonly INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                stdout_preview TEXT,
+                stderr_preview TEXT,
+                duration_ms INTEGER NOT NULL,
+                error_code TEXT,
+                error_message TEXT,
+                operator TEXT NOT NULL,
+                approval_ticket TEXT,
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_recommendation ON recommendation_feedback(recommendation_id);
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_incident ON recommendation_feedback(incident_id);
             CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_created_at ON recommendation_feedback(created_at DESC);
@@ -183,6 +214,10 @@ class SQLiteDatabase:
             CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_default ON ai_provider_configs(is_default);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_service ON usage_metrics_daily(service_key);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_model ON usage_metrics_daily(model);
+
+            CREATE INDEX IF NOT EXISTS idx_executor_audit_logs_plugin ON executor_audit_logs(plugin_key);
+            CREATE INDEX IF NOT EXISTS idx_executor_audit_logs_created_at ON executor_audit_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_executor_audit_logs_status ON executor_audit_logs(status);
             """
         )
         self._ensure_column('tasks', 'approval_json', 'TEXT')

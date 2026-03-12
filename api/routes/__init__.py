@@ -3,6 +3,7 @@ from fastapi import APIRouter
 
 from .ai import router as ai_router
 from .dashboard import report_router, router as dashboard_router
+from .executors import router as executors_router
 from .incidents import router as incidents_router
 from .llm import router as llm_router
 from .metrics import router as metrics_router
@@ -22,3 +23,4 @@ router.include_router(recommendations_router)
 router.include_router(tasks_router)
 router.include_router(metrics_router)
 router.include_router(llm_router)
+router.include_router(executors_router)
