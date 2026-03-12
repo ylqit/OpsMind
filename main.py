@@ -36,17 +36,18 @@ from engine.domain.incident_service import IncidentService
 from engine.domain.recommendation_service import RecommendationService
 from engine.domain.signal_service import SignalService
 from engine.llm.client import LLMClient, LLMRouter
-from engine.llm.config import get_llm_config_manager
+from engine.llm.config import LLMProviderConfig, LLMProviderType, get_llm_config_manager
 from engine.operations.incident_reporter import IncidentReporter
 from engine.operations.skill_orchestrator import SkillOrchestrator
 from engine.runtime.artifact_store import ArtifactStore
 from engine.runtime.event_bus import EventBus
-from engine.runtime.models import AICallLog
+from engine.runtime.models import AICallLog, AIProviderConfigRecord
 from engine.runtime.task_manager import TaskManager
 from engine.runtime.trace_store import TraceStore
 from engine.storage.alert_store import AlertStore
 from engine.storage.repositories import (
     AICallLogRepository,
+    AIProviderConfigRepository,
     ArtifactRepository,
     AssetRepository,
     IncidentRepository,
@@ -80,6 +81,116 @@ data_sources_status: dict[str, Any] = {}
 ai_call_log_repository: AICallLogRepository | None = None
 llm_config_manager_instance = None
 llm_router_instance: LLMRouter | None = None
+ai_provider_config_repository: AIProviderConfigRepository | None = None
+
+
+def _record_llm_call(payload: dict[str, Any]) -> None:
+    """记录 LLM 调用日志，失败时不影响主流程。"""
+    if not ai_call_log_repository:
+        return
+
+    status = str(payload.get("status") or "success").lower()
+    ai_call_log_repository.save(
+        AICallLog(
+            provider_name=str(payload.get("provider_name") or "unknown"),
+            model=str(payload.get("model") or "unknown"),
+            source=str(payload.get("source") or "runtime"),
+            endpoint=str(payload.get("endpoint") or "chat"),
+            task_id=str(payload.get("task_id")) if payload.get("task_id") else None,
+            prompt_preview=str(payload.get("prompt_preview") or "")[:200],
+            response_preview=str(payload.get("response_preview") or "")[:200],
+            status="error" if status == "error" else "success",
+            error_code=str(payload.get("error_code") or "")[:120],
+            error_message=str(payload.get("error_message") or "")[:500],
+            latency_ms=max(0, int(payload.get("latency_ms") or 0)),
+            request_tokens=int(payload["request_tokens"]) if payload.get("request_tokens") is not None else None,
+            response_tokens=int(payload["response_tokens"]) if payload.get("response_tokens") is not None else None,
+        )
+    )
+
+
+def _seed_provider_configs_if_needed(provider_repository: AIProviderConfigRepository, llm_config) -> None:
+    """数据库为空时，用现有配置文件初始化 Provider 配置。"""
+    if provider_repository.count() > 0:
+        return
+
+    seed_records: list[AIProviderConfigRecord] = []
+    for provider in llm_config.providers:
+        seed_records.append(
+            AIProviderConfigRecord(
+                name=provider.name,
+                provider_type=provider.provider_type.value,
+                model=provider.model,
+                base_url=provider.base_url,
+                api_key=provider.api_key,
+                enabled=provider.enabled,
+                is_default=provider.name == llm_config.default_provider,
+                timeout=provider.timeout,
+                max_retries=provider.max_retries,
+            )
+        )
+
+    if not seed_records:
+        return
+
+    if not any(item.is_default and item.enabled for item in seed_records):
+        first_enabled = next((item for item in seed_records if item.enabled), None)
+        if first_enabled:
+            first_enabled.is_default = True
+
+    for item in seed_records:
+        provider_repository.save(item)
+
+
+def _build_llm_router_from_provider_configs(provider_repository: AIProviderConfigRepository) -> LLMRouter | None:
+    """根据数据库中的 Provider 配置构建路由器。"""
+    provider_records = provider_repository.list(enabled_only=True)
+    if not provider_records:
+        return None
+
+    clients: dict[str, LLMClient] = {}
+    default_provider_name: str | None = None
+
+    for record in provider_records:
+        try:
+            provider_type = LLMProviderType(record.provider_type)
+        except ValueError:
+            logger.warning("忽略未知 Provider 类型: %s", record.provider_type)
+            continue
+
+        provider_config = LLMProviderConfig(
+            name=record.name,
+            provider_type=provider_type,
+            api_key=record.api_key,
+            base_url=record.base_url,
+            model=record.model,
+            enabled=record.enabled,
+            timeout=record.timeout,
+            max_retries=record.max_retries,
+        )
+        clients[record.name] = LLMClient(provider_config)
+        if record.is_default:
+            default_provider_name = record.name
+
+    if not clients:
+        return None
+
+    if not default_provider_name or default_provider_name not in clients:
+        default_provider_name = next(iter(clients.keys()))
+
+    return LLMRouter(clients, default_provider_name, call_observer=_record_llm_call)
+
+
+def refresh_llm_router_from_db() -> LLMRouter | None:
+    """热刷新内存中的 LLM Router。"""
+    global llm_router_instance
+    if not ai_provider_config_repository:
+        return llm_router_instance
+
+    llm_router_instance = _build_llm_router_from_provider_configs(ai_provider_config_repository)
+    if "app" in globals():
+        app.state.llm_router = llm_router_instance
+    return llm_router_instance
 
 
 def _build_data_sources_status(runtime_config: RuntimeConfig) -> dict[str, Any]:
@@ -139,7 +250,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global config, capability_registry, alert_store, background_task_manager, alert_notifier
     global runtime_db, event_bus, task_manager, asset_service, signal_service
     global incident_service, recommendation_service, traffic_analytics_engine, resource_analytics_engine, summary_builder, data_sources_status
-    global ai_call_log_repository, llm_config_manager_instance, llm_router_instance
+    global ai_call_log_repository, ai_provider_config_repository, llm_config_manager_instance, llm_router_instance
 
     logger.info("正在启动 opsMind")
     config = RuntimeConfig.load_from_env()
@@ -149,18 +260,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     llm_config_manager = get_llm_config_manager(config.config_dir or Path("config"))
     llm_config = llm_config_manager.load_config()
-    llm_clients = {
-        provider_config.name: LLMClient(provider_config)
-        for provider_config in llm_config.get_enabled_providers()
-    }
-    llm_router = LLMRouter(llm_clients, llm_config.default_provider) if llm_clients else None
     llm_config_manager_instance = llm_config_manager
-    llm_router_instance = llm_router
-
-    capability_registry = CapabilityRegistry()
-    alert_store = AlertStore((config.data_dir or config.base_dir / "data") / "alerts")
-    await alert_store.initialize()
-    _register_capabilities(capability_registry, alert_store, llm_router)
 
     runtime_db = SQLiteDatabase(config.sqlite_path or (config.data_dir or config.base_dir / "data") / "opsmind.db")
     runtime_db.initialize()
@@ -171,31 +271,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     incident_repository = IncidentRepository(runtime_db)
     recommendation_repository = RecommendationRepository(runtime_db)
     ai_call_log_repository = AICallLogRepository(runtime_db)
+    ai_provider_config_repository = AIProviderConfigRepository(runtime_db)
 
-    def _record_llm_call(payload: dict[str, Any]) -> None:
-        if not ai_call_log_repository:
-            return
-        status = str(payload.get("status") or "success").lower()
-        ai_call_log_repository.save(
-            AICallLog(
-                provider_name=str(payload.get("provider_name") or "unknown"),
-                model=str(payload.get("model") or "unknown"),
-                source=str(payload.get("source") or "runtime"),
-                endpoint=str(payload.get("endpoint") or "chat"),
-                task_id=str(payload.get("task_id")) if payload.get("task_id") else None,
-                prompt_preview=str(payload.get("prompt_preview") or "")[:200],
-                response_preview=str(payload.get("response_preview") or "")[:200],
-                status="error" if status == "error" else "success",
-                error_code=str(payload.get("error_code") or "")[:120],
-                error_message=str(payload.get("error_message") or "")[:500],
-                latency_ms=max(0, int(payload.get("latency_ms") or 0)),
-                request_tokens=int(payload["request_tokens"]) if payload.get("request_tokens") is not None else None,
-                response_tokens=int(payload["response_tokens"]) if payload.get("response_tokens") is not None else None,
-            )
-        )
+    _seed_provider_configs_if_needed(ai_provider_config_repository, llm_config)
+    llm_router = _build_llm_router_from_provider_configs(ai_provider_config_repository)
+    if not llm_router:
+        # 兼容旧配置文件路径：数据库没有可用配置时，仍可从 llm_config.yaml 启动。
+        llm_clients = {
+            provider_config.name: LLMClient(provider_config)
+            for provider_config in llm_config.get_enabled_providers()
+        }
+        llm_router = LLMRouter(llm_clients, llm_config.default_provider, call_observer=_record_llm_call) if llm_clients else None
+    llm_router_instance = llm_router
 
-    if llm_router:
-        llm_router.call_observer = _record_llm_call
+    capability_registry = CapabilityRegistry()
+    alert_store = AlertStore((config.data_dir or config.base_dir / "data") / "alerts")
+    await alert_store.initialize()
+    _register_capabilities(capability_registry, alert_store, llm_router)
 
     event_bus = EventBus()
     trace_store = TraceStore(config.tasks_dir or (config.data_dir or config.base_dir / "data") / "tasks")
@@ -224,6 +316,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.summary_builder = summary_builder
     app.state.data_sources_status = data_sources_status
     app.state.ai_call_log_repository = ai_call_log_repository
+    app.state.ai_provider_config_repository = ai_provider_config_repository
     app.state.llm_config_manager = llm_config_manager_instance
     app.state.llm_router = llm_router_instance
 

@@ -83,6 +83,16 @@ def get_llm_router_dep():
     return llm_router_instance
 
 
+def get_ai_provider_config_repository_dep():
+    from main import ai_provider_config_repository
+    return ai_provider_config_repository
+
+
+def get_refresh_llm_router_dep():
+    from main import refresh_llm_router_from_db
+    return refresh_llm_router_from_db
+
+
 def resolve_access_logs() -> List[str]:
     cfg = get_runtime_config()
     configured = [item for item in cfg.access_log_path_list if Path(item).exists()]

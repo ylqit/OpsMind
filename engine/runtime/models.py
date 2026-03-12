@@ -138,6 +138,21 @@ class AICallLogStatus(str, Enum):
     ERROR = "error"
 
 
+class AIProviderConfigRecord(BaseModel):
+    provider_id: str = Field(default_factory=lambda: f"provider_{uuid4().hex[:12]}")
+    name: str
+    provider_type: str
+    model: str
+    base_url: Optional[str] = None
+    api_key: str = ""
+    enabled: bool = True
+    is_default: bool = False
+    timeout: int = 30
+    max_retries: int = 2
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AICallLog(BaseModel):
     call_id: str = Field(default_factory=lambda: f"llm_call_{uuid4().hex[:12]}")
     provider_name: str

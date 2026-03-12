@@ -342,11 +342,13 @@ export interface ArtifactContentResponse {
 }
 
 export interface LLMProviderRecord {
+  provider_id?: string
   name: string
   type: string
   model: string
   base_url?: string | null
   enabled: boolean
+  is_default?: boolean
   timeout: number
   max_retries: number
   api_key_configured: boolean
@@ -511,7 +513,35 @@ export const aiApi = {
     max_tokens?: number
     task_id?: string
   }) => apiClient.post('/ai/chat', payload),
-  testProvider: (payload: { provider_name?: string; message?: string }) => apiClient.post('/ai/providers/test', payload),
+  testProvider: (payload: { provider_id?: string; provider_name?: string; message?: string }) =>
+    apiClient.post('/ai/providers/test', payload),
+  listProviders: () => apiClient.get('/ai/providers'),
+  createProvider: (payload: {
+    name: string
+    type: string
+    api_key?: string
+    model: string
+    base_url?: string
+    enabled?: boolean
+    is_default?: boolean
+    timeout?: number
+    max_retries?: number
+  }) => apiClient.post('/ai/providers', payload),
+  updateProvider: (
+    providerId: string,
+    payload: {
+      name?: string
+      type?: string
+      api_key?: string
+      model?: string
+      base_url?: string
+      enabled?: boolean
+      is_default?: boolean
+      timeout?: number
+      max_retries?: number
+    },
+  ) => apiClient.patch(`/ai/providers/${encodePathSegment(providerId)}`, payload),
+  deleteProvider: (providerId: string) => apiClient.delete(`/ai/providers/${encodePathSegment(providerId)}`),
 }
 
 export const llmApi = {

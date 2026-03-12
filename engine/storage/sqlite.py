@@ -132,12 +132,29 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_provider_configs (
+                provider_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                provider_type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                base_url TEXT,
+                api_key TEXT,
+                enabled INTEGER NOT NULL,
+                is_default INTEGER NOT NULL,
+                timeout INTEGER NOT NULL,
+                max_retries INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created_at ON ai_call_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_provider ON ai_call_logs(provider_name);
+            CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_default ON ai_provider_configs(is_default);
             """
         )
         self._ensure_column('tasks', 'approval_json', 'TEXT')
         self._ensure_column('ai_call_logs', 'error_code', 'TEXT')
+        self._ensure_column('ai_provider_configs', 'is_default', 'INTEGER NOT NULL DEFAULT 0')
         self.connection.commit()
 
     def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:

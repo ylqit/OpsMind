@@ -9,7 +9,18 @@ import json
 from datetime import datetime
 from typing import Any, List, Optional
 
-from engine.runtime.models import AICallLog, ArtifactRef, Asset, Incident, Recommendation, Signal, TaskApproval, TaskError, TaskRecord
+from engine.runtime.models import (
+    AICallLog,
+    AIProviderConfigRecord,
+    ArtifactRef,
+    Asset,
+    Incident,
+    Recommendation,
+    Signal,
+    TaskApproval,
+    TaskError,
+    TaskRecord,
+)
 
 from .sqlite import SQLiteDatabase
 
@@ -447,3 +458,122 @@ class AICallLogRepository:
             )
             for row in rows
         ]
+
+
+class AIProviderConfigRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    @staticmethod
+    def _from_row(row) -> AIProviderConfigRecord:
+        return AIProviderConfigRecord(
+            provider_id=row["provider_id"],
+            name=row["name"],
+            provider_type=row["provider_type"],
+            model=row["model"],
+            base_url=row["base_url"],
+            api_key=row["api_key"] or "",
+            enabled=bool(row["enabled"]),
+            is_default=bool(row["is_default"]),
+            timeout=row["timeout"],
+            max_retries=row["max_retries"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def count(self) -> int:
+        row = self.db.fetchone("SELECT COUNT(1) AS count FROM ai_provider_configs")
+        return int(row["count"]) if row else 0
+
+    def get(self, provider_id: str) -> Optional[AIProviderConfigRecord]:
+        row = self.db.fetchone("SELECT * FROM ai_provider_configs WHERE provider_id = ?", (provider_id,))
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def get_by_name(self, name: str) -> Optional[AIProviderConfigRecord]:
+        row = self.db.fetchone("SELECT * FROM ai_provider_configs WHERE name = ?", (name,))
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def get_default(self) -> Optional[AIProviderConfigRecord]:
+        row = self.db.fetchone(
+            "SELECT * FROM ai_provider_configs WHERE is_default = 1 ORDER BY updated_at DESC LIMIT 1"
+        )
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def list(self, enabled_only: bool = False) -> List[AIProviderConfigRecord]:
+        where_clause = "WHERE enabled = 1" if enabled_only else ""
+        rows = self.db.fetchall(
+            f"SELECT * FROM ai_provider_configs {where_clause} ORDER BY is_default DESC, name ASC"
+        )
+        return [self._from_row(row) for row in rows]
+
+    def save(self, record: AIProviderConfigRecord) -> AIProviderConfigRecord:
+        now = datetime.utcnow().isoformat()
+        is_default = 1 if record.is_default else 0
+        if is_default:
+            self.db.execute("UPDATE ai_provider_configs SET is_default = 0")
+
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO ai_provider_configs (
+                provider_id, name, provider_type, model, base_url, api_key,
+                enabled, is_default, timeout, max_retries, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.provider_id,
+                record.name,
+                record.provider_type,
+                record.model,
+                record.base_url,
+                record.api_key,
+                1 if record.enabled else 0,
+                is_default,
+                record.timeout,
+                record.max_retries,
+                record.created_at.isoformat(),
+                now,
+            ),
+        )
+        latest = self.get(record.provider_id)
+        return latest if latest else record
+
+    def update(self, provider_id: str, updates: dict[str, Any]) -> Optional[AIProviderConfigRecord]:
+        current = self.get(provider_id)
+        if not current:
+            return None
+
+        merged = current.model_copy(update=updates)
+        merged.updated_at = datetime.utcnow()
+        return self.save(merged)
+
+    def set_default(self, provider_id: str) -> Optional[AIProviderConfigRecord]:
+        current = self.get(provider_id)
+        if not current:
+            return None
+        if not current.enabled:
+            return None
+        self.db.execute("UPDATE ai_provider_configs SET is_default = 0")
+        self.db.execute(
+            "UPDATE ai_provider_configs SET is_default = 1, updated_at = ? WHERE provider_id = ?",
+            (datetime.utcnow().isoformat(), provider_id),
+        )
+        return self.get(provider_id)
+
+    def delete(self, provider_id: str) -> bool:
+        current = self.get(provider_id)
+        if not current:
+            return False
+        self.db.execute("DELETE FROM ai_provider_configs WHERE provider_id = ?", (provider_id,))
+        if current.is_default:
+            fallback = self.db.fetchone(
+                "SELECT provider_id FROM ai_provider_configs WHERE enabled = 1 ORDER BY updated_at DESC LIMIT 1"
+            )
+            if fallback:
+                self.set_default(str(fallback["provider_id"]))
+        return True
