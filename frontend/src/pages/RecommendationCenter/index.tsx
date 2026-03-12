@@ -39,12 +39,22 @@ interface ArtifactGroup {
   diff?: TaskArtifact
 }
 
+interface BundleArtifactContent {
+  artifact: TaskArtifact
+  filename: string
+  content: string
+}
+
 const artifactLabelMap: Record<string, string> = {
   manifest: 'YAML 草稿',
   diff: '变更差异',
   report: '报告文件',
   json: 'JSON 结果',
   text: '文本内容',
+}
+
+const getArtifactFilename = (artifact: TaskArtifact) => {
+  return artifact.path.split(/[\\/]/).pop() || `${artifact.artifact_id}.txt`
 }
 
 const getDiffLineClassName = (line: string) => {
@@ -100,7 +110,7 @@ const buildDiffSummary = (content: string): DiffSummary => {
 const buildArtifactGroup = (artifacts: TaskArtifact[]): ArtifactGroup => {
   const group: ArtifactGroup = {}
   for (const artifact of artifacts) {
-    const filename = artifact.path.split(/[\\/]/).pop() || ''
+    const filename = getArtifactFilename(artifact)
     if (artifact.kind === 'diff' && !group.diff) {
       group.diff = artifact
       continue
@@ -127,7 +137,7 @@ const detectViewKey = (artifact: TaskArtifact): 'baseline' | 'recommended' | 'di
   if (artifact.kind === 'diff') {
     return 'diff'
   }
-  const filename = artifact.path.split(/[\\/]/).pop() || ''
+  const filename = getArtifactFilename(artifact)
   if (filename.includes('-baseline')) {
     return 'baseline'
   }
@@ -151,6 +161,94 @@ const findRecommendationByArtifact = (
   )
 }
 
+// 导出与复制时保持稳定顺序：建议稿 -> 基线 -> diff -> 其他产物。
+const buildBundleArtifacts = (recommendation: RecommendationRecord): TaskArtifact[] => {
+  const group = buildArtifactGroup(recommendation.artifact_refs)
+  const preferred = [group.recommended, group.baseline, group.diff].filter(Boolean) as TaskArtifact[]
+  const seen = new Set<string>()
+  const merged: TaskArtifact[] = []
+  for (const artifact of [...preferred, ...recommendation.artifact_refs]) {
+    if (seen.has(artifact.artifact_id)) {
+      continue
+    }
+    seen.add(artifact.artifact_id)
+    merged.push(artifact)
+  }
+  return merged
+}
+
+const getFenceLanguage = (artifact: TaskArtifact) => {
+  if (artifact.kind === 'manifest') {
+    return 'yaml'
+  }
+  if (artifact.kind === 'diff') {
+    return 'diff'
+  }
+  return 'text'
+}
+
+const downloadTextFile = (filename: string, content: string, mimeType: string = 'text/plain;charset=utf-8') => {
+  const blob = new Blob([content], { type: mimeType })
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+// 兼容浏览器权限限制，clipboard 不可用时回退到 execCommand。
+const copyTextSafely = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) {
+    throw new Error('当前浏览器不支持复制，请手动复制')
+  }
+}
+
+const buildBundleMarkdown = (
+  recommendation: RecommendationRecord,
+  incident: IncidentRecord | undefined,
+  bundleItems: BundleArtifactContent[],
+) => {
+  const exportedAt = new Date().toLocaleString('zh-CN', { hour12: false })
+  const lines: string[] = [
+    '# opsMind 建议草稿导出',
+    '',
+    `- 导出时间: ${exportedAt}`,
+    `- incident_id: ${recommendation.incident_id}`,
+    `- recommendation_id: ${recommendation.recommendation_id}`,
+    `- 建议类型: ${recommendation.kind}`,
+    `- 服务键: ${incident?.service_key || '-'}`,
+    `- 说明: ${recommendation.recommendation}`,
+    '',
+  ]
+
+  bundleItems.forEach((item, index) => {
+    lines.push(`## ${index + 1}. ${(artifactLabelMap[item.artifact.kind] || item.artifact.kind)} · ${item.filename}`)
+    lines.push('')
+    lines.push('```' + getFenceLanguage(item.artifact))
+    lines.push(item.content)
+    lines.push('```')
+    lines.push('')
+  })
+
+  return lines.join('\n')
+}
+
 export const RecommendationCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
@@ -162,6 +260,10 @@ export const RecommendationCenter: React.FC = () => {
   const [preview, setPreview] = useState<PreviewState | null>(null)
   const [activeArtifactView, setActiveArtifactView] = useState<'baseline' | 'recommended' | 'diff'>('recommended')
   const [activeRecommendationId, setActiveRecommendationId] = useState<string>('')
+  const [previewCopying, setPreviewCopying] = useState(false)
+  const [artifactCopyingId, setArtifactCopyingId] = useState('')
+  const [bundleCopyingId, setBundleCopyingId] = useState('')
+  const [bundleExportingId, setBundleExportingId] = useState('')
 
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const activeRecommendation = useMemo(
@@ -235,31 +337,88 @@ export const RecommendationCenter: React.FC = () => {
     const url = tasksApi.getArtifactDownloadUrl(artifact.task_id, artifact.artifact_id)
     const link = document.createElement('a')
     link.href = url
-    link.download = artifact.path.split(/[\\/]/).pop() || `${artifact.artifact_id}.txt`
+    link.download = getArtifactFilename(artifact)
     document.body.appendChild(link)
     link.click()
     link.remove()
+  }
+
+  const loadBundleContents = async (recommendation: RecommendationRecord): Promise<BundleArtifactContent[]> => {
+    const artifacts = buildBundleArtifacts(recommendation)
+    const results = await Promise.all(
+      artifacts.map(async (artifact) => {
+        const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
+        return {
+          artifact,
+          filename: response.filename,
+          content: response.content,
+        }
+      }),
+    )
+    return results
+  }
+
+  const copyRecommendationBundle = async (recommendation: RecommendationRecord) => {
+    if (!recommendation.artifact_refs.length) {
+      message.warning('当前建议没有可复制的草稿')
+      return
+    }
+    setBundleCopyingId(recommendation.recommendation_id)
+    try {
+      const bundleItems = await loadBundleContents(recommendation)
+      const bundleContent = buildBundleMarkdown(recommendation, selected?.incident, bundleItems)
+      await copyTextSafely(bundleContent)
+      message.success(`整套草稿已复制（${bundleItems.length} 份产物）`)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '复制整套草稿失败')
+    } finally {
+      setBundleCopyingId('')
+    }
+  }
+
+  const exportRecommendationBundle = async (recommendation: RecommendationRecord) => {
+    if (!recommendation.artifact_refs.length) {
+      message.warning('当前建议没有可导出的草稿')
+      return
+    }
+    setBundleExportingId(recommendation.recommendation_id)
+    try {
+      const bundleItems = await loadBundleContents(recommendation)
+      const bundleContent = buildBundleMarkdown(recommendation, selected?.incident, bundleItems)
+      downloadTextFile(`recommendation-${recommendation.recommendation_id}.md`, bundleContent, 'text/markdown;charset=utf-8')
+      message.success(`整套草稿已导出（${bundleItems.length} 份产物）`)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '导出整套草稿失败')
+    } finally {
+      setBundleExportingId('')
+    }
   }
 
   const copyPreviewContent = async () => {
     if (!preview) {
       return
     }
+    setPreviewCopying(true)
     try {
-      await navigator.clipboard.writeText(preview.content)
+      await copyTextSafely(preview.content)
       message.success(preview.artifact.kind === 'manifest' ? 'YAML 已复制' : '内容已复制')
     } catch (error) {
       message.error(error instanceof Error ? error.message : '复制失败')
+    } finally {
+      setPreviewCopying(false)
     }
   }
 
   const copyArtifactContent = async (artifact: TaskArtifact) => {
+    setArtifactCopyingId(artifact.artifact_id)
     try {
       const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
-      await navigator.clipboard.writeText(response.content)
+      await copyTextSafely(response.content)
       message.success(artifact.kind === 'manifest' ? 'YAML 已复制' : '内容已复制')
     } catch (error) {
       message.error(error instanceof Error ? error.message : '复制失败')
+    } finally {
+      setArtifactCopyingId('')
     }
   }
 
@@ -369,7 +528,7 @@ export const RecommendationCenter: React.FC = () => {
         打开工作区
       </Button>
       {artifact.kind === 'manifest' ? (
-        <Button size="small" onClick={() => void copyArtifactContent(artifact)}>
+        <Button size="small" loading={artifactCopyingId === artifact.artifact_id} onClick={() => void copyArtifactContent(artifact)}>
           复制 YAML
         </Button>
       ) : null}
@@ -442,9 +601,27 @@ export const RecommendationCenter: React.FC = () => {
                           <Paragraph style={{ marginBottom: 8 }}>{item.recommendation}</Paragraph>
                           <Paragraph type="secondary" style={{ marginBottom: 12 }}>{item.risk_note}</Paragraph>
                           <div className="ops-recommendation-item__toolbar">
-                            <Button onClick={() => void openRecommendationWorkspace(item)} disabled={!item.artifact_refs.length}>
-                              打开页内工作区
-                            </Button>
+                            <Space wrap>
+                              <Button onClick={() => void openRecommendationWorkspace(item)} disabled={!item.artifact_refs.length}>
+                                打开页内工作区
+                              </Button>
+                              <Button
+                                onClick={() => void copyRecommendationBundle(item)}
+                                loading={bundleCopyingId === item.recommendation_id}
+                                disabled={!item.artifact_refs.length}
+                              >
+                                复制整套草稿
+                              </Button>
+                              <Button
+                                type="primary"
+                                ghost
+                                onClick={() => void exportRecommendationBundle(item)}
+                                loading={bundleExportingId === item.recommendation_id}
+                                disabled={!item.artifact_refs.length}
+                              >
+                                导出整套草稿
+                              </Button>
+                            </Space>
                             <Text type="secondary">共 {item.artifact_refs.length} 份产物</Text>
                           </div>
                           <List
@@ -456,7 +633,7 @@ export const RecommendationCenter: React.FC = () => {
                                 <div style={{ width: '100%' }}>
                                   <Space style={{ marginBottom: 6 }}>
                                     <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
-                                    <Text code>{artifact.path.split(/[\\/]/).pop() || artifact.artifact_id}</Text>
+                                    <Text code>{getArtifactFilename(artifact)}</Text>
                                   </Space>
                                   <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
                                 </div>
@@ -474,9 +651,21 @@ export const RecommendationCenter: React.FC = () => {
             <Card
               title="草稿工作区"
               className="ops-surface-card"
-              extra={preview ? (
-                <Space>
-                  <Button onClick={() => void copyPreviewContent()}>{copyLabel}</Button>
+              extra={preview && activeRecommendation ? (
+                <Space wrap>
+                  <Button onClick={() => void copyPreviewContent()} loading={previewCopying}>{copyLabel}</Button>
+                  <Button
+                    onClick={() => void copyRecommendationBundle(activeRecommendation)}
+                    loading={bundleCopyingId === activeRecommendation.recommendation_id}
+                  >
+                    复制整套草稿
+                  </Button>
+                  <Button
+                    onClick={() => void exportRecommendationBundle(activeRecommendation)}
+                    loading={bundleExportingId === activeRecommendation.recommendation_id}
+                  >
+                    导出整套草稿
+                  </Button>
                   <Button type="primary" onClick={() => downloadArtifact(preview.artifact)}>下载当前视图</Button>
                 </Space>
               ) : null}
