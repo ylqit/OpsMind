@@ -9,6 +9,7 @@ from .config import (
     get_llm_config_manager
 )
 from .client import LLMClient, LLMRouter
+from .structured_output import StructuredOutputGuardrailResult, extract_json_payload, run_guarded_structured_chat
 
 __all__ = [
     "LLMProviderType",
@@ -17,5 +18,8 @@ __all__ = [
     "LLMConfigManager",
     "get_llm_config_manager",
     "LLMClient",
-    "LLMRouter"
+    "LLMRouter",
+    "StructuredOutputGuardrailResult",
+    "extract_json_payload",
+    "run_guarded_structured_chat"
 ]

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
 
 from .deps import (
@@ -52,8 +52,23 @@ class IncidentAISummaryPayload(BaseModel):
     recommended_actions: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
     parse_mode: str = "fallback"
+    validation_status: str = "fallback_template"
+    retry_count: int = 0
+    guardrail_error_code: str = ""
+    guardrail_error_message: str = ""
     log_sample_count: int = 0
     recommendation_count: int = 0
+
+
+class IncidentSummarySchema(BaseModel):
+    """异常 AI 总结结构。"""
+
+    summary: str = Field(..., min_length=1, max_length=800)
+    risk_level: str = Field(..., pattern="^(high|medium|low)$")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    primary_causes: list[str] = Field(default_factory=list, max_length=6)
+    recommended_actions: list[str] = Field(default_factory=list, max_length=10)
+    evidence_citations: list[str] = Field(default_factory=list, max_length=10)
 
 
 @router.get("")
@@ -92,30 +107,6 @@ def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_json_payload(text: str) -> dict[str, Any] | None:
-    """从模型输出提取 JSON，兼容 fenced code block 与纯文本包裹。"""
-    text = (text or "").strip()
-    if not text:
-        return None
-
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        return None
-
-    try:
-        parsed = json.loads(match.group(0))
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        return None
-
-
 def _to_string_list(value: Any, limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -144,7 +135,7 @@ def _normalize_confidence(value: Any) -> float:
     return max(0.0, min(1.0, score))
 
 
-def _build_fallback_payload(incident, recommendations: list[Any], samples: list[dict[str, Any]], summary_text: str) -> dict[str, Any]:
+def _build_fallback_payload(incident, recommendations: list[Any], samples: list[dict[str, Any]]) -> dict[str, Any]:
     primary_causes = [tag.replace("_", " ") for tag in incident.reasoning_tags[:3]]
     if not primary_causes:
         primary_causes = ["需要结合更多证据进一步定位"]
@@ -166,7 +157,7 @@ def _build_fallback_payload(incident, recommendations: list[Any], samples: list[
     risk_level = severity_to_risk.get(str(incident.severity).lower(), "low")
 
     return {
-        "summary": summary_text.strip() or incident.summary,
+        "summary": incident.summary,
         "risk_level": risk_level,
         "confidence": float(incident.confidence),
         "primary_causes": primary_causes,
@@ -175,33 +166,15 @@ def _build_fallback_payload(incident, recommendations: list[Any], samples: list[
     }
 
 
-def _build_structured_payload(
-    incident,
-    recommendations: list[Any],
-    samples: list[dict[str, Any]],
-    llm_text: str,
-) -> tuple[dict[str, Any], str]:
-    """规范化模型输出，保证前端拿到稳定结构。"""
-    parsed = _extract_json_payload(llm_text)
-    fallback = _build_fallback_payload(incident, recommendations, samples, llm_text)
-
-    if not parsed:
-        return fallback, "text_fallback"
-
-    summary = str(parsed.get("summary") or "").strip() or fallback["summary"]
-    primary_causes = _to_string_list(parsed.get("primary_causes"), limit=5) or fallback["primary_causes"]
-    recommended_actions = _to_string_list(parsed.get("recommended_actions"), limit=8) or fallback["recommended_actions"]
-    evidence_citations = _to_string_list(parsed.get("evidence_citations"), limit=8) or fallback["evidence_citations"]
-
-    payload = {
-        "summary": summary,
-        "risk_level": _normalize_risk_level(parsed.get("risk_level")),
-        "confidence": _normalize_confidence(parsed.get("confidence")),
-        "primary_causes": primary_causes,
-        "recommended_actions": recommended_actions,
-        "evidence_citations": evidence_citations,
+def _normalize_summary_payload(payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": str(payload.get("summary") or "").strip() or fallback["summary"],
+        "risk_level": _normalize_risk_level(payload.get("risk_level")),
+        "confidence": _normalize_confidence(payload.get("confidence")),
+        "primary_causes": _to_string_list(payload.get("primary_causes"), limit=6) or fallback["primary_causes"],
+        "recommended_actions": _to_string_list(payload.get("recommended_actions"), limit=10) or fallback["recommended_actions"],
+        "evidence_citations": _to_string_list(payload.get("evidence_citations"), limit=10) or fallback["evidence_citations"],
     }
-    return payload, "json"
 
 
 @router.get("/{incident_id}")
@@ -269,6 +242,7 @@ async def generate_incident_ai_summary(
     ]
     recommendation_lines = [f"- {item.kind.value}: {item.recommendation}" for item in recommendations[:5]]
 
+    fallback_payload = _build_fallback_payload(incident, recommendations, samples)
     messages = [
         {
             "role": "system",
@@ -295,24 +269,28 @@ async def generate_incident_ai_summary(
         },
     ]
 
-    try:
-        llm_text = await llm_router.chat(
-            messages,
-            provider=request.provider,
-            temperature=0.1,
-            max_tokens=450,
-            _source="incident_center",
-            _endpoint="incident_ai_summary",
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"AI 摘要生成失败：{exc}") from exc
+    guardrail_result = await run_guarded_structured_chat(
+        llm_router=llm_router,
+        messages=messages,
+        schema_model=IncidentSummarySchema,
+        fallback_payload=fallback_payload,
+        provider=request.provider,
+        temperature=0.1,
+        max_tokens=450,
+        source="incident_center",
+        endpoint="incident_ai_summary",
+        max_retries=1,
+    )
 
-    normalized, parse_mode = _build_structured_payload(incident, recommendations, samples, llm_text)
-
+    normalized = _normalize_summary_payload(guardrail_result.data, fallback_payload)
     result = IncidentAISummaryPayload(
         incident_id=incident.incident_id,
         provider=request.provider or llm_router.default_client_name,
-        parse_mode=parse_mode,
+        parse_mode=guardrail_result.parse_mode,
+        validation_status=guardrail_result.validation_status,
+        retry_count=guardrail_result.retry_count,
+        guardrail_error_code=guardrail_result.error_code,
+        guardrail_error_message=guardrail_result.error_message,
         log_sample_count=len(samples),
         recommendation_count=len(recommendations),
         **normalized,

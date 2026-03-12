@@ -316,6 +316,10 @@ export interface IncidentAISummaryResponse {
   recommended_actions: string[]
   evidence_citations: string[]
   parse_mode: string
+  validation_status?: string
+  retry_count?: number
+  guardrail_error_code?: string
+  guardrail_error_message?: string
   log_sample_count: number
   recommendation_count: number
 }
@@ -332,6 +336,10 @@ export interface RecommendationAIReviewResponse {
   validation_checks: string[]
   evidence_citations: string[]
   parse_mode: string
+  validation_status?: string
+  retry_count?: number
+  guardrail_error_code?: string
+  guardrail_error_message?: string
 }
 
 export interface ArtifactContentResponse {

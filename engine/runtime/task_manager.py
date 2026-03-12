@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from engine.runtime.artifact_store import ArtifactStore
+from engine.runtime.errors import normalize_task_exception
 from engine.runtime.event_bus import EventBus
 from engine.runtime.models import (
     Observation,
@@ -198,11 +199,12 @@ class TaskManager:
             await self.cancel_task(task_id)
         except Exception as exc:
             latest = self.get_task(task_id)
+            normalized = normalize_task_exception(exc, latest.current_stage if latest else TaskStatus.FAILED)
             await self.fail_task(
                 task_id=task_id,
-                error_code="TASK_RUNNER_ERROR",
-                error_message=str(exc),
-                failed_stage=latest.current_stage if latest else TaskStatus.FAILED,
+                error_code=normalized.error_code,
+                error_message=normalized.error_message,
+                failed_stage=normalized.failed_stage,
             )
         finally:
             self._running_tasks.pop(task_id, None)

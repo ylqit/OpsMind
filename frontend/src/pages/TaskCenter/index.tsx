@@ -79,6 +79,45 @@ const getApprovalMeta = (task: TaskRecord) => {
   return { color: 'blue', label: '未审批', detail: '任务尚未进入待确认阶段' }
 }
 
+interface TaskGuardrailSummary {
+  total: number
+  fallback_count: number
+  retried_count: number
+  schema_error_count: number
+  has_degraded: boolean
+}
+
+const readGuardrailSummary = (task: TaskRecord): TaskGuardrailSummary | null => {
+  const raw = task.result_ref?.['guardrail_summary']
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const data = raw as Record<string, unknown>
+  return {
+    total: Number(data.total || 0),
+    fallback_count: Number(data.fallback_count || 0),
+    retried_count: Number(data.retried_count || 0),
+    schema_error_count: Number(data.schema_error_count || 0),
+    has_degraded: Boolean(data.has_degraded),
+  }
+}
+
+const getGuardrailMeta = (summary: TaskGuardrailSummary | null) => {
+  if (!summary || summary.total <= 0) {
+    return null
+  }
+  if (summary.schema_error_count > 0) {
+    return { color: 'red', label: '校验失败已兜底', detail: '模型输出出现字段不合法，已自动降级到模板结果。' }
+  }
+  if (summary.fallback_count > 0) {
+    return { color: 'orange', label: '模板降级', detail: '部分模型输出未通过守护，已使用模板建议补齐。' }
+  }
+  if (summary.retried_count > 0) {
+    return { color: 'blue', label: '自动重试后通过', detail: '首次输出未通过，重试后结构化校验通过。' }
+  }
+  return { color: 'green', label: '结构化通过', detail: '模型输出已通过结构化校验。' }
+}
+
 export const TaskCenter: React.FC = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -125,6 +164,11 @@ export const TaskCenter: React.FC = () => {
     }
     return getApprovalMeta(selectedTask.task)
   }, [selectedTask])
+  const selectedTaskGuardrailSummary = useMemo(() => (selectedTask ? readGuardrailSummary(selectedTask.task) : null), [selectedTask])
+  const selectedTaskGuardrailMeta = useMemo(
+    () => getGuardrailMeta(selectedTaskGuardrailSummary),
+    [selectedTaskGuardrailSummary],
+  )
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
@@ -399,6 +443,22 @@ export const TaskCenter: React.FC = () => {
                     </Descriptions>
                   </Space>
                 </Card>
+                {selectedTaskGuardrailSummary ? (
+                  <Card type="inner" title="模型输出校验" style={{ marginBottom: 16 }}>
+                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Tag color={selectedTaskGuardrailMeta?.color || 'default'}>{selectedTaskGuardrailMeta?.label || '未识别状态'}</Tag>
+                        <Text type="secondary">{selectedTaskGuardrailMeta?.detail || '暂无模型校验说明'}</Text>
+                      </Space>
+                      <Space wrap>
+                        <Tag>总数 {selectedTaskGuardrailSummary.total}</Tag>
+                        <Tag color={selectedTaskGuardrailSummary.retried_count > 0 ? 'blue' : 'default'}>重试通过 {selectedTaskGuardrailSummary.retried_count}</Tag>
+                        <Tag color={selectedTaskGuardrailSummary.fallback_count > 0 ? 'orange' : 'default'}>模板降级 {selectedTaskGuardrailSummary.fallback_count}</Tag>
+                        <Tag color={selectedTaskGuardrailSummary.schema_error_count > 0 ? 'red' : 'default'}>字段校验失败 {selectedTaskGuardrailSummary.schema_error_count}</Tag>
+                      </Space>
+                    </Space>
+                  </Card>
+                ) : null}
                 {selectedTask.task.error ? (
                   <Card type="inner" title="失败信息" style={{ marginBottom: 16 }}>
                     <Descriptions column={1} size="small">

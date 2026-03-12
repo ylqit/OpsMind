@@ -6,12 +6,24 @@
 from __future__ import annotations
 
 from difflib import unified_diff
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence
+
+from pydantic import BaseModel, Field
 
 from engine.capabilities.k8s_yaml_generator import K8sYamlGenerator
+from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.artifact_store import ArtifactStore
 from engine.runtime.models import ArtifactKind, Recommendation, RecommendationKind
 from engine.storage.repositories import RecommendationRepository
+
+
+class RecommendationDraftSchema(BaseModel):
+    """建议草稿结构。"""
+
+    observation: str = Field(..., min_length=1, max_length=300)
+    recommendation: str = Field(..., min_length=1, max_length=800)
+    risk_note: str = Field(..., min_length=1, max_length=300)
+    confidence: float = Field(..., ge=0.0, le=1.0)
 
 
 class RecommendationService:
@@ -31,18 +43,28 @@ class RecommendationService:
         incident,
         target_asset_id: str | None = None,
         allowed_kinds: Sequence[str] | None = None,
-    ) -> List[Recommendation]:
+        llm_router: Any | None = None,
+        llm_provider: str | None = None,
+        return_guardrail: bool = False,
+    ):
         recommendations: List[Recommendation] = []
+        guardrail_items: List[dict[str, Any]] = []
         requested_kinds = {item for item in allowed_kinds or []}
         kinds = [kind for kind in self._determine_kinds(incident) if not requested_kinds or kind.value in requested_kinds]
         app_name = incident.service_key.split("/")[-1].replace("_", "-")
 
         for kind in kinds:
-            observation = incident.summary
-            risk_note = "建议稿仅供人工审核，不会自动执行。"
-            recommendation_text = self._build_recommendation_text(kind, incident)
-            artifact_refs = []
+            fallback_draft = self._build_fallback_draft(kind, incident)
+            draft, guardrail_meta = await self._build_guarded_draft(
+                incident=incident,
+                kind=kind,
+                fallback_draft=fallback_draft,
+                llm_router=llm_router,
+                llm_provider=llm_provider,
+            )
+            guardrail_items.append({"kind": kind.value, **guardrail_meta})
 
+            artifact_refs = []
             if kind == RecommendationKind.MANIFEST_DRAFT:
                 artifact_refs.extend(await self._build_manifest_artifacts(task_id=task_id, incident=incident, app_name=app_name))
 
@@ -50,14 +72,83 @@ class RecommendationService:
                 incident_id=incident.incident_id,
                 target_asset_id=target_asset_id,
                 kind=kind,
-                confidence=max(0.55, float(incident.confidence)),
-                observation=observation,
-                recommendation=recommendation_text,
-                risk_note=risk_note,
+                confidence=float(draft["confidence"]),
+                observation=str(draft["observation"]),
+                recommendation=str(draft["recommendation"]),
+                risk_note=str(draft["risk_note"]),
                 artifact_refs=artifact_refs,
             )
             recommendations.append(self.repository.save(recommendation))
+
+        guardrail_summary = self._build_guardrail_summary(guardrail_items)
+        if return_guardrail:
+            return recommendations, guardrail_summary
         return recommendations
+
+    async def _build_guarded_draft(
+        self,
+        incident,
+        kind: RecommendationKind,
+        fallback_draft: dict[str, Any],
+        llm_router: Any | None,
+        llm_provider: str | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not llm_router:
+            return fallback_draft, {
+                "validation_status": "fallback_template",
+                "parse_mode": "text_fallback",
+                "attempts": 0,
+                "retry_count": 0,
+                "error_code": "AI_ROUTER_UNAVAILABLE",
+                "error_message": "当前未启用可用的 LLM Provider，已使用模板建议",
+            }
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是资深 SRE 助手。"
+                    "请严格输出 JSON 对象，字段固定为："
+                    "observation(string), recommendation(string), risk_note(string), confidence(0-1)。"
+                    "不要输出 markdown，不要输出额外字段。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"incident_id: {incident.incident_id}\n"
+                    f"service_key: {incident.service_key}\n"
+                    f"severity: {incident.severity}\n"
+                    f"kind: {kind.value}\n"
+                    f"incident_summary: {incident.summary}\n"
+                    f"reasoning_tags: {', '.join(incident.reasoning_tags) or '-'}\n"
+                    f"recommended_actions: {', '.join(incident.recommended_actions) or '-'}\n"
+                    f"fallback_suggestion: {fallback_draft['recommendation']}\n"
+                    "请输出可执行、可评审的建议。"
+                ),
+            },
+        ]
+
+        result = await run_guarded_structured_chat(
+            llm_router=llm_router,
+            messages=messages,
+            schema_model=RecommendationDraftSchema,
+            fallback_payload=fallback_draft,
+            provider=llm_provider,
+            temperature=0.1,
+            max_tokens=420,
+            source="recommendation_center",
+            endpoint="recommendation_generation",
+            max_retries=1,
+        )
+        return result.data, {
+            "validation_status": result.validation_status,
+            "parse_mode": result.parse_mode,
+            "attempts": result.attempts,
+            "retry_count": result.retry_count,
+            "error_code": result.error_code,
+            "error_message": result.error_message,
+        }
 
     async def _build_manifest_artifacts(self, task_id: str, incident, app_name: str) -> List[Dict[str, str]]:
         """生成基线草稿、建议草稿和差异结果。"""
@@ -161,6 +252,27 @@ class RecommendationService:
         if "upstream_or_config_issue" in tags and RecommendationKind.RESOURCE_TUNING not in results:
             results.append(RecommendationKind.RESOURCE_TUNING)
         return results
+
+    def _build_fallback_draft(self, kind: RecommendationKind, incident) -> dict[str, Any]:
+        return {
+            "observation": incident.summary,
+            "recommendation": self._build_recommendation_text(kind, incident),
+            "risk_note": "建议稿仅供人工审核，不会自动执行。",
+            "confidence": max(0.55, float(incident.confidence)),
+        }
+
+    def _build_guardrail_summary(self, guardrail_items: list[dict[str, Any]]) -> dict[str, Any]:
+        fallback_count = len([item for item in guardrail_items if item.get("validation_status") == "fallback_template"])
+        retried_count = len([item for item in guardrail_items if item.get("validation_status") == "json_retried"])
+        schema_error_count = len([item for item in guardrail_items if item.get("error_code") == "AI_OUTPUT_SCHEMA_INVALID"])
+        return {
+            "total": len(guardrail_items),
+            "fallback_count": fallback_count,
+            "retried_count": retried_count,
+            "schema_error_count": schema_error_count,
+            "has_degraded": fallback_count > 0,
+            "items": guardrail_items,
+        }
 
     def _build_recommendation_text(self, kind: RecommendationKind, incident) -> str:
         if kind == RecommendationKind.SCALE:

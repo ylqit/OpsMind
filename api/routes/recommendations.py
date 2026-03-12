@@ -1,13 +1,12 @@
 """建议接口。"""
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.models import ArtifactRef, TaskStatus, TaskType
 
 from .deps import get_incident_service, get_llm_router_dep, get_recommendation_service, get_task_manager
@@ -28,6 +27,18 @@ class RecommendationAIReviewRequest(BaseModel):
     provider: str | None = Field(default=None, description="指定 Provider")
 
 
+class RecommendationReviewSchema(BaseModel):
+    """AI 复核结构。"""
+
+    summary: str = Field(..., min_length=1, max_length=800)
+    risk_level: str = Field(..., pattern="^(high|medium|low)$")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    risk_assessment: str = Field(..., min_length=1, max_length=500)
+    rollback_plan: list[str] = Field(default_factory=list, max_length=8)
+    validation_checks: list[str] = Field(default_factory=list, max_length=8)
+    evidence_citations: list[str] = Field(default_factory=list, max_length=8)
+
+
 class RecommendationAIReviewPayload(BaseModel):
     """结构化 AI 复核响应。"""
 
@@ -42,30 +53,10 @@ class RecommendationAIReviewPayload(BaseModel):
     validation_checks: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
     parse_mode: str = "fallback"
-
-
-def _extract_json_payload(text: str) -> dict[str, Any] | None:
-    """从模型输出提取 JSON，兼容 fenced code block 与纯文本包裹。"""
-    text = (text or "").strip()
-    if not text:
-        return None
-
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        return None
-
-    try:
-        parsed = json.loads(match.group(0))
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        return None
+    validation_status: str = "fallback_template"
+    retry_count: int = 0
+    guardrail_error_code: str = ""
+    guardrail_error_message: str = ""
 
 
 def _to_string_list(value: Any, limit: int) -> list[str]:
@@ -127,22 +118,16 @@ def _build_fallback_review_payload(recommendation, incident) -> dict[str, Any]:
     }
 
 
-def _build_structured_review_payload(recommendation, incident, llm_text: str) -> tuple[dict[str, Any], str]:
-    parsed = _extract_json_payload(llm_text)
-    fallback = _build_fallback_review_payload(recommendation, incident)
-    if not parsed:
-        return fallback, "text_fallback"
-
-    payload = {
-        "summary": str(parsed.get("summary") or "").strip() or fallback["summary"],
-        "risk_level": _normalize_risk_level(parsed.get("risk_level")),
-        "confidence": _normalize_confidence(parsed.get("confidence"), fallback["confidence"]),
-        "risk_assessment": str(parsed.get("risk_assessment") or "").strip() or fallback["risk_assessment"],
-        "rollback_plan": _to_string_list(parsed.get("rollback_plan"), limit=8) or fallback["rollback_plan"],
-        "validation_checks": _to_string_list(parsed.get("validation_checks"), limit=8) or fallback["validation_checks"],
-        "evidence_citations": _to_string_list(parsed.get("evidence_citations"), limit=8) or fallback["evidence_citations"],
+def _normalize_review_payload(payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": str(payload.get("summary") or "").strip() or fallback["summary"],
+        "risk_level": _normalize_risk_level(payload.get("risk_level")),
+        "confidence": _normalize_confidence(payload.get("confidence"), fallback["confidence"]),
+        "risk_assessment": str(payload.get("risk_assessment") or "").strip() or fallback["risk_assessment"],
+        "rollback_plan": _to_string_list(payload.get("rollback_plan"), limit=8) or fallback["rollback_plan"],
+        "validation_checks": _to_string_list(payload.get("validation_checks"), limit=8) or fallback["validation_checks"],
+        "evidence_citations": _to_string_list(payload.get("evidence_citations"), limit=8) or fallback["evidence_citations"],
     }
-    return payload, "json"
 
 
 @router.get("/{recommendation_id}")
@@ -197,6 +182,7 @@ async def review_recommendation_with_ai(
             line = f"{line} ({preview})"
         artifact_lines.append(line)
 
+    fallback_payload = _build_fallback_review_payload(recommendation, incident)
     messages = [
         {
             "role": "system",
@@ -226,24 +212,29 @@ async def review_recommendation_with_ai(
         },
     ]
 
-    try:
-        llm_text = await llm_router.chat(
-            messages,
-            provider=request.provider,
-            temperature=0.1,
-            max_tokens=500,
-            _source="recommendation_center",
-            _endpoint="recommendation_ai_review",
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"AI 复核失败：{exc}") from exc
+    guardrail_result = await run_guarded_structured_chat(
+        llm_router=llm_router,
+        messages=messages,
+        schema_model=RecommendationReviewSchema,
+        fallback_payload=fallback_payload,
+        provider=request.provider,
+        temperature=0.1,
+        max_tokens=500,
+        source="recommendation_center",
+        endpoint="recommendation_ai_review",
+        max_retries=1,
+    )
 
-    normalized, parse_mode = _build_structured_review_payload(recommendation, incident, llm_text)
+    normalized = _normalize_review_payload(guardrail_result.data, fallback_payload)
     result = RecommendationAIReviewPayload(
         recommendation_id=recommendation.recommendation_id,
         incident_id=recommendation.incident_id,
         provider=request.provider or llm_router.default_client_name,
-        parse_mode=parse_mode,
+        parse_mode=guardrail_result.parse_mode,
+        validation_status=guardrail_result.validation_status,
+        retry_count=guardrail_result.retry_count,
+        guardrail_error_code=guardrail_result.error_code,
+        guardrail_error_message=guardrail_result.error_message,
         **normalized,
     )
     return result.model_dump(mode="json")
@@ -255,6 +246,7 @@ async def generate_recommendations(
     task_manager=Depends(get_task_manager),
     incident_service=Depends(get_incident_service),
     recommendation_service=Depends(get_recommendation_service),
+    llm_router=Depends(get_llm_router_dep),
 ):
     incident = incident_service.get_incident(request.incident_id)
     if not incident:
@@ -282,11 +274,27 @@ async def generate_recommendations(
         )
 
         await task_manager.set_stage(task.task_id, TaskStatus.GENERATING, 80, "正在生成配置草稿")
-        recommendations = await recommendation_service.generate_for_incident(
+        recommendations, guardrail_summary = await recommendation_service.generate_for_incident(
             task.task_id,
             incident,
             allowed_kinds=request.kinds,
+            llm_router=llm_router,
+            return_guardrail=True,
         )
+
+        await task_manager.append_trace(
+            task.task_id,
+            "generate",
+            "llm_guardrail",
+            TaskStatus.GENERATING,
+            "已完成建议结构化校验",
+            {
+                "fallback_count": guardrail_summary.get("fallback_count", 0),
+                "retried_count": guardrail_summary.get("retried_count", 0),
+                "schema_error_count": guardrail_summary.get("schema_error_count", 0),
+            },
+        )
+
         for item in recommendations:
             for artifact in item.artifact_refs:
                 artifact_ref = ArtifactRef.model_validate(artifact)
@@ -295,6 +303,7 @@ async def generate_recommendations(
         result = {
             "incident_id": incident.incident_id,
             "recommendations": [item.model_dump(mode="json") for item in recommendations],
+            "guardrail_summary": guardrail_summary,
         }
         await task_manager.wait_for_confirm(task.task_id, result)
         return result
