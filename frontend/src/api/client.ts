@@ -1,7 +1,42 @@
 import axios from 'axios'
-import { getErrorMessage, getErrorType } from '../utils/errorHandler'
+import { getErrorMessage, getErrorType } from '@/utils/errorHandler'
 
 const API_BASE_URL = '/api'
+
+const encodePathSegment = (value: string) => encodeURIComponent(value)
+
+const buildTaskArtifactPath = (taskId: string, artifactId: string) =>
+  `/tasks/${encodePathSegment(taskId)}/artifacts/${encodePathSegment(artifactId)}`
+
+// 兼容 FastAPI 常见 detail 结构，避免 detail 为对象或数组时前端提示失真。
+const extractErrorDetail = (payload: unknown): string => {
+  if (typeof payload === 'string') {
+    return payload
+  }
+  if (!payload || typeof payload !== 'object') {
+    return ''
+  }
+  const detail = (payload as { detail?: unknown }).detail
+  if (typeof detail === 'string') {
+    return detail
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item
+        }
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+        const message = (item as { msg?: unknown }).msg
+        return typeof message === 'string' ? message : ''
+      })
+      .filter(Boolean)
+      .join('；')
+  }
+  return ''
+}
 
 export interface OverviewCard {
   key: string
@@ -291,17 +326,27 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
-      if (status === 404) {
-        throw new Error(data.detail || '资源不存在')
-      }
-      if (status === 500) {
-        throw new Error(data.detail || '服务器内部错误')
-      }
+      const detail = extractErrorDetail(data)
       if (status === 401) {
         throw new Error('未授权访问')
       }
       if (status === 403) {
         throw new Error('无权访问')
+      }
+      if (status === 404) {
+        throw new Error(detail || '资源不存在')
+      }
+      if (status === 409) {
+        throw new Error(detail || '请求冲突，请刷新后重试')
+      }
+      if (status === 400 || status === 422) {
+        throw new Error(detail || '请求参数错误，请检查输入')
+      }
+      if (status >= 500) {
+        throw new Error(detail || '服务器内部错误')
+      }
+      if (status >= 400) {
+        throw new Error(detail || '请求失败，请稍后重试')
       }
     }
     if (!error.response && error.message) {
@@ -314,8 +359,8 @@ apiClient.interceptors.response.use(
 
 export const capabilitiesApi = {
   list: () => apiClient.get('/capabilities'),
-  getSchema: (name: string) => apiClient.get(`/capabilities/${name}/schema`),
-  dispatch: (name: string, params: Record<string, unknown>) => apiClient.post(`/capabilities/${name}/dispatch`, { params }),
+  getSchema: (name: string) => apiClient.get(`/capabilities/${encodePathSegment(name)}/schema`),
+  dispatch: (name: string, params: Record<string, unknown>) => apiClient.post(`/capabilities/${encodePathSegment(name)}/dispatch`, { params }),
 }
 
 export const alertsApi = {
@@ -330,12 +375,12 @@ export const alertsApi = {
     }),
   createRule: (ruleData: Record<string, unknown>) => apiClient.post('/alerts/rules', ruleData),
   listRules: () => apiClient.get('/alerts/rules'),
-  deleteRule: (ruleId: string) => apiClient.delete(`/alerts/rules/${ruleId}`),
+  deleteRule: (ruleId: string) => apiClient.delete(`/alerts/rules/${encodePathSegment(ruleId)}`),
 }
 
 export const remediationApi = {
   listPlans: () => apiClient.get('/remediation/plans'),
-  getPlan: (planId: string) => apiClient.get(`/remediation/plans/${planId}`),
+  getPlan: (planId: string) => apiClient.get(`/remediation/plans/${encodePathSegment(planId)}`),
   execute: (planId: string, stepIndices: number[], dryRun?: boolean, containerName?: string) =>
     apiClient.post('/remediation/execute', null, {
       params: {
@@ -349,8 +394,8 @@ export const remediationApi = {
 
 export const containersApi = {
   list: () => apiClient.get('/containers'),
-  get: (name: string) => apiClient.get(`/containers/${name}`),
-  getLogs: (name: string, lines?: number) => apiClient.get(`/containers/${name}/logs`, { params: { lines: lines ?? 50 } }),
+  get: (name: string) => apiClient.get(`/containers/${encodePathSegment(name)}`),
+  getLogs: (name: string, lines?: number) => apiClient.get(`/containers/${encodePathSegment(name)}/logs`, { params: { lines: lines ?? 50 } }),
 }
 
 export const hostApi = {
@@ -373,25 +418,28 @@ export const resourcesApi = {
 
 export const incidentsApi = {
   list: (params?: { status?: string; severity?: string; service_key?: string; time_range?: string }) => apiClient.get('/incidents', { params }),
-  get: (incidentId: string) => apiClient.get(`/incidents/${incidentId}`),
+  get: (incidentId: string) => apiClient.get(`/incidents/${encodePathSegment(incidentId)}`),
   analyze: (payload: { service_key?: string; asset_id?: string; time_window: string }) => apiClient.post('/incidents/analyze', payload),
 }
 
 export const recommendationsApi = {
-  get: (recommendationId: string) => apiClient.get(`/recommendations/${recommendationId}`),
+  get: (recommendationId: string) => apiClient.get(`/recommendations/${encodePathSegment(recommendationId)}`),
   generate: (payload: { incident_id: string; kinds?: string[] }) => apiClient.post('/recommendations/generate', payload),
 }
 
 export const tasksApi = {
   list: (params?: { task_type?: string; status?: string }) => apiClient.get('/tasks', { params }),
-  get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
-  listArtifacts: (taskId: string, params?: { kind?: string; query?: string; group_by?: 'kind' | 'none' }) => apiClient.get(`/tasks/${taskId}/artifacts`, { params }),
-  getDiagnosis: (taskId: string) => apiClient.get(`/tasks/${taskId}/diagnosis`),
-  approve: (taskId: string, payload?: { approved_by?: string; approval_note?: string }) => apiClient.post(`/tasks/${taskId}/approve`, payload),
-  cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
-  getArtifact: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}`),
-  getArtifactContent: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}/content`),
-  getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}/tasks/${taskId}/artifacts/${artifactId}/download`,
+  get: (taskId: string) => apiClient.get(`/tasks/${encodePathSegment(taskId)}`),
+  listArtifacts: (taskId: string, params?: { kind?: string; query?: string; group_by?: 'kind' | 'none' }) =>
+    apiClient.get(`/tasks/${encodePathSegment(taskId)}/artifacts`, { params }),
+  getDiagnosis: (taskId: string) => apiClient.get(`/tasks/${encodePathSegment(taskId)}/diagnosis`),
+  approve: (taskId: string, payload?: { approved_by?: string; approval_note?: string }) =>
+    apiClient.post(`/tasks/${encodePathSegment(taskId)}/approve`, payload),
+  cancel: (taskId: string) => apiClient.post(`/tasks/${encodePathSegment(taskId)}/cancel`),
+  getArtifact: (taskId: string, artifactId: string) => apiClient.get(buildTaskArtifactPath(taskId, artifactId)),
+  getArtifactContent: (taskId: string, artifactId: string) =>
+    apiClient.get(`${buildTaskArtifactPath(taskId, artifactId)}/content`),
+  getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}${buildTaskArtifactPath(taskId, artifactId)}/download`,
 }
 
 export default apiClient
