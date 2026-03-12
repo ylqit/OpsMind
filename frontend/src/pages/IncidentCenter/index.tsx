@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography } from 'antd'
-import { incidentsApi, type IncidentDetailResponse, type IncidentRecord } from '@/api/client'
+import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography, message } from 'antd'
+import { useNavigate } from 'react-router-dom'
+import {
+  incidentsApi,
+  recommendationsApi,
+  type IncidentDetailResponse,
+  type IncidentRecord,
+  type RecommendationRecord,
+  type TaskArtifact,
+} from '@/api/client'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -39,12 +47,18 @@ const formatEvidenceValue = (item: EvidenceItem) => {
   return `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`
 }
 
+const pickRecommendationArtifact = (recommendation: RecommendationRecord): TaskArtifact | null => {
+  return recommendation.artifact_refs.find((artifact) => artifact.kind === 'diff') || recommendation.artifact_refs.find((artifact) => artifact.kind === 'manifest') || null
+}
+
 export const IncidentCenter: React.FC = () => {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [selectedIncident, setSelectedIncident] = useState<IncidentDetailResponse | null>(null)
   const [serviceKey, setServiceKey] = useState('unknown/root')
   const [creating, setCreating] = useState(false)
+  const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
   const [error, setError] = useState('')
 
   const groupedEvidence = useMemo(() => {
@@ -85,6 +99,7 @@ export const IncidentCenter: React.FC = () => {
   const loadIncidentDetail = async (incidentId: string) => {
     const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelectedIncident(response)
+    return response
   }
 
   const createIncidentTask = async () => {
@@ -95,6 +110,55 @@ export const IncidentCenter: React.FC = () => {
     } finally {
       setCreating(false)
     }
+  }
+
+  const generateRecommendationForIncident = async () => {
+    if (!selectedIncident) {
+      return
+    }
+    setGeneratingRecommendation(true)
+    try {
+      await recommendationsApi.generate({ incident_id: selectedIncident.incident.incident_id })
+      message.success('建议生成任务已提交')
+      let latestDetail = selectedIncident
+      for (let index = 0; index < 3; index += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 800))
+        latestDetail = await loadIncidentDetail(selectedIncident.incident.incident_id)
+        if (latestDetail.recommendations.length > 0) {
+          break
+        }
+      }
+      if (latestDetail.recommendations.length > 0) {
+        const recommendation = latestDetail.recommendations[0]
+        const artifact = pickRecommendationArtifact(recommendation)
+        const params = new URLSearchParams()
+        params.set('incidentId', latestDetail.incident.incident_id)
+        if (artifact) {
+          params.set('taskId', artifact.task_id)
+          params.set('artifactId', artifact.artifact_id)
+        }
+        navigate(`/recommendations?${params.toString()}`)
+      }
+    } finally {
+      setGeneratingRecommendation(false)
+    }
+  }
+
+  const openRecommendationCenter = (recommendation?: RecommendationRecord) => {
+    const incidentId = selectedIncident?.incident.incident_id
+    if (!incidentId) {
+      return
+    }
+    const params = new URLSearchParams()
+    params.set('incidentId', incidentId)
+    if (recommendation) {
+      const artifact = pickRecommendationArtifact(recommendation)
+      if (artifact) {
+        params.set('taskId', artifact.task_id)
+        params.set('artifactId', artifact.artifact_id)
+      }
+    }
+    navigate(`/recommendations?${params.toString()}`)
   }
 
   useEffect(() => {
@@ -140,7 +204,21 @@ export const IncidentCenter: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={15}>
-          <Card title="异常详情" loading={loading} className="ops-surface-card">
+          <Card
+            title="异常详情"
+            loading={loading}
+            className="ops-surface-card"
+            extra={
+              <Space>
+                <Button type="primary" ghost onClick={() => void generateRecommendationForIncident()} disabled={!selectedIncident} loading={generatingRecommendation}>
+                  生成建议
+                </Button>
+                <Button onClick={() => openRecommendationCenter()} disabled={!selectedIncident}>
+                  打开建议中心
+                </Button>
+              </Space>
+            }
+          >
             {!selectedIncident ? (
               <Empty description="请选择一个异常或先发起分析" />
             ) : (
@@ -195,10 +273,19 @@ export const IncidentCenter: React.FC = () => {
                     dataSource={selectedIncident.recommendations}
                     locale={{ emptyText: '当前还没有建议内容' }}
                     renderItem={(item) => (
-                      <List.Item>
-                        <div>
-                          <Tag>{item.kind}</Tag>
-                          <Text>{item.recommendation}</Text>
+                      <List.Item
+                        actions={[
+                          <Button key="open" size="small" type="primary" ghost onClick={() => openRecommendationCenter(item)}>
+                            打开草稿
+                          </Button>,
+                        ]}
+                      >
+                        <div style={{ width: '100%' }}>
+                          <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                            <Tag>{item.kind}</Tag>
+                            <Text>{item.recommendation}</Text>
+                          </Space>
+                          <Paragraph type="secondary" style={{ marginBottom: 0 }}>{item.risk_note}</Paragraph>
                         </div>
                       </List.Item>
                     )}

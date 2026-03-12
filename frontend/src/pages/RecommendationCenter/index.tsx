@@ -25,6 +25,14 @@ interface PreviewState {
   filename: string
 }
 
+interface DiffSummary {
+  fromFile: string
+  toFile: string
+  addedLines: number
+  removedLines: number
+  hunkCount: number
+}
+
 const artifactLabelMap: Record<string, string> = {
   manifest: 'YAML 草稿',
   diff: '变更差异',
@@ -49,6 +57,39 @@ const getDiffLineClassName = (line: string) => {
   return 'ops-artifact-line'
 }
 
+const buildDiffSummary = (content: string): DiffSummary => {
+  const lines = content.split('\n')
+  let fromFile = '未识别基线文件'
+  let toFile = '未识别建议文件'
+  let addedLines = 0
+  let removedLines = 0
+  let hunkCount = 0
+
+  for (const line of lines) {
+    if (line.startsWith('--- ')) {
+      fromFile = line.replace('--- ', '').trim() || fromFile
+      continue
+    }
+    if (line.startsWith('+++ ')) {
+      toFile = line.replace('+++ ', '').trim() || toFile
+      continue
+    }
+    if (line.startsWith('@@')) {
+      hunkCount += 1
+      continue
+    }
+    if (line.startsWith('+')) {
+      addedLines += 1
+      continue
+    }
+    if (line.startsWith('-')) {
+      removedLines += 1
+    }
+  }
+
+  return { fromFile, toFile, addedLines, removedLines, hunkCount }
+}
+
 export const RecommendationCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
@@ -63,6 +104,7 @@ export const RecommendationCenter: React.FC = () => {
   const selectedRecommendations = useMemo(() => selected?.recommendations || [], [selected])
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
+  const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
 
   const updateRouteState = (incidentId?: string, artifact?: TaskArtifact | null) => {
     const nextParams = new URLSearchParams()
@@ -313,14 +355,33 @@ export const RecommendationCenter: React.FC = () => {
         ] : null}
         width={960}
       >
-        {isDiffPreview ? (
-          <div className="ops-artifact-viewer ops-artifact-viewer--diff">
-            {preview?.content.split('\n').map((line, index) => (
-              <div key={`${index}-${line}`} className={getDiffLineClassName(line)}>
-                <span className="ops-artifact-line__number">{index + 1}</span>
-                <span className="ops-artifact-line__content">{line || ' '}</span>
+        {isDiffPreview && diffSummary ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="ops-diff-summary">
+              <div className="ops-diff-summary__files">
+                <div className="ops-diff-summary__file-card">
+                  <span className="ops-diff-summary__label">基线文件</span>
+                  <Text code>{diffSummary.fromFile}</Text>
+                </div>
+                <div className="ops-diff-summary__file-card">
+                  <span className="ops-diff-summary__label">建议文件</span>
+                  <Text code>{diffSummary.toFile}</Text>
+                </div>
               </div>
-            ))}
+              <Space wrap>
+                <Tag color="green">新增 {diffSummary.addedLines} 行</Tag>
+                <Tag color="red">删除 {diffSummary.removedLines} 行</Tag>
+                <Tag color="blue">变更块 {diffSummary.hunkCount} 处</Tag>
+              </Space>
+            </div>
+            <div className="ops-artifact-viewer ops-artifact-viewer--diff">
+              {preview.content.split('\n').map((line, index) => (
+                <div key={`${index}-${line}`} className={getDiffLineClassName(line)}>
+                  <span className="ops-artifact-line__number">{index + 1}</span>
+                  <span className="ops-artifact-line__content">{line || ' '}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           <pre className="ops-artifact-viewer">{preview?.content || ''}</pre>
