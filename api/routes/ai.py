@@ -12,6 +12,7 @@ from engine.llm.config import LLMProviderConfig, LLMProviderType
 from engine.runtime.models import AIProviderConfigRecord
 
 from .deps import (
+    get_ai_call_log_repository_dep,
     get_ai_provider_config_repository_dep,
     get_llm_router_dep,
     get_refresh_llm_router_dep,
@@ -185,6 +186,42 @@ async def list_ai_providers(provider_repository=Depends(get_ai_provider_config_r
         "providers": [_serialize_provider(item) for item in providers],
         "default_provider": default_provider.name if default_provider else "",
         "default_provider_id": default_provider.provider_id if default_provider else "",
+    }
+
+
+@router.get("/call-logs")
+async def list_ai_call_logs(
+    provider_name: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    call_log_repository=Depends(get_ai_call_log_repository_dep),
+):
+    """读取 AI 调用日志。"""
+    normalized_status = (status or "").strip().lower()
+    if normalized_status and normalized_status not in {"success", "error"}:
+        raise HTTPException(status_code=400, detail="status 仅支持 success 或 error")
+
+    safe_limit = max(1, min(limit, 500))
+    if not call_log_repository:
+        return {
+            "items": [],
+            "total": 0,
+            "provider_name": provider_name or "",
+            "status": normalized_status,
+            "limit": safe_limit,
+        }
+
+    logs = call_log_repository.list(
+        provider_name=provider_name,
+        status=normalized_status or None,
+        limit=safe_limit,
+    )
+    return {
+        "items": [item.model_dump(mode="json") for item in logs],
+        "total": len(logs),
+        "provider_name": provider_name or "",
+        "status": normalized_status,
+        "limit": safe_limit,
     }
 
 

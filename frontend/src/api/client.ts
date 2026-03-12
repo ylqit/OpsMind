@@ -779,6 +779,8 @@ export const aiApi = {
   testProvider: (payload: { provider_id?: string; provider_name?: string; message?: string }) =>
     apiClient.post('/ai/providers/test', payload),
   listProviders: () => apiClient.get('/ai/providers'),
+  listCallLogs: (params?: { provider_name?: string; status?: 'success' | 'error'; limit?: number }) =>
+    apiClient.get('/ai/call-logs', { params }),
   createProvider: (payload: {
     name: string
     type: string
@@ -807,8 +809,23 @@ export const aiApi = {
   deleteProvider: (providerId: string) => apiClient.delete(`/ai/providers/${encodePathSegment(providerId)}`),
 }
 
+const resolveProviderIdByName = async (providerName: string): Promise<string> => {
+  const normalized = providerName.trim()
+  if (!normalized) {
+    throw new Error('Provider 名称不能为空')
+  }
+
+  const payload = await aiApi.listProviders()
+  const providers = (payload.providers || []) as LLMProviderRecord[]
+  const matched = providers.find((item) => item.name === normalized)
+  if (!matched?.provider_id) {
+    throw new Error('Provider 不存在')
+  }
+  return matched.provider_id
+}
+
 export const llmApi = {
-  listProviders: () => apiClient.get('/llm/providers'),
+  listProviders: () => aiApi.listProviders(),
   createProvider: (payload: {
     name: string
     type: string
@@ -818,8 +835,8 @@ export const llmApi = {
     enabled?: boolean
     timeout?: number
     max_retries?: number
-  }) => apiClient.post('/llm/providers', payload),
-  updateProvider: (
+  }) => aiApi.createProvider(payload),
+  updateProvider: async (
     providerName: string,
     payload: {
       type?: string
@@ -830,12 +847,28 @@ export const llmApi = {
       timeout?: number
       max_retries?: number
     },
-  ) => apiClient.put(`/llm/providers/${encodePathSegment(providerName)}`, payload),
-  deleteProvider: (providerName: string) => apiClient.delete(`/llm/providers/${encodePathSegment(providerName)}`),
-  setDefaultProvider: (providerName: string) => apiClient.post('/llm/default-provider', { provider_name: providerName }),
-  testProvider: (providerName: string) => apiClient.post(`/llm/providers/${encodePathSegment(providerName)}/test`),
+  ) => {
+    const providerId = await resolveProviderIdByName(providerName)
+    return aiApi.updateProvider(providerId, payload)
+  },
+  deleteProvider: async (providerName: string) => {
+    const providerId = await resolveProviderIdByName(providerName)
+    return aiApi.deleteProvider(providerId)
+  },
+  setDefaultProvider: async (providerName: string) => {
+    const providerId = await resolveProviderIdByName(providerName)
+    return aiApi.updateProvider(providerId, { is_default: true })
+  },
+  testProvider: async (providerName: string) => {
+    const providerId = await resolveProviderIdByName(providerName)
+    return aiApi.testProvider({
+      provider_id: providerId,
+      provider_name: providerName,
+      message: '请仅回复 OK',
+    })
+  },
   listCallLogs: (params?: { provider_name?: string; status?: 'success' | 'error'; limit?: number }) =>
-    apiClient.get('/llm/call-logs', { params }),
+    aiApi.listCallLogs(params),
 }
 
 export default apiClient

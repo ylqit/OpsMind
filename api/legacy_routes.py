@@ -9,9 +9,9 @@ from typing import Dict, Any, Optional, List
 
 router = APIRouter()
 
-# LLM 配置管理相关导入
-from engine.llm.config import get_llm_config_manager, LLMProviderConfig, LLMProviderType
-from engine.llm.client import LLMClient, LLMRouter
+# LLM 兼容路由相关导入
+from engine.llm.config import LLMProviderType
+from engine.runtime.models import AIProviderConfigRecord
 
 
 class DispatchRequest(BaseModel):
@@ -517,94 +517,185 @@ async def generate_k8s_ingress(
     return result.to_dict()
 
 
-# ========== LLM 配置管理端点 ==========
+def _get_ai_provider_repository():
+    """获取统一 Provider 仓储。"""
+    from main import ai_provider_config_repository
+    return ai_provider_config_repository
+
+
+def _get_ai_call_log_repository():
+    """获取统一 AI 调用日志仓储。"""
+    from main import ai_call_log_repository
+    return ai_call_log_repository
+
+
+def _refresh_llm_router() -> None:
+    """刷新运行时 LLM 路由。"""
+    from main import refresh_llm_router_from_db
+    refresh_llm_router_from_db()
+
+
+def _get_runtime_llm_router():
+    """获取运行时路由实例。"""
+    from main import llm_router_instance
+    return llm_router_instance
+
+
+def _serialize_legacy_provider(record) -> Dict[str, Any]:
+    """统一序列化，兼容旧前端字段。"""
+    return {
+        "provider_id": record.provider_id,
+        "name": record.name,
+        "type": record.provider_type,
+        "model": record.model,
+        "base_url": record.base_url,
+        "enabled": record.enabled,
+        "timeout": record.timeout,
+        "max_retries": record.max_retries,
+        "api_key_configured": bool(record.api_key),
+        "is_default": record.is_default,
+    }
+
+
+def _ensure_default_provider(provider_repository) -> None:
+    """兼容路由下保持默认 Provider 可用。"""
+    default_provider = provider_repository.get_default()
+    if default_provider and default_provider.enabled:
+        return
+
+    enabled_items = provider_repository.list(enabled_only=True)
+    if enabled_items:
+        provider_repository.set_default(enabled_items[0].provider_id)
+
+
+# ========== LLM 配置管理端点（兼容入口，内部统一走 /api/ai 数据源） ==========
 
 @router.get("/llm/providers")
 async def list_llm_providers() -> Dict[str, Any]:
-    """
-    列出所有 LLM Provider 配置
-    """
-    config_manager = get_llm_config_manager()
-    config = config_manager.load_config()
+    """列出 Provider（兼容路径，数据源与 /api/ai 一致）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        return {
+            "providers": [],
+            "default_provider": "",
+            "default_provider_id": "",
+            "total": 0,
+        }
 
-    providers = []
-    for p in config.providers:
-        providers.append({
-            "name": p.name,
-            "type": p.provider_type.value,
-            "model": p.model,
-            "base_url": p.base_url,
-            "enabled": p.enabled,
-            "timeout": p.timeout,
-            "api_key_configured": bool(p.api_key)
-        })
-
+    providers = provider_repository.list()
+    default_provider = provider_repository.get_default()
     return {
-        "providers": providers,
-        "default_provider": config.default_provider,
-        "total": len(providers)
+        "providers": [_serialize_legacy_provider(item) for item in providers],
+        "default_provider": default_provider.name if default_provider else "",
+        "default_provider_id": default_provider.provider_id if default_provider else "",
+        "total": len(providers),
+    }
+
+
+@router.get("/llm/call-logs")
+async def list_llm_call_logs(
+    provider_name: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """读取调用日志（兼容路径）。"""
+    normalized_status = (status or "").strip().lower()
+    if normalized_status and normalized_status not in {"success", "error"}:
+        raise HTTPException(status_code=400, detail="status 仅支持 success 或 error")
+
+    safe_limit = max(1, min(limit, 500))
+    call_log_repository = _get_ai_call_log_repository()
+    if not call_log_repository:
+        return {
+            "items": [],
+            "total": 0,
+            "provider_name": provider_name or "",
+            "status": normalized_status,
+            "limit": safe_limit,
+        }
+
+    logs = call_log_repository.list(
+        provider_name=provider_name,
+        status=normalized_status or None,
+        limit=safe_limit,
+    )
+    return {
+        "items": [item.model_dump(mode="json") for item in logs],
+        "total": len(logs),
+        "provider_name": provider_name or "",
+        "status": normalized_status,
+        "limit": safe_limit,
     }
 
 
 @router.get("/llm/providers/{provider_name}")
 async def get_llm_provider(provider_name: str) -> Dict[str, Any]:
-    """
-    获取指定 LLM Provider 配置详情
-    """
-    config_manager = get_llm_config_manager()
-    config = config_manager.load_config()
+    """读取单个 Provider（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    provider = config.get_provider(provider_name)
+    provider = provider_repository.get_by_name(provider_name)
     if not provider:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
 
-    return {
-        "name": provider.name,
-        "type": provider.provider_type.value,
-        "model": provider.model,
-        "base_url": provider.base_url,
-        "enabled": provider.enabled,
-        "timeout": provider.timeout,
-        "max_retries": provider.max_retries,
-        "api_key_configured": bool(provider.api_key)
-    }
+    return _serialize_legacy_provider(provider)
 
 
 @router.post("/llm/providers")
 async def create_llm_provider(provider_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    创建新的 LLM Provider
+    """新增 Provider（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    Request Body:
-        name: Provider 名称
-        type: Provider 类型 (openai, anthropic, custom)
-        api_key: API Key
-        model: 模型名称
-        base_url: API 基础 URL（可选，OpenAI 兼容需要）
-        enabled: 是否启用（默认 true）
-        timeout: 超时时间（默认 30 秒）
-    """
-    config_manager = get_llm_config_manager()
+    normalized_name = str(provider_data.get("name") or "").strip()
+    normalized_model = str(provider_data.get("model") or "").strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Provider 名称不能为空")
+    if not normalized_model:
+        raise HTTPException(status_code=400, detail="模型名称不能为空")
+    if provider_repository.get_by_name(normalized_name):
+        raise HTTPException(status_code=409, detail=f"Provider '{normalized_name}' 已存在")
 
     try:
-        provider = LLMProviderConfig(
-            name=provider_data.get("name"),
-            provider_type=LLMProviderType(provider_data.get("type", "custom")),
-            api_key=provider_data.get("api_key", ""),
-            model=provider_data.get("model"),
-            base_url=provider_data.get("base_url"),
-            enabled=provider_data.get("enabled", True),
-            timeout=provider_data.get("timeout", 30),
-            max_retries=provider_data.get("max_retries", 2)
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        provider_type = LLMProviderType(str(provider_data.get("type") or "custom")).value
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    success = config_manager.add_provider(provider)
-    if success:
-        return {"message": f"Provider '{provider.name}' 创建成功", "name": provider.name}
-    else:
-        raise HTTPException(status_code=400, detail=f"Provider '{provider.name}' 已存在")
+    enabled = bool(provider_data.get("enabled", True))
+    is_default = bool(provider_data.get("is_default", False))
+    if not provider_repository.get_default() and enabled:
+        is_default = True
+    if is_default and not enabled:
+        raise HTTPException(status_code=400, detail="默认 Provider 必须处于启用状态")
+
+    try:
+        timeout = int(provider_data.get("timeout") or 30)
+        max_retries = int(provider_data.get("max_retries") or 2)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="timeout 或 max_retries 参数不合法") from exc
+
+    record = AIProviderConfigRecord(
+        name=normalized_name,
+        provider_type=provider_type,
+        api_key=str(provider_data.get("api_key") or "").strip(),
+        model=normalized_model,
+        base_url=(str(provider_data.get("base_url") or "").strip() or None),
+        enabled=enabled,
+        is_default=is_default,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    saved = provider_repository.save(record)
+    _ensure_default_provider(provider_repository)
+    _refresh_llm_router()
+
+    latest = provider_repository.get(saved.provider_id)
+    return {
+        "message": f"Provider '{normalized_name}' 创建成功",
+        "provider": _serialize_legacy_provider(latest or saved),
+    }
 
 
 @router.put("/llm/providers/{provider_name}")
@@ -612,107 +703,174 @@ async def update_llm_provider(
     provider_name: str,
     updates: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """
-    更新 LLM Provider 配置
+    """更新 Provider（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    Request Body:
-        api_key: API Key（可选，更新时提供）
-        model: 模型名称（可选）
-        base_url: API 基础 URL（可选）
-        enabled: 是否启用（可选）
-        timeout: 超时时间（可选）
-    """
-    config_manager = get_llm_config_manager()
-
-    # 只允许更新特定字段
-    allowed_fields = ["api_key", "model", "base_url", "enabled", "timeout", "max_retries"]
-    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
-
-    success = config_manager.update_provider(provider_name, filtered_updates)
-    if success:
-        return {"message": f"Provider '{provider_name}' 更新成功"}
-    else:
+    current = provider_repository.get_by_name(provider_name)
+    if not current:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    mapped_updates: Dict[str, Any] = {}
+    if updates.get("type") is not None:
+        try:
+            mapped_updates["provider_type"] = LLMProviderType(str(updates.get("type"))).value
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if updates.get("model") is not None:
+        model_value = str(updates.get("model") or "").strip()
+        if not model_value:
+            raise HTTPException(status_code=400, detail="模型名称不能为空")
+        mapped_updates["model"] = model_value
+
+    if updates.get("base_url") is not None:
+        mapped_updates["base_url"] = str(updates.get("base_url") or "").strip() or None
+
+    if updates.get("enabled") is not None:
+        enabled_value = bool(updates.get("enabled"))
+        if current.is_default and not enabled_value:
+            raise HTTPException(status_code=400, detail="默认 Provider 不能直接禁用，请先切换默认")
+        mapped_updates["enabled"] = enabled_value
+
+    if updates.get("timeout") is not None:
+        try:
+            mapped_updates["timeout"] = int(updates.get("timeout"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="timeout 参数不合法") from exc
+
+    if updates.get("max_retries") is not None:
+        try:
+            mapped_updates["max_retries"] = int(updates.get("max_retries"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="max_retries 参数不合法") from exc
+
+    if updates.get("api_key") is not None:
+        api_key_value = str(updates.get("api_key") or "").strip()
+        if api_key_value:
+            mapped_updates["api_key"] = api_key_value
+
+    if updates.get("name") is not None:
+        new_name = str(updates.get("name") or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Provider 名称不能为空")
+        duplicate = provider_repository.get_by_name(new_name)
+        if duplicate and duplicate.provider_id != current.provider_id:
+            raise HTTPException(status_code=409, detail="Provider 名称已存在")
+        mapped_updates["name"] = new_name
+
+    updated = current
+    if mapped_updates:
+        updated = provider_repository.update(current.provider_id, mapped_updates)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    _ensure_default_provider(provider_repository)
+    _refresh_llm_router()
+
+    latest = provider_repository.get(current.provider_id)
+    return {
+        "message": f"Provider '{provider_name}' 更新成功",
+        "provider": _serialize_legacy_provider(latest or updated),
+    }
 
 
 @router.delete("/llm/providers/{provider_name}")
 async def delete_llm_provider(provider_name: str) -> Dict[str, str]:
-    """
-    删除 LLM Provider 配置
-    """
-    config_manager = get_llm_config_manager()
+    """删除 Provider（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    if provider_name in ["openai", "anthropic"] and config_manager.load_config().get_provider(provider_name):
-        # 内置 Provider 不建议删除，改为禁用
-        config_manager.update_provider(provider_name, {"enabled": False})
-        return {"message": f"Provider '{provider_name}' 已禁用（内置 Provider 不建议删除）"}
-
-    success = config_manager.remove_provider(provider_name)
-    if success:
-        return {"message": f"Provider '{provider_name}' 已删除"}
-    else:
+    current = provider_repository.get_by_name(provider_name)
+    if not current:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+    if provider_repository.count() <= 1:
+        raise HTTPException(status_code=409, detail="至少保留一个 Provider")
+
+    enabled_items = provider_repository.list(enabled_only=True)
+    if current.is_default and len(enabled_items) <= 1:
+        raise HTTPException(status_code=409, detail="至少保留一个启用状态的默认 Provider")
+
+    deleted = provider_repository.delete(current.provider_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    _ensure_default_provider(provider_repository)
+    _refresh_llm_router()
+    return {"message": f"Provider '{provider_name}' 已删除"}
 
 
 @router.post("/llm/providers/{provider_name}/test")
 async def test_llm_provider(provider_name: str) -> Dict[str, Any]:
-    """
-    测试 LLM Provider 连接
+    """测试 Provider 连通性（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    发送一个简单的测试请求，验证 API Key 和配置是否正确
-    """
-    config_manager = get_llm_config_manager()
-    config = config_manager.load_config()
-
-    provider = config.get_provider(provider_name)
+    provider = provider_repository.get_by_name(provider_name)
     if not provider:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
 
-    if not provider.api_key:
-        raise HTTPException(status_code=400, detail="API Key 未配置")
+    if not provider.api_key and provider.provider_type != LLMProviderType.CUSTOM.value:
+        return {
+            "status": "error",
+            "message": "API Key 未配置，无法测试连接",
+        }
 
-    # 创建临时客户端进行测试
-    from engine.llm.client import LLMClient
-
-    client = LLMClient(provider)
+    runtime_router = _get_runtime_llm_router()
+    if not runtime_router:
+        return {
+            "status": "error",
+            "message": "当前未启用可用的 LLM Provider",
+        }
 
     try:
-        import asyncio
-        response = await asyncio.wait_for(
-            client.chat(
-                messages=[{"role": "user", "content": "Hello, this is a test message."}],
-                max_tokens=50
-            ),
-            timeout=30
+        response = await runtime_router.chat(
+            messages=[
+                {"role": "system", "content": "你是连接测试助手，请简短作答。"},
+                {"role": "user", "content": "请仅回复 OK"},
+            ],
+            provider=provider_name,
+            temperature=0,
+            max_tokens=32,
+            _source="legacy_route",
+            _endpoint="provider_test",
         )
         return {
             "status": "success",
             "message": "连接测试成功",
-            "response_preview": response[:200] if len(response) > 200 else response
+            "response_preview": response[:200],
         }
-    except Exception as e:
+    except Exception as exc:
         return {
-            "status": "failed",
-            "message": f"连接测试失败：{str(e)}"
+            "status": "error",
+            "message": f"连接测试失败：{exc}",
         }
 
 
 @router.post("/llm/default-provider")
 async def set_default_llm_provider(data: Dict[str, str]) -> Dict[str, Any]:
-    """
-    设置默认 LLM Provider
-    """
-    config_manager = get_llm_config_manager()
+    """设置默认 Provider（兼容路径）。"""
+    provider_repository = _get_ai_provider_repository()
+    if not provider_repository:
+        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
 
-    provider_name = data.get("provider_name")
+    provider_name = str(data.get("provider_name") or "").strip()
     if not provider_name:
         raise HTTPException(status_code=400, detail="缺少 provider_name 参数")
 
-    success = config_manager.set_default_provider(provider_name)
-    if success:
-        return {"message": f"默认 Provider 已设置为 '{provider_name}'"}
-    else:
+    provider = provider_repository.get_by_name(provider_name)
+    if not provider:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
+
+    default_record = provider_repository.set_default(provider.provider_id)
+    if not default_record:
+        raise HTTPException(status_code=400, detail="默认 Provider 必须处于启用状态")
+
+    _refresh_llm_router()
+    return {"message": f"默认 Provider 已设置为 '{provider_name}'"}
 
 
 @router.post("/llm/analyze")
@@ -722,43 +880,29 @@ async def llm_analyze(
     temperature: float = Body(default=0.7, description="温度参数"),
     max_tokens: int = Body(default=2000, description="最大 token 数")
 ) -> Dict[str, Any]:
-    """
-    直接使用 LLM 进行分析
-
-    Request Body:
-        messages: 消息列表 [{"role": "user", "content": "..."}]
-        provider: 指定 Provider（可选，默认使用默认 Provider）
-        temperature: 温度参数（可选）
-        max_tokens: 最大 token 数（可选）
-
-    Returns:
-        LLM 响应内容
-    """
-    config_manager = get_llm_config_manager()
-    config = config_manager.load_config()
-
-    # 构建路由器
-    llm_clients = {}
-    for p in config.get_enabled_providers():
-        llm_clients[p.name] = LLMClient(p)
-
-    if not llm_clients:
+    """LLM 分析兼容入口，内部复用运行时路由。"""
+    runtime_router = _get_runtime_llm_router()
+    if not runtime_router:
         raise HTTPException(status_code=500, detail="没有可用的 LLM Provider")
 
-    router = LLMRouter(llm_clients, config.default_provider)
+    if provider and provider not in runtime_router.clients:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider}' 不存在")
 
     try:
-        import asyncio
-        response = await asyncio.wait_for(
-            router.chat(messages, provider=provider, temperature=temperature, max_tokens=max_tokens),
-            timeout=60
+        response = await runtime_router.chat(
+            messages,
+            provider=provider,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            _source="legacy_route",
+            _endpoint="analyze",
         )
         return {
             "content": response,
-            "provider": provider or config.default_provider
+            "provider": provider or runtime_router.default_client_name,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM 调用失败：{str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LLM 调用失败：{exc}") from exc
 
 
 # ========== Prometheus 数据源 API ==========

@@ -35,7 +35,7 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 
-import { aiApi, llmApi, type LLMCallLogRecord, type LLMProviderRecord } from '@/api/client'
+import { aiApi, type LLMCallLogRecord, type LLMProviderRecord } from '@/api/client'
 
 interface LLMProvider extends LLMProviderRecord {
   provider_id: string
@@ -79,7 +79,7 @@ const LLMSettings: React.FC = () => {
   const loadCallLogs = async () => {
     setCallLogsLoading(true)
     try {
-      const data = await llmApi.listCallLogs({ limit: 30 })
+      const data = await aiApi.listCallLogs({ limit: 30 })
       setCallLogs(data.items || [])
     } catch (error) {
       message.error('加载调用日志失败')
