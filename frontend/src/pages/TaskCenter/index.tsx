@@ -16,7 +16,14 @@ import {
   message,
 } from 'antd'
 import { useNavigate } from 'react-router-dom'
-import { tasksApi, type ArtifactContentResponse, type TaskArtifact, type TaskDetailResponse, type TaskRecord } from '@/api/client'
+import {
+  tasksApi,
+  type ArtifactContentResponse,
+  type TaskArtifact,
+  type TaskDetailResponse,
+  type TaskFailureDiagnosis,
+  type TaskRecord,
+} from '@/api/client'
 import { useTaskEventStream } from '@/hooks/useTaskEventStream'
 
 const { Paragraph, Text, Title } = Typography
@@ -49,12 +56,14 @@ export const TaskCenter: React.FC = () => {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewArtifactId, setPreviewArtifactId] = useState('')
   const [preview, setPreview] = useState<PreviewState | null>(null)
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false)
   const [approveModalOpen, setApproveModalOpen] = useState(false)
   const [approveSubmitting, setApproveSubmitting] = useState(false)
   const [approvedBy, setApprovedBy] = useState('operator')
   const [approvalNote, setApprovalNote] = useState('')
 
   const selectedTaskId = selectedTask?.task.task_id
+  const failureDiagnosis = selectedTask?.failure_diagnosis || null
   const recommendationArtifact = useMemo(
     () => selectedTask?.artifacts.find((artifact) => artifact.kind === 'diff') || selectedTask?.artifacts.find((artifact) => artifact.kind === 'manifest') || null,
     [selectedTask],
@@ -125,6 +134,35 @@ export const TaskCenter: React.FC = () => {
     message.success('任务已取消')
     await loadTaskDetail(selectedTask.task.task_id)
     await loadTasks()
+  }
+
+  // 失败诊断支持单独刷新，避免整页重载时丢失当前阅读上下文。
+  const refreshFailureDiagnosis = async () => {
+    if (!selectedTask) {
+      return
+    }
+    if (!['FAILED', 'CANCELLED'].includes(selectedTask.task.status)) {
+      return
+    }
+
+    setDiagnosisLoading(true)
+    try {
+      const diagnosis = (await tasksApi.getDiagnosis(selectedTask.task.task_id)) as TaskFailureDiagnosis
+      setSelectedTask((prev) => {
+        if (!prev || prev.task.task_id !== selectedTask.task.task_id) {
+          return prev
+        }
+        return {
+          ...prev,
+          failure_diagnosis: diagnosis,
+        }
+      })
+      message.success('失败诊断已刷新')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '失败诊断刷新失败')
+    } finally {
+      setDiagnosisLoading(false)
+    }
   }
 
   const previewArtifact = async (artifact: TaskArtifact) => {
@@ -213,6 +251,9 @@ export const TaskCenter: React.FC = () => {
             extra={
               <Space>
                 <Button onClick={() => setApproveModalOpen(true)} disabled={selectedTask?.task.status !== 'WAITING_CONFIRM'}>确认</Button>
+                <Button onClick={() => void refreshFailureDiagnosis()} loading={diagnosisLoading} disabled={!selectedTask || !['FAILED', 'CANCELLED'].includes(selectedTask.task.status)}>
+                  失败诊断
+                </Button>
                 <Button onClick={openRecommendationDraft} disabled={!selectedTask || selectedTask.task.task_type !== 'recommendation_generation' || !recommendationArtifact}>
                   查看建议草稿
                 </Button>
@@ -235,6 +276,67 @@ export const TaskCenter: React.FC = () => {
                 {selectedTask.task.approval?.approval_note ? (
                   <Card type="inner" title="确认备注" style={{ marginBottom: 16 }}>
                     <Paragraph style={{ marginBottom: 0 }}>{selectedTask.task.approval.approval_note}</Paragraph>
+                  </Card>
+                ) : null}
+                {selectedTask.task.error ? (
+                  <Card type="inner" title="失败信息" style={{ marginBottom: 16 }}>
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="错误码">{selectedTask.task.error.error_code}</Descriptions.Item>
+                      <Descriptions.Item label="失败阶段">{selectedTask.task.error.failed_stage || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="错误消息">
+                        <Paragraph style={{ marginBottom: 0 }}>{selectedTask.task.error.error_message}</Paragraph>
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                ) : null}
+                {failureDiagnosis ? (
+                  <Card type="inner" title="失败诊断" style={{ marginBottom: 16 }}>
+                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Tag color={failureDiagnosis.retryable ? 'blue' : 'red'}>
+                          {failureDiagnosis.retryable ? '可重试' : '需先修复配置'}
+                        </Tag>
+                        <Tag>Trace 步骤 {failureDiagnosis.trace_stats.total_steps}</Tag>
+                        <Tag>产物 {failureDiagnosis.artifact_count}</Tag>
+                      </Space>
+                      <Descriptions column={1} size="small">
+                        <Descriptions.Item label="最后一步">
+                          {failureDiagnosis.trace_stats.last_step
+                            ? `${failureDiagnosis.trace_stats.last_step.step} / ${failureDiagnosis.trace_stats.last_step.action} (${failureDiagnosis.trace_stats.last_step.stage})`
+                            : '-'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="最后观察">
+                          {failureDiagnosis.trace_stats.last_step?.summary || '-'}
+                        </Descriptions.Item>
+                      </Descriptions>
+
+                      <div>
+                        <Text strong>可能原因</Text>
+                        <List
+                          size="small"
+                          dataSource={failureDiagnosis.possible_causes}
+                          renderItem={(item) => <List.Item>{item}</List.Item>}
+                        />
+                      </div>
+                      <div>
+                        <Text strong>建议动作</Text>
+                        <List
+                          size="small"
+                          dataSource={failureDiagnosis.suggested_actions}
+                          renderItem={(item) => <List.Item>{item}</List.Item>}
+                        />
+                      </div>
+                      {failureDiagnosis.artifact_hints.length ? (
+                        <div>
+                          <Text strong>相关产物</Text>
+                          <List
+                            size="small"
+                            dataSource={failureDiagnosis.artifact_hints}
+                            renderItem={(item) => <List.Item>{item}</List.Item>}
+                          />
+                        </div>
+                      ) : null}
+                    </Space>
                   </Card>
                 ) : null}
                 <Card type="inner" title="Trace 预览" style={{ marginBottom: 16 }}>

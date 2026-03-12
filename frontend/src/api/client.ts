@@ -201,10 +201,37 @@ export interface ResourceSummary {
   risk_items: ResourceRiskItem[]
 }
 
+export interface TaskFailureDiagnosis {
+  task_id: string
+  status: string
+  retryable: boolean
+  error: {
+    error_code: string
+    error_message: string
+    failed_stage: string
+  }
+  trace_stats: {
+    total_steps: number
+    stages: Record<string, number>
+    last_step: {
+      step: string
+      action: string
+      stage: string
+      summary: string
+      created_at: string
+    } | null
+  }
+  artifact_count: number
+  artifact_hints: string[]
+  possible_causes: string[]
+  suggested_actions: string[]
+}
+
 export interface TaskDetailResponse {
   task: TaskRecord
   trace_preview: Array<Record<string, unknown>>
   artifacts: TaskArtifact[]
+  failure_diagnosis?: TaskFailureDiagnosis | null
 }
 
 export interface IncidentLogSample {
@@ -342,6 +369,7 @@ export const recommendationsApi = {
 export const tasksApi = {
   list: (params?: { task_type?: string; status?: string }) => apiClient.get('/tasks', { params }),
   get: (taskId: string) => apiClient.get(`/tasks/${taskId}`),
+  getDiagnosis: (taskId: string) => apiClient.get(`/tasks/${taskId}/diagnosis`),
   approve: (taskId: string, payload?: { approved_by?: string; approval_note?: string }) => apiClient.post(`/tasks/${taskId}/approve`, payload),
   cancel: (taskId: string) => apiClient.post(`/tasks/${taskId}/cancel`),
   getArtifact: (taskId: string, artifactId: string) => apiClient.get(`/tasks/${taskId}/artifacts/${artifactId}`),
