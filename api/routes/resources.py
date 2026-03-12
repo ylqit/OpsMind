@@ -15,9 +15,8 @@ async def get_resource_summary(
     asset_id: str | None = None,
     resource_engine=Depends(get_resource_engine),
 ):
-    del time_range
     del asset_id
-    return await resource_engine.summarize(service_key=service_key)
+    return await resource_engine.summarize(time_range=time_range, service_key=service_key)
 
 
 @router.get("/assets")

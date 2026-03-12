@@ -27,7 +27,8 @@ class ResourceAnalyticsEngine:
         self.prometheus_url = prometheus_url
         self.prometheus_api_key = prometheus_api_key
 
-    async def summarize(self, service_key: Optional[str] = None) -> Dict[str, Any]:
+    async def summarize(self, time_range: str = "1h", service_key: Optional[str] = None) -> Dict[str, Any]:
+        del time_range
         host_result = await self.host_monitor.dispatch(metrics=["cpu", "memory", "disk", "network"])
         docker_summary = await self._summarize_docker(service_key=service_key)
         prometheus_summary = await self._summarize_prometheus()

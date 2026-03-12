@@ -244,6 +244,21 @@ export const IncidentCenter: React.FC = () => {
     }
   }
 
+  const openTrafficForIncident = () => {
+    if (!selectedIncident) {
+      return
+    }
+    const params = new URLSearchParams()
+    const timeWindowStart = new Date(selectedIncident.incident.time_window_start)
+    const timeWindowEnd = new Date(selectedIncident.incident.time_window_end)
+    const durationMs = Math.max(0, timeWindowEnd.getTime() - timeWindowStart.getTime())
+    const hours = durationMs / (1000 * 60 * 60)
+    const timeRange = hours > 6 ? '24h' : hours > 1 ? '6h' : '1h'
+    params.set('time_range', timeRange)
+    params.set('service_key', selectedIncident.incident.service_key)
+    navigate(`/traffic?${params.toString()}`)
+  }
+
   const generateRecommendationForIncident = async () => {
     if (!selectedIncident) {
       return
@@ -362,7 +377,10 @@ export const IncidentCenter: React.FC = () => {
                   <Tag color="geekblue">置信度 {Math.round(selectedIncident.incident.confidence * 100)}%</Tag>
                 </Space>
                 <Paragraph>{selectedIncident.incident.summary}</Paragraph>
-                <Paragraph type="secondary">服务键：{selectedIncident.incident.service_key}</Paragraph>
+                <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <Paragraph type="secondary" style={{ marginBottom: 0 }}>服务键：{selectedIncident.incident.service_key}</Paragraph>
+                  <Button type="link" size="small" onClick={openTrafficForIncident}>查看对应流量</Button>
+                </Space>
                 <Space wrap style={{ marginBottom: 16 }}>
                   {selectedIncident.incident.reasoning_tags.map((tag) => (
                     <Tag key={tag}>{tag}</Tag>
