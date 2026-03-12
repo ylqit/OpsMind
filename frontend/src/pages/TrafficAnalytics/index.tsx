@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, Empty, Input, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { AutoComplete, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { Column, Line, Pie } from '@ant-design/plots'
-import { trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
+import { useSearchParams } from 'react-router-dom'
+import { resourcesApi, trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -10,6 +11,38 @@ const timeRangeOptions = [
   { label: '最近 6 小时', value: '6h' },
   { label: '最近 24 小时', value: '24h' },
 ]
+
+const allowedTimeRanges = new Set(timeRangeOptions.map((item) => item.value))
+
+interface AssetLite {
+  service_key?: string
+}
+
+interface AssetListResponse {
+  items: AssetLite[]
+}
+
+const normalizeTimeRange = (value: string | null | undefined) => {
+  if (!value || !allowedTimeRanges.has(value)) {
+    return '1h'
+  }
+  return value
+}
+
+const mergeServiceKeys = (base: string[], incoming: string[]) => {
+  const set = new Set(base)
+  incoming.filter(Boolean).forEach((item) => set.add(item))
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+const extractServiceKeysFromRecords = (records: Array<Record<string, unknown>> | undefined) => {
+  if (!records?.length) {
+    return []
+  }
+  return records
+    .map((item) => item.service_key)
+    .filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
 
 const formatSampleTime = (value: string) => {
   const parsed = new Date(value)
@@ -22,27 +55,80 @@ const formatSampleTime = (value: string) => {
 const formatLatency = (value: number) => `${Math.round(value * 1000)} ms`
 
 const TrafficAnalytics: React.FC = () => {
-  const [timeRange, setTimeRange] = useState('1h')
-  const [serviceKey, setServiceKey] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [timeRange, setTimeRange] = useState(() => normalizeTimeRange(searchParams.get('time_range')))
+  const [serviceKey, setServiceKey] = useState(() => searchParams.get('service_key') || '')
+  const deferredServiceKey = useDeferredValue(serviceKey)
+
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<TrafficSummary | null>(null)
+  const [serviceKeys, setServiceKeys] = useState<string[]>([])
 
-  const loadSummary = async () => {
+  const serviceOptions = useMemo(
+    () => serviceKeys.map((item) => ({ value: item, label: item })),
+    [serviceKeys],
+  )
+
+  const loadServiceKeys = async () => {
+    try {
+      const response = (await resourcesApi.listAssets()) as AssetListResponse
+      const keys = response.items
+        .map((item) => item.service_key)
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+      setServiceKeys((prev) => mergeServiceKeys(prev, keys))
+    } catch {
+      // 资产接口异常时不阻塞流量分析主流程。
+    }
+  }
+
+  const loadSummary = async (override?: { timeRange?: string; serviceKey?: string }) => {
+    const activeTimeRange = override?.timeRange ?? timeRange
+    const activeServiceKey = override?.serviceKey ?? deferredServiceKey
     setLoading(true)
     try {
       const response = (await trafficApi.getSummary({
-        time_range: timeRange,
-        service_key: serviceKey || undefined,
+        time_range: activeTimeRange,
+        service_key: activeServiceKey || undefined,
       })) as TrafficSummary
       setSummary(response)
+      const keysFromRecords = extractServiceKeysFromRecords(response.records_sample)
+      setServiceKeys((prev) => mergeServiceKeys(prev, keysFromRecords))
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    void loadServiceKeys()
+  }, [])
+
+  useEffect(() => {
     void loadSummary()
-  }, [timeRange])
+  }, [timeRange, deferredServiceKey])
+
+  useEffect(() => {
+    const nextTimeRange = normalizeTimeRange(searchParams.get('time_range'))
+    const nextServiceKey = searchParams.get('service_key') || ''
+    if (nextTimeRange !== timeRange) {
+      setTimeRange(nextTimeRange)
+    }
+    if (nextServiceKey !== serviceKey) {
+      setServiceKey(nextServiceKey)
+    }
+  }, [searchParams, timeRange, serviceKey])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    next.set('time_range', timeRange)
+    if (serviceKey) {
+      next.set('service_key', serviceKey)
+    } else {
+      next.delete('service_key')
+    }
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [timeRange, serviceKey, searchParams, setSearchParams])
 
   // 把请求数和错误数压平成统一序列，图表层可以直接按类型分组绘制。
   const trendData = useMemo(
@@ -53,6 +139,11 @@ const TrafficAnalytics: React.FC = () => {
       ]) ?? [],
     [summary],
   )
+
+  const resetFilters = () => {
+    setTimeRange('1h')
+    setServiceKey('')
+  }
 
   return (
     <div className="ops-page">
@@ -65,10 +156,23 @@ const TrafficAnalytics: React.FC = () => {
         </div>
         <Space wrap>
           <Select value={timeRange} onChange={setTimeRange} options={timeRangeOptions} style={{ width: 140 }} />
-          <Input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="按 service_key 过滤" style={{ width: 220 }} />
-          <Button type="link" onClick={() => void loadSummary()}>刷新</Button>
+          <AutoComplete
+            value={serviceKey}
+            options={serviceOptions}
+            onChange={setServiceKey}
+            placeholder="输入或选择 service_key"
+            style={{ width: 240 }}
+            filterOption={(inputValue, option) => String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
+          />
+          <Button onClick={resetFilters}>重置</Button>
+          <Button type="link" onClick={() => void loadSummary({ serviceKey })}>刷新</Button>
         </Space>
       </div>
+
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Tag color="blue">时间窗：{timeRange}</Tag>
+        <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
+      </Space>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={6}>

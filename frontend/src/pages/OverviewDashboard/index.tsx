@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import { Alert, Button, Card, Col, Empty, List, Row, Space, Statistic, Tag, Typography } from 'antd'
 import { Line } from '@ant-design/plots'
+import { useNavigate } from 'react-router-dom'
 import { dashboardApi, type DashboardOverview } from '@/api/client'
 
 const { Paragraph, Text, Title } = Typography
 
 export const OverviewDashboard: React.FC = () => {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [data, setData] = useState<DashboardOverview | null>(null)
@@ -26,6 +28,15 @@ export const OverviewDashboard: React.FC = () => {
   useEffect(() => {
     void loadData()
   }, [])
+
+  const openTraffic = (serviceKey: string, timeRange: string = '1h') => {
+    const params = new URLSearchParams()
+    params.set('time_range', timeRange)
+    if (serviceKey) {
+      params.set('service_key', serviceKey)
+    }
+    navigate(`/traffic?${params.toString()}`)
+  }
 
   const lineConfig = {
     data: (data?.traffic_trend || []).map((item) => ({
@@ -118,7 +129,12 @@ export const OverviewDashboard: React.FC = () => {
                       <Text strong>{incident.title}</Text>
                     </Space>
                     <Paragraph style={{ marginBottom: 6 }}>{incident.summary}</Paragraph>
-                    <Text type="secondary">{incident.service_key}</Text>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <Text type="secondary">{incident.service_key}</Text>
+                      <Button type="link" size="small" onClick={() => openTraffic(incident.service_key)}>
+                        查看流量
+                      </Button>
+                    </Space>
                   </div>
                 </List.Item>
               )}
@@ -137,7 +153,12 @@ export const OverviewDashboard: React.FC = () => {
                       <Text strong>{item.service_key}</Text>
                       <Tag color={item.score >= 85 ? 'red' : item.score >= 70 ? 'orange' : 'blue'}>{item.score.toFixed(0)}</Tag>
                     </Space>
-                    <Paragraph style={{ marginBottom: 0 }}>{item.reason}</Paragraph>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <Paragraph style={{ marginBottom: 0 }}>{item.reason}</Paragraph>
+                      <Button type="link" size="small" onClick={() => openTraffic(item.service_key)}>
+                        流量分析
+                      </Button>
+                    </Space>
                   </div>
                 </List.Item>
               )}
