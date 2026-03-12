@@ -133,6 +133,28 @@ class TaskRecord(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class AICallLogStatus(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class AICallLog(BaseModel):
+    call_id: str = Field(default_factory=lambda: f"llm_call_{uuid4().hex[:12]}")
+    provider_name: str
+    model: str
+    source: str = "unknown"
+    endpoint: str = "chat"
+    task_id: Optional[str] = None
+    prompt_preview: str = ""
+    response_preview: str = ""
+    status: AICallLogStatus = AICallLogStatus.SUCCESS
+    error_message: str = ""
+    latency_ms: int = 0
+    request_tokens: Optional[int] = None
+    response_tokens: Optional[int] = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Asset(BaseModel):
     asset_id: str = Field(default_factory=lambda: f"asset_{uuid4().hex[:12]}")
     asset_type: AssetType

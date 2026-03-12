@@ -2,8 +2,10 @@
 LLM 客户端模块
 支持多个 LLM Provider 的统一调用接口
 """
+import time
+
 import httpx
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import Dict, Any, List, Optional, AsyncGenerator, Callable
 from .config import LLMProviderConfig, LLMProviderType
 
 
@@ -117,10 +119,16 @@ class LLMRouter:
     - Provider 选择
     """
 
-    def __init__(self, clients: Dict[str, LLMClient], default_client_name: str = "openai"):
+    def __init__(
+        self,
+        clients: Dict[str, LLMClient],
+        default_client_name: str = "openai",
+        call_observer: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    ):
         self.clients = clients
         self.default_client_name = default_client_name
         self.fallback_order = list(clients.keys())
+        self.call_observer = call_observer
 
     def get_client(self, name: Optional[str] = None) -> Optional[LLMClient]:
         """获取指定客户端"""
@@ -130,6 +138,65 @@ class LLMRouter:
     def get_enabled_clients(self) -> List[LLMClient]:
         """获取所有启用的客户端"""
         return list(self.clients.values())
+
+    async def _notify_call_observer(self, payload: Dict[str, Any]) -> None:
+        """记录 LLM 调用信息，避免日志异常中断主流程。"""
+        if not self.call_observer:
+            return
+        try:
+            result = self.call_observer(payload)
+            if hasattr(result, "__await__"):
+                await result
+        except Exception:
+            # 日志记录失败不影响主链路。
+            return
+
+    async def _chat_with_client(
+        self,
+        client_name: str,
+        client: LLMClient,
+        messages: List[Dict[str, str]],
+        source: str,
+        endpoint: str,
+        task_id: Optional[str],
+        **kwargs,
+    ) -> str:
+        started = time.perf_counter()
+        try:
+            content = await client.chat(messages, **kwargs)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            await self._notify_call_observer(
+                {
+                    "provider_name": client_name,
+                    "model": client.model,
+                    "source": source,
+                    "endpoint": endpoint,
+                    "task_id": task_id,
+                    "prompt_preview": (messages[-1].get("content", "") if messages else "")[:200],
+                    "response_preview": content[:200],
+                    "status": "success",
+                    "error_message": "",
+                    "latency_ms": latency_ms,
+                }
+            )
+            return content
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            await self._notify_call_observer(
+                {
+                    "provider_name": client_name,
+                    "model": client.model,
+                    "source": source,
+                    "endpoint": endpoint,
+                    "task_id": task_id,
+                    "prompt_preview": (messages[-1].get("content", "") if messages else "")[:200],
+                    "response_preview": "",
+                    "status": "error",
+                    "error_message": str(exc)[:300],
+                    "latency_ms": latency_ms,
+                }
+            )
+            raise
 
     async def chat(self, messages: List[Dict[str, str]], provider: Optional[str] = None, **kwargs) -> str:
         """
@@ -143,13 +210,26 @@ class LLMRouter:
         Returns:
             LLM 响应
         """
+        source = str(kwargs.pop("_source", "runtime"))
+        endpoint = str(kwargs.pop("_endpoint", "chat"))
+        task_id_value = kwargs.pop("_task_id", None)
+        task_id = str(task_id_value) if task_id_value else None
+
         # 尝试指定 Provider
         if provider:
             client = self.get_client(provider)
             if client:
                 try:
-                    return await client.chat(messages, **kwargs)
-                except Exception as e:
+                    return await self._chat_with_client(
+                        provider,
+                        client,
+                        messages,
+                        source,
+                        endpoint,
+                        task_id,
+                        **kwargs,
+                    )
+                except Exception:
                     # 失败后尝试默认 Provider
                     pass
 
@@ -157,7 +237,15 @@ class LLMRouter:
         default_client = self.get_client()
         if default_client:
             try:
-                return await default_client.chat(messages, **kwargs)
+                return await self._chat_with_client(
+                    self.default_client_name,
+                    default_client,
+                    messages,
+                    source,
+                    endpoint,
+                    task_id,
+                    **kwargs,
+                )
             except Exception:
                 pass
 
@@ -165,7 +253,15 @@ class LLMRouter:
         for name, client in self.clients.items():
             if name != self.default_client_name and name != provider:
                 try:
-                    return await client.chat(messages, **kwargs)
+                    return await self._chat_with_client(
+                        name,
+                        client,
+                        messages,
+                        source,
+                        endpoint,
+                        task_id,
+                        **kwargs,
+                    )
                 except Exception:
                     continue
 

@@ -13,6 +13,7 @@ from .deps import (
     get_alert_store,
     get_asset_service,
     get_incident_service,
+    get_llm_router_dep,
     get_recommendation_service,
     get_resource_engine,
     get_signal_service,
@@ -30,6 +31,12 @@ class IncidentAnalyzeRequest(BaseModel):
     service_key: str | None = Field(default=None, description="服务键")
     asset_id: str | None = Field(default=None, description="资产 ID")
     time_window: str = Field(default="1h", description="分析时间窗口")
+
+
+class IncidentAISummaryRequest(BaseModel):
+    """异常 AI 摘要请求。"""
+
+    provider: str | None = Field(default=None, description="指定 Provider")
 
 
 @router.get("")
@@ -58,7 +65,8 @@ def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
         "client_ip": record.get("remote_addr") or "-",
         "geo_label": "/".join(
             [str(item) for item in [geo.get("country"), geo.get("region"), geo.get("city")] if item],
-        ) or "未知",
+        )
+        or "unknown",
         "user_agent": record.get("user_agent") or "Unknown",
         "browser": ua.get("browser") or "Unknown",
         "os": ua.get("os") or "Unknown",
@@ -76,7 +84,8 @@ async def get_incident_detail(
 ):
     incident = incident_service.get_incident(incident_id)
     if not incident:
-        raise HTTPException(status_code=404, detail="异常不存在")
+        raise HTTPException(status_code=404, detail="incident not found")
+
     recommendations = recommendation_service.list_by_incident(incident_id)
     log_samples = []
     log_paths = resolve_access_logs()
@@ -89,10 +98,86 @@ async def get_incident_detail(
             limit=8,
         )
         log_samples = [_format_log_sample(item) for item in samples]
+
     return {
         "incident": incident.model_dump(mode="json"),
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
+    }
+
+
+@router.post("/{incident_id}/ai-summary")
+async def generate_incident_ai_summary(
+    incident_id: str,
+    request: IncidentAISummaryRequest,
+    incident_service=Depends(get_incident_service),
+    recommendation_service=Depends(get_recommendation_service),
+    traffic_engine=Depends(get_traffic_engine),
+    llm_router=Depends(get_llm_router_dep),
+):
+    incident = incident_service.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="incident not found")
+
+    if not llm_router:
+        raise HTTPException(status_code=409, detail="当前未启用可用的 LLM Provider")
+
+    recommendations = recommendation_service.list_by_incident(incident_id)
+    log_paths = resolve_access_logs()
+    samples: list[dict[str, Any]] = []
+    if log_paths:
+        samples = traffic_engine.sample_records(
+            log_paths,
+            service_key=incident.service_key,
+            start_time=incident.time_window_start,
+            end_time=incident.time_window_end,
+            limit=5,
+        )
+
+    sample_lines = [
+        f"- {item.get('timestamp')} {item.get('method')} {item.get('path')} status={item.get('status')} rt={item.get('request_time')}"
+        for item in samples
+    ]
+    recommendation_lines = [f"- {item.kind.value}: {item.recommendation}" for item in recommendations[:5]]
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an SRE assistant. Summarize in Chinese with symptoms, causes, risk level, and actions.",
+        },
+        {
+            "role": "user",
+            "content": (
+                f"服务: {incident.service_key}\n"
+                f"时间窗: {incident.time_window_start.isoformat()} ~ {incident.time_window_end.isoformat()}\n"
+                f"严重级别: {incident.severity}\n"
+                f"已有摘要: {incident.summary}\n"
+                f"推理标签: {', '.join(incident.reasoning_tags) or '-'}\n"
+                f"推荐动作: {', '.join(incident.recommended_actions) or '-'}\n"
+                f"建议草稿:\n{chr(10).join(recommendation_lines) if recommendation_lines else '-'}\n"
+                f"日志样本:\n{chr(10).join(sample_lines) if sample_lines else '-'}"
+            ),
+        },
+    ]
+
+    try:
+        summary = await llm_router.chat(
+            messages,
+            provider=request.provider,
+            temperature=0.2,
+            max_tokens=400,
+            _source="incident_center",
+            _endpoint="incident_ai_summary",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"AI 摘要生成失败：{exc}") from exc
+
+    return {
+        "incident_id": incident.incident_id,
+        "provider": request.provider or llm_router.default_client_name,
+        "summary": summary.strip(),
+        "log_sample_count": len(samples),
+        "recommendation_count": len(recommendations),
     }
 
 
@@ -110,7 +195,7 @@ async def analyze_incident(
     service_key = request.service_key or "unknown/root"
 
     async def runner(task):
-        await task_manager.set_stage(task.task_id, TaskStatus.COLLECTING, 15, "正在同步资产与采集流量数据")
+        await task_manager.set_stage(task.task_id, TaskStatus.COLLECTING, 15, "syncing assets and traffic signals")
         assets = await asset_service.sync_assets(service_key=service_key)
         related_asset_ids = [asset.asset_id for asset in assets if not request.asset_id or asset.asset_id == request.asset_id]
         log_paths = resolve_access_logs()

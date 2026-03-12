@@ -134,6 +134,8 @@ export const IncidentCenter: React.FC = () => {
   const [serviceKey, setServiceKey] = useState('unknown/root')
   const [creating, setCreating] = useState(false)
   const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
+  const [aiSummary, setAiSummary] = useState('')
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
@@ -208,6 +210,7 @@ export const IncidentCenter: React.FC = () => {
   const loadIncidentDetail = useCallback(async (incidentId: string) => {
     const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelectedIncident(response)
+    setAiSummary('')
     return response
   }, [])
 
@@ -270,6 +273,22 @@ export const IncidentCenter: React.FC = () => {
       message.success('建议生成任务已提交，详情会在当前页面持续更新')
     } finally {
       setGeneratingRecommendation(false)
+    }
+  }
+
+  const generateAiSummaryForIncident = async () => {
+    if (!selectedIncident) {
+      return
+    }
+    setAiSummaryLoading(true)
+    try {
+      const response = (await incidentsApi.aiSummary(selectedIncident.incident.incident_id)) as { summary?: string }
+      setAiSummary(response.summary || 'AI 未返回有效摘要，请稍后重试')
+      message.success('已生成 AI 异常摘要')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'AI 摘要生成失败')
+    } finally {
+      setAiSummaryLoading(false)
     }
   }
 
@@ -361,6 +380,9 @@ export const IncidentCenter: React.FC = () => {
                 <Button type="primary" ghost onClick={() => void generateRecommendationForIncident()} disabled={!selectedIncident} loading={generatingRecommendation}>
                   生成建议
                 </Button>
+                <Button onClick={() => void generateAiSummaryForIncident()} disabled={!selectedIncident} loading={aiSummaryLoading}>
+                  AI 总结
+                </Button>
                 <Button onClick={() => openRecommendationCenter()} disabled={!selectedIncident}>
                   打开建议中心
                 </Button>
@@ -441,6 +463,12 @@ export const IncidentCenter: React.FC = () => {
                         )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无高优先证据" />}
                       </div>
                     </div>
+                  </Card>
+                ) : null}
+
+                {aiSummary ? (
+                  <Card type="inner" title="AI 异常总结" style={{ marginBottom: 16 }}>
+                    <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{aiSummary}</Paragraph>
                   </Card>
                 ) : null}
 

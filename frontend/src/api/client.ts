@@ -313,6 +313,34 @@ export interface ArtifactContentResponse {
   content_type: string
 }
 
+export interface LLMProviderRecord {
+  name: string
+  type: string
+  model: string
+  base_url?: string | null
+  enabled: boolean
+  timeout: number
+  max_retries: number
+  api_key_configured: boolean
+}
+
+export interface LLMCallLogRecord {
+  call_id: string
+  provider_name: string
+  model: string
+  source: string
+  endpoint: string
+  task_id?: string | null
+  prompt_preview: string
+  response_preview: string
+  status: 'success' | 'error'
+  error_message: string
+  latency_ms: number
+  request_tokens?: number | null
+  response_tokens?: number | null
+  created_at: string
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -420,6 +448,8 @@ export const incidentsApi = {
   list: (params?: { status?: string; severity?: string; service_key?: string; time_range?: string }) => apiClient.get('/incidents', { params }),
   get: (incidentId: string) => apiClient.get(`/incidents/${encodePathSegment(incidentId)}`),
   analyze: (payload: { service_key?: string; asset_id?: string; time_window: string }) => apiClient.post('/incidents/analyze', payload),
+  aiSummary: (incidentId: string, payload?: { provider?: string }) =>
+    apiClient.post(`/incidents/${encodePathSegment(incidentId)}/ai-summary`, payload ?? {}),
 }
 
 export const recommendationsApi = {
@@ -440,6 +470,37 @@ export const tasksApi = {
   getArtifactContent: (taskId: string, artifactId: string) =>
     apiClient.get(`${buildTaskArtifactPath(taskId, artifactId)}/content`),
   getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}${buildTaskArtifactPath(taskId, artifactId)}/download`,
+}
+
+export const llmApi = {
+  listProviders: () => apiClient.get('/llm/providers'),
+  createProvider: (payload: {
+    name: string
+    type: string
+    api_key?: string
+    model: string
+    base_url?: string
+    enabled?: boolean
+    timeout?: number
+    max_retries?: number
+  }) => apiClient.post('/llm/providers', payload),
+  updateProvider: (
+    providerName: string,
+    payload: {
+      type?: string
+      api_key?: string
+      model?: string
+      base_url?: string
+      enabled?: boolean
+      timeout?: number
+      max_retries?: number
+    },
+  ) => apiClient.put(`/llm/providers/${encodePathSegment(providerName)}`, payload),
+  deleteProvider: (providerName: string) => apiClient.delete(`/llm/providers/${encodePathSegment(providerName)}`),
+  setDefaultProvider: (providerName: string) => apiClient.post('/llm/default-provider', { provider_name: providerName }),
+  testProvider: (providerName: string) => apiClient.post(`/llm/providers/${encodePathSegment(providerName)}/test`),
+  listCallLogs: (params?: { provider_name?: string; status?: 'success' | 'error'; limit?: number }) =>
+    apiClient.get('/llm/call-logs', { params }),
 }
 
 export default apiClient

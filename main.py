@@ -41,10 +41,12 @@ from engine.operations.incident_reporter import IncidentReporter
 from engine.operations.skill_orchestrator import SkillOrchestrator
 from engine.runtime.artifact_store import ArtifactStore
 from engine.runtime.event_bus import EventBus
+from engine.runtime.models import AICallLog
 from engine.runtime.task_manager import TaskManager
 from engine.runtime.trace_store import TraceStore
 from engine.storage.alert_store import AlertStore
 from engine.storage.repositories import (
+    AICallLogRepository,
     ArtifactRepository,
     AssetRepository,
     IncidentRepository,
@@ -75,6 +77,9 @@ traffic_analytics_engine: TrafficAnalyticsEngine | None = None
 resource_analytics_engine: ResourceAnalyticsEngine | None = None
 summary_builder: SummaryBuilder | None = None
 data_sources_status: dict[str, Any] = {}
+ai_call_log_repository: AICallLogRepository | None = None
+llm_config_manager_instance = None
+llm_router_instance: LLMRouter | None = None
 
 
 def _build_data_sources_status(runtime_config: RuntimeConfig) -> dict[str, Any]:
@@ -134,6 +139,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global config, capability_registry, alert_store, background_task_manager, alert_notifier
     global runtime_db, event_bus, task_manager, asset_service, signal_service
     global incident_service, recommendation_service, traffic_analytics_engine, resource_analytics_engine, summary_builder, data_sources_status
+    global ai_call_log_repository, llm_config_manager_instance, llm_router_instance
 
     logger.info("正在启动 opsMind")
     config = RuntimeConfig.load_from_env()
@@ -148,6 +154,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         for provider_config in llm_config.get_enabled_providers()
     }
     llm_router = LLMRouter(llm_clients, llm_config.default_provider) if llm_clients else None
+    llm_config_manager_instance = llm_config_manager
+    llm_router_instance = llm_router
 
     capability_registry = CapabilityRegistry()
     alert_store = AlertStore((config.data_dir or config.base_dir / "data") / "alerts")
@@ -162,6 +170,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     signal_repository = SignalRepository(runtime_db)
     incident_repository = IncidentRepository(runtime_db)
     recommendation_repository = RecommendationRepository(runtime_db)
+    ai_call_log_repository = AICallLogRepository(runtime_db)
+
+    def _record_llm_call(payload: dict[str, Any]) -> None:
+        if not ai_call_log_repository:
+            return
+        status = str(payload.get("status") or "success").lower()
+        ai_call_log_repository.save(
+            AICallLog(
+                provider_name=str(payload.get("provider_name") or "unknown"),
+                model=str(payload.get("model") or "unknown"),
+                source=str(payload.get("source") or "runtime"),
+                endpoint=str(payload.get("endpoint") or "chat"),
+                task_id=str(payload.get("task_id")) if payload.get("task_id") else None,
+                prompt_preview=str(payload.get("prompt_preview") or "")[:200],
+                response_preview=str(payload.get("response_preview") or "")[:200],
+                status="error" if status == "error" else "success",
+                error_message=str(payload.get("error_message") or "")[:500],
+                latency_ms=max(0, int(payload.get("latency_ms") or 0)),
+                request_tokens=int(payload["request_tokens"]) if payload.get("request_tokens") is not None else None,
+                response_tokens=int(payload["response_tokens"]) if payload.get("response_tokens") is not None else None,
+            )
+        )
+
+    if llm_router:
+        llm_router.call_observer = _record_llm_call
 
     event_bus = EventBus()
     trace_store = TraceStore(config.tasks_dir or (config.data_dir or config.base_dir / "data") / "tasks")
@@ -189,6 +222,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.resource_analytics_engine = resource_analytics_engine
     app.state.summary_builder = summary_builder
     app.state.data_sources_status = data_sources_status
+    app.state.ai_call_log_repository = ai_call_log_repository
+    app.state.llm_config_manager = llm_config_manager_instance
+    app.state.llm_router = llm_router_instance
 
     websocket.bind_event_bus(event_bus)
     background_task_manager = BackgroundTaskManager(alert_store)

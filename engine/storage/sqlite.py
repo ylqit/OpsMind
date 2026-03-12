@@ -113,6 +113,26 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ai_call_logs (
+                call_id TEXT PRIMARY KEY,
+                provider_name TEXT NOT NULL,
+                model TEXT NOT NULL,
+                source TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                task_id TEXT,
+                prompt_preview TEXT,
+                response_preview TEXT,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                latency_ms INTEGER NOT NULL,
+                request_tokens INTEGER,
+                response_tokens INTEGER,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created_at ON ai_call_logs(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_call_logs_provider ON ai_call_logs(provider_name);
             """
         )
         self._ensure_column('tasks', 'approval_json', 'TEXT')

@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Any, List, Optional
 
-from engine.runtime.models import ArtifactRef, Asset, Incident, Recommendation, Signal, TaskApproval, TaskError, TaskRecord
+from engine.runtime.models import AICallLog, ArtifactRef, Asset, Incident, Recommendation, Signal, TaskApproval, TaskError, TaskRecord
 
 from .sqlite import SQLiteDatabase
 
@@ -376,3 +376,72 @@ class RecommendationRepository:
             if recommendation:
                 items.append(recommendation)
         return items
+
+
+class AICallLogRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    def save(self, call_log: AICallLog) -> AICallLog:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO ai_call_logs (
+                call_id, provider_name, model, source, endpoint, task_id,
+                prompt_preview, response_preview, status, error_message,
+                latency_ms, request_tokens, response_tokens, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                call_log.call_id,
+                call_log.provider_name,
+                call_log.model,
+                call_log.source,
+                call_log.endpoint,
+                call_log.task_id,
+                call_log.prompt_preview,
+                call_log.response_preview,
+                call_log.status.value,
+                call_log.error_message,
+                call_log.latency_ms,
+                call_log.request_tokens,
+                call_log.response_tokens,
+                call_log.created_at.isoformat(),
+            ),
+        )
+        return call_log
+
+    def list(self, provider_name: Optional[str] = None, status: Optional[str] = None, limit: int = 100) -> List[AICallLog]:
+        clauses = []
+        params: List[Any] = []
+        if provider_name:
+            clauses.append("provider_name = ?")
+            params.append(provider_name)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        safe_limit = max(1, min(limit, 500))
+        rows = self.db.fetchall(
+            f"SELECT * FROM ai_call_logs {where_clause} ORDER BY created_at DESC LIMIT ?",
+            [*params, safe_limit],
+        )
+        return [
+            AICallLog(
+                call_id=row["call_id"],
+                provider_name=row["provider_name"],
+                model=row["model"],
+                source=row["source"],
+                endpoint=row["endpoint"],
+                task_id=row["task_id"],
+                prompt_preview=row["prompt_preview"] or "",
+                response_preview=row["response_preview"] or "",
+                status=row["status"],
+                error_message=row["error_message"] or "",
+                latency_ms=row["latency_ms"],
+                request_tokens=row["request_tokens"],
+                response_tokens=row["response_tokens"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]

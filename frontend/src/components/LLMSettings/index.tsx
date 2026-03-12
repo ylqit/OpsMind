@@ -22,7 +22,6 @@ import {
   InputNumber,
   message,
   Popconfirm,
-  Descriptions,
   Tabs
 } from 'antd';
 import {
@@ -31,7 +30,6 @@ import {
   DeleteOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  SettingOutlined,
   StarOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons';
@@ -57,6 +55,18 @@ interface LLMProviderFormValues {
   timeout: number;
 }
 
+interface LLMCallLog {
+  call_id: string;
+  provider_name: string;
+  model: string;
+  source: string;
+  endpoint: string;
+  status: 'success' | 'error';
+  latency_ms: number;
+  error_message: string;
+  created_at: string;
+}
+
 const LLMSettings: React.FC = () => {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [defaultProvider, setDefaultProvider] = useState<string>('');
@@ -65,6 +75,8 @@ const LLMSettings: React.FC = () => {
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [callLogs, setCallLogs] = useState<LLMCallLog[]>([]);
+  const [callLogsLoading, setCallLogsLoading] = useState(false);
 
   // 加载 Provider 列表
   const loadProviders = async () => {
@@ -81,8 +93,22 @@ const LLMSettings: React.FC = () => {
     }
   };
 
+  const loadCallLogs = async () => {
+    setCallLogsLoading(true);
+    try {
+      const response = await fetch('/api/llm/call-logs?limit=30');
+      const data = await response.json();
+      setCallLogs(data.items || []);
+    } catch (error) {
+      message.error('加载调用日志失败');
+    } finally {
+      setCallLogsLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadProviders();
+    loadCallLogs();
   }, []);
 
   // 打开编辑/新建弹窗
@@ -191,6 +217,7 @@ const LLMSettings: React.FC = () => {
       message.error('测试连接失败');
     } finally {
       setTestingProvider(null);
+      loadCallLogs();
     }
   };
 
@@ -303,6 +330,59 @@ const LLMSettings: React.FC = () => {
     }
   ];
 
+  const callLogColumns: ColumnsType<LLMCallLog> = [
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 180,
+      render: (value: string) => new Date(value).toLocaleString('zh-CN')
+    },
+    {
+      title: 'Provider',
+      dataIndex: 'provider_name',
+      key: 'provider_name',
+      width: 120
+    },
+    {
+      title: '模型',
+      dataIndex: 'model',
+      key: 'model',
+      width: 160
+    },
+    {
+      title: '端点',
+      dataIndex: 'endpoint',
+      key: 'endpoint',
+      width: 120
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (value: 'success' | 'error') => (
+        <Tag color={value === 'success' ? 'green' : 'red'}>
+          {value === 'success' ? '成功' : '失败'}
+        </Tag>
+      )
+    },
+    {
+      title: '延迟',
+      dataIndex: 'latency_ms',
+      key: 'latency_ms',
+      width: 100,
+      render: (value: number) => `${value} ms`
+    },
+    {
+      title: '错误信息',
+      dataIndex: 'error_message',
+      key: 'error_message',
+      ellipsis: true,
+      render: (value: string) => value || '-'
+    }
+  ];
+
   return (
     <div className="llm-settings">
       <Card
@@ -317,12 +397,37 @@ const LLMSettings: React.FC = () => {
           </Button>
         }
       >
-        <Table
-          columns={columns}
-          dataSource={providers}
-          loading={loading}
-          rowKey="name"
-          pagination={false}
+        <Tabs
+          items={[
+            {
+              key: 'providers',
+              label: 'Provider 列表',
+              children: (
+                <Table
+                  columns={columns}
+                  dataSource={providers}
+                  loading={loading}
+                  rowKey="name"
+                  pagination={false}
+                />
+              )
+            },
+            {
+              key: 'call_logs',
+              label: '调用日志',
+              children: (
+                <Table
+                  columns={callLogColumns}
+                  dataSource={callLogs}
+                  loading={callLogsLoading}
+                  rowKey="call_id"
+                  pagination={{ pageSize: 10 }}
+                  size="small"
+                  locale={{ emptyText: '暂无调用日志，可先执行连接测试' }}
+                />
+              )
+            }
+          ]}
         />
       </Card>
 
