@@ -5,12 +5,20 @@ import json
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from .deps import get_task_manager
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+class TaskApproveRequest(BaseModel):
+    """任务确认请求。"""
+
+    approved_by: str = Field(default="operator", description="确认人")
+    approval_note: str = Field(default="", description="确认备注")
 
 
 def _read_trace_preview(task_id: str, task_manager) -> list[dict]:
@@ -92,13 +100,22 @@ async def download_task_artifact(task_id: str, artifact_id: str, task_manager=De
 
 
 @router.post("/{task_id}/approve")
-async def approve_task(task_id: str, task_manager=Depends(get_task_manager)):
+async def approve_task(
+    task_id: str,
+    request: TaskApproveRequest | None = Body(default=None),
+    task_manager=Depends(get_task_manager),
+):
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.status != "WAITING_CONFIRM":
         raise HTTPException(status_code=409, detail="当前任务不处于待确认状态")
-    approved = await task_manager.approve_task(task_id)
+    approve_request = request or TaskApproveRequest()
+    approved = await task_manager.approve_task(
+        task_id,
+        approved_by=approve_request.approved_by,
+        approval_note=approve_request.approval_note,
+    )
     return approved.model_dump(mode="json")
 
 

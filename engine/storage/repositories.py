@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Any, List, Optional
 
-from engine.runtime.models import ArtifactRef, Asset, Incident, Recommendation, Signal, TaskError, TaskRecord
+from engine.runtime.models import ArtifactRef, Asset, Incident, Recommendation, Signal, TaskApproval, TaskError, TaskRecord
 
 from .sqlite import SQLiteDatabase
 
@@ -39,8 +39,8 @@ class TaskRepository:
             """
             INSERT OR REPLACE INTO tasks (
                 task_id, task_type, status, current_stage, progress, progress_message,
-                trace_id, payload_json, result_ref_json, error_json, created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                trace_id, payload_json, result_ref_json, error_json, approval_json, created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.task_id,
@@ -53,6 +53,7 @@ class TaskRepository:
                 _to_json(task.payload),
                 _to_json(task.result_ref) if task.result_ref else None,
                 task.error.model_dump_json() if task.error else None,
+                task.approval.model_dump_json() if task.approval else None,
                 task.created_at.isoformat(),
                 task.updated_at.isoformat(),
                 task.completed_at.isoformat() if task.completed_at else None,
@@ -65,6 +66,7 @@ class TaskRepository:
         if not row:
             return None
         error_json = _from_json(row["error_json"], None)
+        approval_json = _from_json(row["approval_json"], None)
         return TaskRecord(
             task_id=row["task_id"],
             task_type=row["task_type"],
@@ -76,6 +78,7 @@ class TaskRepository:
             payload=_from_json(row["payload_json"], {}),
             result_ref=_from_json(row["result_ref_json"], None),
             error=TaskError(**error_json) if error_json else None,
+            approval=TaskApproval(**approval_json) if approval_json else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             completed_at=_parse_dt(row["completed_at"]),
@@ -92,7 +95,12 @@ class TaskRepository:
             params.append(status)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self.db.fetchall(f"SELECT task_id FROM tasks {where_clause} ORDER BY updated_at DESC", params)
-        return [self.get(row["task_id"]) for row in rows if self.get(row["task_id"])]
+        items: List[TaskRecord] = []
+        for row in rows:
+            task = self.get(row["task_id"])
+            if task:
+                items.append(task)
+        return items
 
 
 class ArtifactRepository:
@@ -306,7 +314,12 @@ class IncidentRepository:
             params.append(service_key)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self.db.fetchall(f"SELECT incident_id FROM incidents {where_clause} ORDER BY created_at DESC", params)
-        return [self.get(row["incident_id"]) for row in rows if self.get(row["incident_id"])]
+        items: List[Incident] = []
+        for row in rows:
+            incident = self.get(row["incident_id"])
+            if incident:
+                items.append(incident)
+        return items
 
 
 class RecommendationRepository:
@@ -357,4 +370,9 @@ class RecommendationRepository:
 
     def list_by_incident(self, incident_id: str) -> List[Recommendation]:
         rows = self.db.fetchall("SELECT recommendation_id FROM recommendations WHERE incident_id = ? ORDER BY created_at DESC", (incident_id,))
-        return [self.get(row["recommendation_id"]) for row in rows if self.get(row["recommendation_id"])]
+        items: List[Recommendation] = []
+        for row in rows:
+            recommendation = self.get(row["recommendation_id"])
+            if recommendation:
+                items.append(recommendation)
+        return items

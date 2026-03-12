@@ -1,6 +1,5 @@
 """
 SQLite 持久化底座。
-
 """
 from __future__ import annotations
 
@@ -41,6 +40,7 @@ class SQLiteDatabase:
                 payload_json TEXT NOT NULL,
                 result_ref_json TEXT,
                 error_json TEXT,
+                approval_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT
@@ -115,7 +115,15 @@ class SQLiteDatabase:
             );
             """
         )
+        self._ensure_column('tasks', 'approval_json', 'TEXT')
         self.connection.commit()
+
+    def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:
+        """为已有数据库补齐新增字段。"""
+        rows = self.connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        columns = {row['name'] for row in rows}
+        if column_name not in columns:
+            self.connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     def execute(self, query: str, params: Iterable[Any] = ()) -> None:
         """执行写操作。"""

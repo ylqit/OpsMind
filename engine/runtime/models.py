@@ -1,5 +1,5 @@
 """
-任务、资产、信号、事件和建议等核心对象，
+任务、资产、信号、事件和建议等核心对象。
 """
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ class ArtifactKind(str, Enum):
     MANIFEST = "manifest"
     JSON = "json"
     TEXT = "text"
+    DIFF = "diff"
 
 
 class ArtifactRef(BaseModel):
@@ -109,6 +110,12 @@ class TaskError(BaseModel):
     failed_stage: Optional[TaskStatus] = None
 
 
+class TaskApproval(BaseModel):
+    approved_by: str
+    approval_note: str = ""
+    approved_at: datetime = Field(default_factory=utc_now)
+
+
 class TaskRecord(BaseModel):
     task_id: str = Field(default_factory=lambda: f"task_{uuid4().hex[:12]}")
     task_type: TaskType
@@ -120,6 +127,7 @@ class TaskRecord(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
     result_ref: Optional[Dict[str, Any]] = None
     error: Optional[TaskError] = None
+    approval: Optional[TaskApproval] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     completed_at: Optional[datetime] = None

@@ -11,7 +11,16 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from engine.runtime.artifact_store import ArtifactStore
 from engine.runtime.event_bus import EventBus
-from engine.runtime.models import Observation, ObservationKind, TaskError, TaskRecord, TaskStatus, TaskType, TraceRecord
+from engine.runtime.models import (
+    Observation,
+    ObservationKind,
+    TaskApproval,
+    TaskError,
+    TaskRecord,
+    TaskStatus,
+    TaskType,
+    TraceRecord,
+)
 from engine.runtime.state_machine import TaskStateMachine
 from engine.runtime.trace_store import TraceStore
 from engine.storage.repositories import ArtifactRepository, TaskRepository
@@ -48,19 +57,28 @@ class TaskManager:
         self._running_tasks[task.task_id] = asyncio.create_task(self._run_task(task.task_id, runner))
         return task
 
-    async def approve_task(self, task_id: str) -> TaskRecord:
+    async def approve_task(self, task_id: str, approved_by: str = "operator", approval_note: str = "") -> TaskRecord:
         task = self._require_task(task_id)
         TaskStateMachine.validate_transition(task.status, TaskStatus.COMPLETED)
+        approval = TaskApproval(approved_by=approved_by.strip() or "operator", approval_note=approval_note.strip())
         task.status = TaskStatus.COMPLETED
         task.current_stage = TaskStatus.COMPLETED
         task.progress = 100
-        task.progress_message = "建议稿已确认，可导出"
+        task.progress_message = f"建议稿已确认，确认人：{approval.approved_by}"
+        task.approval = approval
         task.completed_at = datetime.utcnow()
         task.updated_at = datetime.utcnow()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
-        self.trace_store.write_result(task_id, {"approved": True, "message": "建议稿已人工确认"})
-        await self._publish("task_completed", task)
+        self.trace_store.write_result(
+            task_id,
+            {
+                "approved": True,
+                "message": "建议稿已人工确认",
+                "approval": approval.model_dump(mode="json"),
+            },
+        )
+        await self._publish("task_completed", task, extra={"approval": approval.model_dump(mode="json")})
         return task
 
     async def cancel_task(self, task_id: str) -> TaskRecord:
@@ -109,7 +127,7 @@ class TaskManager:
     async def attach_artifact(self, task_id: str, artifact_ref) -> None:
         self.artifact_repository.save(artifact_ref)
         task = self._require_task(task_id)
-        await self._publish("task_artifact_ready", task, extra={"artifact": artifact_ref.model_dump()})
+        await self._publish("task_artifact_ready", task, extra={"artifact": artifact_ref.model_dump(mode="json")})
 
     async def wait_for_confirm(self, task_id: str, result_ref: Dict[str, Any]) -> TaskRecord:
         task = self._require_task(task_id)
@@ -153,7 +171,7 @@ class TaskManager:
         task.updated_at = datetime.utcnow()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
-        await self._publish("task_failed", task, extra={"error": task.error.model_dump()})
+        await self._publish("task_failed", task, extra={"error": task.error.model_dump(mode="json")})
         return task
 
     async def _run_task(self, task_id: str, runner: TaskRunner) -> None:
@@ -187,6 +205,8 @@ class TaskManager:
             "progress_message": task.progress_message,
             "updated_at": task.updated_at.isoformat(),
         }
+        if task.approval:
+            payload["approval"] = task.approval.model_dump(mode="json")
         if extra:
             payload.update(extra)
         await self.event_bus.publish(payload)
