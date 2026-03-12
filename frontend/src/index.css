@@ -149,6 +149,42 @@ body {
   min-width: 220px;
 }
 
+.ops-incident-brief {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ops-incident-brief__headline {
+  margin-bottom: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.ops-incident-brief__next-step {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.08), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(147, 197, 253, 0.65);
+}
+
+.ops-incident-brief__highlights {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.ops-incident-brief__highlight {
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(226, 232, 240, 0.92);
+}
+
 .ops-artifact-viewer {
   margin: 0;
   max-height: 65vh;
@@ -260,6 +296,10 @@ body {
   }
 
   .ops-diff-summary__files {
+    grid-template-columns: 1fr;
+  }
+
+  .ops-incident-brief__highlights {
     grid-template-columns: 1fr;
   }
 

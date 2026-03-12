@@ -28,14 +28,24 @@ interface EvidenceItem {
   unit?: string
   reason?: string
   name?: string
+  priority?: number
+  signal_strength?: string
+  next_step?: string
+  reasoning_tags?: string[]
   [key: string]: unknown
 }
 
-const layerMeta: Record<string, { title: string; color: string }> = {
-  traffic: { title: '流量证据', color: 'blue' },
-  resource: { title: '资源证据', color: 'orange' },
-  diagnosis: { title: '关联判断', color: 'purple' },
-  other: { title: '其他证据', color: 'default' },
+const layerMeta: Record<string, { title: string; color: string; order: number }> = {
+  diagnosis: { title: '关联判断', color: 'purple', order: 0 },
+  traffic: { title: '流量证据', color: 'blue', order: 1 },
+  resource: { title: '资源证据', color: 'orange', order: 2 },
+  other: { title: '其他证据', color: 'default', order: 3 },
+}
+
+const signalStrengthMeta: Record<string, { label: string; color: string }> = {
+  high: { label: '高优先', color: 'red' },
+  medium: { label: '中优先', color: 'gold' },
+  low: { label: '低优先', color: 'default' },
 }
 
 const formatEvidenceValue = (item: EvidenceItem) => {
@@ -58,6 +68,17 @@ const formatSampleTime = (value: string) => {
     return value
   }
   return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const sortEvidenceItems = (items: EvidenceItem[]) => {
+  return [...items].sort((left, right) => {
+    const leftPriority = typeof left.priority === 'number' ? left.priority : 0
+    const rightPriority = typeof right.priority === 'number' ? right.priority : 0
+    if (leftPriority !== rightPriority) {
+      return rightPriority - leftPriority
+    }
+    return String(left.title || left.metric || '').localeCompare(String(right.title || right.metric || ''))
+  })
 }
 
 export const IncidentCenter: React.FC = () => {
@@ -84,7 +105,23 @@ export const IncidentCenter: React.FC = () => {
       groups[layer] = groups[layer] || []
       groups[layer].push(item)
     }
-    return groups
+    return Object.entries(groups)
+      .sort((left, right) => (layerMeta[left[0]]?.order || 99) - (layerMeta[right[0]]?.order || 99))
+      .map(([layer, items]) => [layer, sortEvidenceItems(items)] as const)
+  }, [selectedIncident])
+
+  const diagnosisSummary = useMemo(() => {
+    if (!selectedIncident) {
+      return null
+    }
+    const evidenceItems = (selectedIncident.incident.evidence_refs || []) as EvidenceItem[]
+    const diagnosisItem = evidenceItems.find((item) => item.layer === 'diagnosis')
+    const topEvidence = sortEvidenceItems(evidenceItems.filter((item) => item.layer !== 'diagnosis')).slice(0, 3)
+    return {
+      conclusion: selectedIncident.incident.summary,
+      nextStep: String(diagnosisItem?.next_step || selectedIncident.incident.recommended_actions[0] || '继续观察关键指标变化'),
+      highlights: topEvidence,
+    }
   }, [selectedIncident])
 
   const loadIncidents = async () => {
@@ -245,25 +282,59 @@ export const IncidentCenter: React.FC = () => {
                   ))}
                 </Space>
 
+                {diagnosisSummary ? (
+                  <Card type="inner" title="诊断摘要" style={{ marginBottom: 16 }}>
+                    <div className="ops-incident-brief">
+                      <Paragraph className="ops-incident-brief__headline">{diagnosisSummary.conclusion}</Paragraph>
+                      <div className="ops-incident-brief__next-step">
+                        <Text strong>建议先做：</Text>
+                        <Text>{diagnosisSummary.nextStep}</Text>
+                      </div>
+                      <div className="ops-incident-brief__highlights">
+                        {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
+                          <div key={`${item.layer}-${item.metric}-${item.title}`} className="ops-incident-brief__highlight">
+                            <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                              <Tag color={layerMeta[item.layer || 'other']?.color || layerMeta.other.color}>{layerMeta[item.layer || 'other']?.title || layerMeta.other.title}</Tag>
+                              <Text strong>{String(item.title || item.metric || '关键证据')}</Text>
+                              <Tag>{formatEvidenceValue(item)}</Tag>
+                            </Space>
+                            <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || '-')}</Paragraph>
+                          </div>
+                        )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无高优先证据" />}
+                      </div>
+                    </div>
+                  </Card>
+                ) : null}
+
                 <Card type="inner" title="证据链分层" style={{ marginBottom: 16 }}>
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    {Object.entries(groupedEvidence).map(([layer, items]) => (
+                    {groupedEvidence.map(([layer, items]) => (
                       <Card key={layer} size="small" title={layerMeta[layer]?.title || layerMeta.other.title} extra={<Tag color={layerMeta[layer]?.color || layerMeta.other.color}>{items.length} 条</Tag>}>
                         <List
                           size="small"
                           dataSource={items}
-                          renderItem={(item) => (
-                            <List.Item>
-                              <div style={{ width: '100%' }}>
-                                <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-                                  <Text strong>{String(item.title || item.name || item.metric || item.type || '证据项')}</Text>
-                                  <Tag>{String(item.metric || item.type || 'metric')}</Tag>
-                                  <Tag color="default">{formatEvidenceValue(item)}</Tag>
-                                </Space>
-                                <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || item.reason || '-')}</Paragraph>
-                              </div>
-                            </List.Item>
-                          )}
+                          renderItem={(item) => {
+                            const signalMeta = signalStrengthMeta[item.signal_strength || 'low'] || signalStrengthMeta.low
+                            return (
+                              <List.Item>
+                                <div style={{ width: '100%' }}>
+                                  <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                    <Text strong>{String(item.title || item.name || item.metric || item.type || '证据项')}</Text>
+                                    <Tag>{String(item.metric || item.type || 'metric')}</Tag>
+                                    <Tag color="default">{formatEvidenceValue(item)}</Tag>
+                                    <Tag color={signalMeta.color}>{signalMeta.label}</Tag>
+                                    <Tag color="geekblue">优先级 {item.priority || 0}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || item.reason || '-')}</Paragraph>
+                                  {item.next_step ? (
+                                    <Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                                      下一步：{String(item.next_step)}
+                                    </Paragraph>
+                                  ) : null}
+                                </div>
+                              </List.Item>
+                            )
+                          }}
                         />
                       </Card>
                     ))}

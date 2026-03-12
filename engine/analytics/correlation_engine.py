@@ -62,6 +62,8 @@ class CorrelationEngine:
                     metric="total_requests",
                     value=total_requests,
                     unit="req",
+                    priority=48,
+                    signal_strength="medium",
                 )
             )
         if error_rate:
@@ -74,6 +76,8 @@ class CorrelationEngine:
                     metric="error_rate",
                     value=error_rate,
                     unit="%",
+                    priority=96 if error_rate >= 5 else 72,
+                    signal_strength="high" if error_rate >= 5 else "medium",
                 )
             )
         if avg_latency:
@@ -86,6 +90,8 @@ class CorrelationEngine:
                     metric="avg_latency",
                     value=avg_latency,
                     unit="s",
+                    priority=88 if avg_latency >= 1 else 62,
+                    signal_strength="high" if avg_latency >= 1 else "medium",
                 )
             )
         if host_cpu:
@@ -98,6 +104,8 @@ class CorrelationEngine:
                     metric="host_cpu",
                     value=host_cpu,
                     unit="%",
+                    priority=92 if host_cpu >= 70 else 58,
+                    signal_strength="high" if host_cpu >= 70 else "medium",
                 )
             )
         if host_memory:
@@ -110,9 +118,12 @@ class CorrelationEngine:
                     metric="host_memory",
                     value=host_memory,
                     unit="%",
+                    priority=84 if host_memory >= 80 else 56,
+                    signal_strength="high" if host_memory >= 80 else "medium",
                 )
             )
         for item in hotspots[:5]:
+            hotspot_score = float(item.get("score") or 0)
             evidence_refs.append(
                 self._build_evidence(
                     layer="resource",
@@ -120,11 +131,15 @@ class CorrelationEngine:
                     title=str(item.get("name") or "热点对象"),
                     summary=str(item.get("reason") or "检测到资源热点。"),
                     metric=str(item.get("type") or "hotspot"),
-                    value=float(item.get("score") or 0),
+                    value=hotspot_score,
                     unit="score",
+                    priority=min(max(int(hotspot_score), 52), 94),
+                    signal_strength="high" if hotspot_score >= 80 else "medium",
                     extra=item,
                 )
             )
+
+        next_step = recommended_actions[0] if recommended_actions else "继续观察错误率、延迟和热点资源变化。"
         evidence_refs.append(
             self._build_evidence(
                 layer="diagnosis",
@@ -134,10 +149,16 @@ class CorrelationEngine:
                 metric="confidence",
                 value=confidence,
                 unit="score",
-                extra={"reasoning_tags": reasoning_tags},
+                priority=100,
+                signal_strength="high",
+                extra={
+                    "reasoning_tags": reasoning_tags,
+                    "next_step": next_step,
+                },
             )
         )
 
+        sorted_evidence = self._sort_evidence(evidence_refs)
         return {
             "service_key": service_key,
             "title": f"{service_key} 异常分析",
@@ -146,12 +167,13 @@ class CorrelationEngine:
             "confidence": confidence,
             "reasoning_tags": reasoning_tags,
             "recommended_actions": recommended_actions,
-            "evidence_refs": evidence_refs,
+            "evidence_refs": sorted_evidence,
             "related_asset_ids": related_asset_ids,
             "time_window_start": (datetime.utcnow() - timedelta(hours=1)).isoformat(),
             "time_window_end": datetime.utcnow().isoformat(),
         }
 
+    # 证据对象会被详情页、日报和后续导出链路复用，因此这里统一补齐优先级和信号强度。
     def _build_evidence(
         self,
         layer: str,
@@ -161,9 +183,10 @@ class CorrelationEngine:
         metric: str,
         value: Any,
         unit: str = "",
+        priority: int = 50,
+        signal_strength: str = "medium",
         extra: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """构造统一证据对象，便于前端分层展示。"""
         payload = {
             "layer": layer,
             "type": evidence_type,
@@ -172,7 +195,20 @@ class CorrelationEngine:
             "metric": metric,
             "value": value,
             "unit": unit,
+            "priority": priority,
+            "signal_strength": signal_strength,
         }
         if extra:
             payload.update(extra)
         return payload
+
+    def _sort_evidence(self, evidence_refs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        layer_rank = {"diagnosis": 0, "traffic": 1, "resource": 2, "other": 3}
+        return sorted(
+            evidence_refs,
+            key=lambda item: (
+                layer_rank.get(str(item.get("layer") or "other"), 99),
+                -int(item.get("priority") or 0),
+                str(item.get("title") or ""),
+            ),
+        )
