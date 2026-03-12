@@ -17,6 +17,8 @@ class ResourceAnalyticsEngine:
 
     HOST_CPU_HOTSPOT_THRESHOLD = 60.0
     HOST_MEMORY_HOTSPOT_THRESHOLD = 70.0
+    RESTART_CRITICAL_THRESHOLD = 5
+    RESTART_HIGH_THRESHOLD = 3
 
     DEFAULT_PROMQL = {
         "cpu_usage": "avg(rate(container_cpu_usage_seconds_total[5m])) by (namespace,pod,service)",
@@ -39,6 +41,7 @@ class ResourceAnalyticsEngine:
         host_metrics = host_result.data.get("metrics", {}) if host_result.success else {}
         hotspot_layers = self._build_hotspot_layers(host_metrics, docker_summary, prometheus_summary)
         flat_hotspots = self._flatten_hotspot_layers(hotspot_layers)
+        risk_report = self._build_risk_report(docker_summary, hotspot_layers)
 
         return {
             "host": host_metrics,
@@ -47,6 +50,8 @@ class ResourceAnalyticsEngine:
             "prometheus": prometheus_summary,
             "hotspots": flat_hotspots,
             "hotspot_layers": hotspot_layers,
+            "risk_summary": risk_report["summary"],
+            "risk_items": risk_report["items"],
         }
 
     async def _summarize_docker(self, service_key: Optional[str]) -> Dict[str, Any]:
@@ -346,6 +351,161 @@ class ResourceAnalyticsEngine:
             "service_key": service_key,
             "namespace": namespace,
         }
+
+    def _build_risk_report(
+        self,
+        docker_summary: Dict[str, Any],
+        hotspot_layers: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        # 统一把 OOM 与重启信号映射成风险项，方便前端做固定展示和后续策略扩展。
+        candidates: List[Dict[str, Any]] = []
+
+        for item in docker_summary.get("items", [])[:100]:
+            target_name = str(item.get("name") or "container")
+            service_key = str(item.get("service_key") or "")
+            restarts = int(item.get("restarts", 0) or 0)
+
+            if item.get("oom_killed"):
+                candidates.append(
+                    self._risk_item(
+                        risk_type="oom",
+                        level="critical",
+                        layer="container",
+                        target=target_name,
+                        service_key=service_key,
+                        metric="oom_killed",
+                        value=1,
+                        unit="次",
+                        evidence="容器发生 OOMKilled",
+                        source="docker",
+                    )
+                )
+
+            if restarts > 0:
+                candidates.append(
+                    self._risk_item(
+                        risk_type="restart",
+                        level=self._restart_level(restarts),
+                        layer="container",
+                        target=target_name,
+                        service_key=service_key,
+                        metric="restarts",
+                        value=restarts,
+                        unit="次",
+                        evidence=f"容器重启次数 {restarts}",
+                        source="docker",
+                    )
+                )
+
+        for layer_name in ("pod", "service"):
+            for hotspot in hotspot_layers.get(layer_name, [])[:100]:
+                if str(hotspot.get("metric") or "") != "restarts":
+                    continue
+                restart_count = int(round(self._extract_metric_value(hotspot.get("value"))))
+                if restart_count <= 0:
+                    continue
+                candidates.append(
+                    self._risk_item(
+                        risk_type="restart",
+                        level=self._restart_level(restart_count),
+                        layer=layer_name,
+                        target=str(hotspot.get("name") or layer_name),
+                        service_key=str(hotspot.get("service_key") or ""),
+                        metric="restarts",
+                        value=restart_count,
+                        unit=str(hotspot.get("unit") or "次"),
+                        evidence=str(hotspot.get("reason") or f"{layer_name} 重启次数 {restart_count}"),
+                        source="prometheus",
+                    )
+                )
+
+        dedup: Dict[str, Dict[str, Any]] = {}
+        for item in candidates:
+            dedup_key = str(item.get("risk_id") or "")
+            if dedup_key not in dedup:
+                dedup[dedup_key] = item
+                continue
+            current = dedup[dedup_key]
+            incoming_rank = self._risk_rank(str(item.get("level") or "medium"))
+            current_rank = self._risk_rank(str(current.get("level") or "medium"))
+            incoming_value = self._extract_metric_value(item.get("value"))
+            current_value = self._extract_metric_value(current.get("value"))
+            if incoming_rank > current_rank or (incoming_rank == current_rank and incoming_value > current_value):
+                dedup[dedup_key] = item
+
+        items = list(dedup.values())
+        items.sort(
+            key=lambda item: (
+                -self._risk_rank(str(item.get("level") or "medium")),
+                -self._extract_metric_value(item.get("value")),
+                str(item.get("target") or ""),
+            )
+        )
+
+        summary: Dict[str, Any] = {
+            "total": len(items),
+            "levels": {"critical": 0, "high": 0, "medium": 0},
+            "oom": {"total": 0, "critical": 0, "high": 0, "medium": 0},
+            "restart": {"total": 0, "critical": 0, "high": 0, "medium": 0},
+        }
+
+        for item in items:
+            risk_type = str(item.get("risk_type") or "restart")
+            level = str(item.get("level") or "medium")
+            if level not in summary["levels"]:
+                continue
+            summary["levels"][level] += 1
+            if risk_type in ("oom", "restart"):
+                summary[risk_type]["total"] += 1
+                summary[risk_type][level] += 1
+
+        return {
+            "summary": summary,
+            "items": items[:30],
+        }
+
+    def _risk_item(
+        self,
+        risk_type: str,
+        level: str,
+        layer: str,
+        target: str,
+        service_key: str,
+        metric: str,
+        value: Any,
+        unit: str,
+        evidence: str,
+        source: str,
+    ) -> Dict[str, Any]:
+        risk_id = f"{risk_type}:{layer}:{target}:{service_key}:{metric}"
+        return {
+            "risk_id": risk_id,
+            "risk_type": risk_type,
+            "level": level,
+            "layer": layer,
+            "target": target,
+            "service_key": service_key,
+            "metric": metric,
+            "value": value,
+            "unit": unit,
+            "evidence": evidence,
+            "source": source,
+        }
+
+    def _restart_level(self, restart_count: int) -> str:
+        if restart_count >= self.RESTART_CRITICAL_THRESHOLD:
+            return "critical"
+        if restart_count >= self.RESTART_HIGH_THRESHOLD:
+            return "high"
+        return "medium"
+
+    def _risk_rank(self, level: str) -> int:
+        mapping = {
+            "critical": 3,
+            "high": 2,
+            "medium": 1,
+        }
+        return mapping.get(level, 0)
 
     def _extract_metric_value(self, raw_value: Any) -> float:
         if isinstance(raw_value, list) and len(raw_value) >= 2:

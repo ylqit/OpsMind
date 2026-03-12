@@ -149,6 +149,41 @@ export interface ResourceHotspotLayers {
   other: ResourceHotspot[]
 }
 
+export type ResourceRiskLevel = 'critical' | 'high' | 'medium'
+export type ResourceRiskType = 'oom' | 'restart'
+
+export interface ResourceRiskBucket {
+  total: number
+  critical: number
+  high: number
+  medium: number
+}
+
+export interface ResourceRiskSummary {
+  total: number
+  levels: {
+    critical: number
+    high: number
+    medium: number
+  }
+  oom: ResourceRiskBucket
+  restart: ResourceRiskBucket
+}
+
+export interface ResourceRiskItem {
+  risk_id: string
+  risk_type: ResourceRiskType
+  level: ResourceRiskLevel
+  layer: string
+  target: string
+  service_key: string
+  metric: string
+  value: string | number
+  unit?: string
+  evidence: string
+  source: string
+}
+
 export interface ResourceSummary {
   host: Record<string, any>
   alerts: Array<Record<string, unknown>>
@@ -162,6 +197,8 @@ export interface ResourceSummary {
   }
   hotspots: ResourceHotspot[]
   hotspot_layers: ResourceHotspotLayers
+  risk_summary: ResourceRiskSummary
+  risk_items: ResourceRiskItem[]
 }
 
 export interface TaskDetailResponse {

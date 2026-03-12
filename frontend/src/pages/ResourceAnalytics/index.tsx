@@ -1,7 +1,14 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { AutoComplete, Button, Card, Col, List, Row, Select, Space, Table, Tag, Typography } from 'antd'
 import { useSearchParams } from 'react-router-dom'
-import { resourcesApi, type ResourceHotspot, type ResourceHotspotLayers, type ResourceSummary } from '@/api/client'
+import {
+  resourcesApi,
+  type ResourceHotspot,
+  type ResourceHotspotLayers,
+  type ResourceRiskItem,
+  type ResourceRiskSummary,
+  type ResourceSummary,
+} from '@/api/client'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -34,6 +41,27 @@ const emptyHotspotLayers: ResourceHotspotLayers = {
   other: [],
 }
 
+const emptyRiskSummary: ResourceRiskSummary = {
+  total: 0,
+  levels: {
+    critical: 0,
+    high: 0,
+    medium: 0,
+  },
+  oom: {
+    total: 0,
+    critical: 0,
+    high: 0,
+    medium: 0,
+  },
+  restart: {
+    total: 0,
+    critical: 0,
+    high: 0,
+    medium: 0,
+  },
+}
+
 const normalizeTimeRange = (value: string | null | undefined) => {
   if (!value || !allowedTimeRanges.has(value)) {
     return '1h'
@@ -52,6 +80,40 @@ const formatHotspotValue = (item: ResourceHotspot) => {
     return '-'
   }
   return `${item.value}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+const formatRiskValue = (item: ResourceRiskItem) => {
+  if (item.value === null || item.value === undefined || item.value === '') {
+    return '-'
+  }
+  return `${item.value}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+const riskTypeLabel = (riskType: string) => {
+  if (riskType === 'oom') {
+    return 'OOM'
+  }
+  return '重启'
+}
+
+const riskLevelLabel = (level: string) => {
+  if (level === 'critical') {
+    return '严重'
+  }
+  if (level === 'high') {
+    return '高'
+  }
+  return '中'
+}
+
+const riskLevelColor = (level: string) => {
+  if (level === 'critical') {
+    return 'red'
+  }
+  if (level === 'high') {
+    return 'orange'
+  }
+  return 'gold'
 }
 
 const layerMeta: Array<{ key: keyof ResourceHotspotLayers; title: string; color: string }> = [
@@ -79,6 +141,8 @@ const ResourceAnalytics: React.FC = () => {
   )
 
   const hotspotLayers = summary?.hotspot_layers || emptyHotspotLayers
+  const riskSummary = summary?.risk_summary || emptyRiskSummary
+  const riskItems = summary?.risk_items || []
 
   const loadData = async (override?: { timeRange?: string; serviceKey?: string }) => {
     const activeTimeRange = override?.timeRange ?? timeRange
@@ -165,6 +229,48 @@ const ResourceAnalytics: React.FC = () => {
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
       </Space>
 
+      <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
+        <Col xs={24} md={12}>
+          <Card loading={loading} title="OOM/重启风险概览" className="ops-surface-card">
+            <List
+              dataSource={[
+                { label: '风险总数', value: `${riskSummary.total}` },
+                { label: 'OOM 风险', value: `${riskSummary.oom.total} (严重 ${riskSummary.oom.critical})` },
+                {
+                  label: '重启风险',
+                  value: `${riskSummary.restart.total} (严重 ${riskSummary.restart.critical} / 高 ${riskSummary.restart.high} / 中 ${riskSummary.restart.medium})`,
+                },
+              ]}
+              renderItem={(item) => (
+                <List.Item>
+                  <Text>{item.label}</Text>
+                  <Text strong>{item.value}</Text>
+                </List.Item>
+              )}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={12}>
+          <Card loading={loading} title="风险等级分布" className="ops-surface-card">
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Tag color="red">严重</Tag>
+                <Text strong>{riskSummary.levels.critical}</Text>
+              </Space>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Tag color="orange">高</Tag>
+                <Text strong>{riskSummary.levels.high}</Text>
+              </Space>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Tag color="gold">中</Tag>
+                <Text strong>{riskSummary.levels.medium}</Text>
+              </Space>
+              {riskSummary.total === 0 ? <Text type="secondary">当前时间窗未发现 OOM 或重启风险</Text> : null}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Card loading={loading} title="主机负载" className="ops-surface-card">
@@ -228,6 +334,51 @@ const ResourceAnalytics: React.FC = () => {
             </Card>
           </Col>
         ))}
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24}>
+          <Card loading={loading} title="OOM/重启风险清单" className="ops-surface-card">
+            <Table
+              rowKey={(record) => String(record.risk_id)}
+              pagination={false}
+              dataSource={riskItems}
+              columns={[
+                {
+                  title: '类型',
+                  dataIndex: 'risk_type',
+                  width: 90,
+                  render: (value: string) => <Tag color={value === 'oom' ? 'red' : 'orange'}>{riskTypeLabel(value)}</Tag>,
+                },
+                {
+                  title: '等级',
+                  dataIndex: 'level',
+                  width: 90,
+                  render: (value: string) => <Tag color={riskLevelColor(value)}>{riskLevelLabel(value)}</Tag>,
+                },
+                { title: '对象', dataIndex: 'target', width: 180 },
+                { title: '层级', dataIndex: 'layer', width: 100 },
+                {
+                  title: '指标值',
+                  width: 120,
+                  render: (_: unknown, record: ResourceRiskItem) => formatRiskValue(record),
+                },
+                {
+                  title: '证据',
+                  dataIndex: 'evidence',
+                  ellipsis: true,
+                },
+                {
+                  title: '服务键',
+                  dataIndex: 'service_key',
+                  width: 220,
+                  ellipsis: true,
+                },
+              ]}
+              locale={{ emptyText: '当前时间窗暂无 OOM/重启风险' }}
+            />
+          </Card>
+        </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
