@@ -595,7 +595,15 @@ export interface ExecutorRunResponse {
   plugin: ExecutorPluginStatus
 }
 
-const apiClient = axios.create({
+type HttpClient = {
+  get<T = any>(url: string, config?: unknown): Promise<T>
+  post<T = any>(url: string, data?: unknown, config?: unknown): Promise<T>
+  put<T = any>(url: string, data?: unknown, config?: unknown): Promise<T>
+  patch<T = any>(url: string, data?: unknown, config?: unknown): Promise<T>
+  delete<T = any>(url: string, config?: unknown): Promise<T>
+}
+
+const rawApiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
@@ -603,7 +611,7 @@ const apiClient = axios.create({
   },
 })
 
-apiClient.interceptors.response.use(
+rawApiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response) {
@@ -638,6 +646,8 @@ apiClient.interceptors.response.use(
     throw error
   },
 )
+
+const apiClient = rawApiClient as unknown as HttpClient
 
 export const capabilitiesApi = {
   list: () => apiClient.get('/capabilities'),

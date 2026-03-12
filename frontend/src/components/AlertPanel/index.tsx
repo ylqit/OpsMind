@@ -183,13 +183,21 @@ export const AlertPanel: React.FC = () => {
     },
   ]
 
-  const planSteps = selectedPlan?.steps?.map((step, idx) => ({
-    key: idx,
-    title: step.name,
-    description: step.description,
-    status: executeResults.find(r => r.step === idx + 1)?.success ? 'finish' :
-            executeResults.find(r => r.step === idx + 1)?.error ? 'error' : 'wait',
-  })) || []
+  const planSteps =
+    selectedPlan?.steps?.map((step, idx) => {
+      const result = executeResults.find((item) => item.step === idx + 1)
+      const status: 'finish' | 'error' | 'wait' = result?.success
+        ? 'finish'
+        : result?.error
+          ? 'error'
+          : 'wait'
+      return {
+        key: idx,
+        title: step.name,
+        description: step.description,
+        status,
+      }
+    }) || []
 
   return (
     <>

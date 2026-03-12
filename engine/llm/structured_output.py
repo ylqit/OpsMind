@@ -157,8 +157,13 @@ async def run_guarded_structured_chat(
             raw_preview=last_preview,
         )
 
+    fallback_data = dict(fallback_payload)
+    if last_error_code == "AI_OUTPUT_NOT_JSON" and last_preview.strip():
+        # 纯文本回退时尽量保留模型原始结论，避免完全丢失上下文。
+        fallback_data["summary"] = re.sub(r"\s+", " ", last_preview).strip()[:800]
+
     return StructuredOutputGuardrailResult(
-        data=fallback_payload,
+        data=fallback_data,
         validation_status="fallback_template",
         parse_mode="text_fallback",
         attempts=attempts,

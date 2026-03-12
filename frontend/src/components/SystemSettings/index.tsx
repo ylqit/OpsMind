@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Alert, Card, Col, Descriptions, Empty, Row, Space, Spin, Statistic, Tag, Typography } from 'antd'
-import { CheckCircleOutlined, InfoCircleOutlined, ServerOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, InfoCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { dashboardApi, resourcesApi, tasksApi, type DashboardOverview, type ResourceSummary, type TaskRecord } from '@/api/client'
 
 const { Paragraph, Text } = Typography
@@ -53,7 +53,7 @@ export const SystemSettings: React.FC = () => {
       <Card
         title={
           <Space>
-            <ServerOutlined />
+            <SettingOutlined />
             <span>系统设置</span>
           </Space>
         }

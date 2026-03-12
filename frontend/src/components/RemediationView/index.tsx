@@ -402,7 +402,6 @@ const RemediationView: React.FC = () => {
                         message={`回滚方案：${step.rollback}`}
                         style={{ marginTop: 8 }}
                         showIcon
-                        size="small"
                       />
                     )}
                   </>
@@ -574,7 +573,6 @@ const RemediationView: React.FC = () => {
                                 message={result.error}
                                 style={{ marginTop: 8, marginLeft: 24 }}
                                 showIcon
-                                size="small"
                               />
                             )}
                           </Card>

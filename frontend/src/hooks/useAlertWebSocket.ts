@@ -60,7 +60,7 @@ export const useAlertWebSocket = (options: UseWebSocketOptions = {}) => {
           const data: WebSocketMessage = JSON.parse(event.data)
 
           switch (data.type) {
-            case 'new_alert':
+            case 'new_alert': {
               console.log('收到新告警:', data.alert)
               // 显示通知
               const levelMap = {
@@ -68,14 +68,21 @@ export const useAlertWebSocket = (options: UseWebSocketOptions = {}) => {
                 warning: 'warning',
                 critical: 'error',
               }
-              message[levelMap[data.level || 'warning']](
-                data.message || '新告警通知'
-              )
+              const level = levelMap[data.level || 'warning']
+              const notice = data.message || '新告警通知'
+              if (level === 'error') {
+                message.error(notice)
+              } else if (level === 'info') {
+                message.info(notice)
+              } else {
+                message.warning(notice)
+              }
               // 回调
               if (onNewAlert && data.alert) {
                 onNewAlert(data.alert)
               }
               break
+            }
 
             case 'alert_resolved':
               console.log('告警已解决')
