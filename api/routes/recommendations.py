@@ -631,6 +631,21 @@ async def generate_recommendations(
             "recommendations": [item.model_dump(mode="json") for item in recommendations],
             "guardrail_summary": guardrail_summary,
         }
+        if not recommendations:
+            await task_manager.append_trace(
+                task.task_id,
+                "generate",
+                "no_actionable_recommendation",
+                TaskStatus.GENERATING,
+                "未生成可确认建议，任务自动完成",
+                {
+                    "incident_id": incident.incident_id,
+                    "guardrail_summary": guardrail_summary,
+                },
+            )
+            await task_manager.complete_task(task.task_id, result)
+            return result
+
         await task_manager.wait_for_confirm(task.task_id, result)
         return result
 

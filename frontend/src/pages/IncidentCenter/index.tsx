@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
+  aiApi,
   incidentsApi,
   recommendationsApi,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
   type IncidentLogSample,
   type IncidentRecord,
+  type LLMProviderRecord,
   type RecommendationRecord,
   type TaskArtifact,
   type TaskRecord,
@@ -97,6 +99,17 @@ const sortEvidenceItems = (items: EvidenceItem[]) => {
   })
 }
 
+const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
+  return providers.some((provider) => provider.enabled && provider.api_key_configured && Boolean(provider.model?.trim()))
+}
+
+const isProviderUnavailableError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return error.message.includes('LLM Provider') || error.message.includes('未启用可用的 LLM Provider')
+}
+
 // 把后端任务对象压成异常页可直接消费的轻量状态，避免页面处处判断原始字段。
 const buildRecommendationTaskState = (task: TaskRecord, incidentId: string): RecommendationTaskState => ({
   taskId: task.task_id,
@@ -137,6 +150,8 @@ export const IncidentCenter: React.FC = () => {
   const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
   const [aiSummary, setAiSummary] = useState<IncidentAISummaryResponse | null>(null)
+  const [aiProviderReady, setAiProviderReady] = useState<boolean | null>(null)
+  const [aiProviderChecking, setAiProviderChecking] = useState(true)
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
@@ -215,7 +230,24 @@ export const IncidentCenter: React.FC = () => {
     return response
   }, [])
 
+  const refreshAIProviderAvailability = useCallback(async () => {
+    setAiProviderChecking(true)
+    try {
+      const payload = (await aiApi.listProviders()) as { providers?: LLMProviderRecord[] }
+      setAiProviderReady(hasUsableAIProvider(payload.providers || []))
+    } catch {
+      // 获取 provider 状态失败时不阻塞页面操作，保持为可尝试状态。
+      setAiProviderReady(true)
+    } finally {
+      setAiProviderChecking(false)
+    }
+  }, [])
+
   const createIncidentTask = async () => {
+    if (aiProviderReady === false) {
+      message.warning('当前未配置可用 AI Provider，请先到 LLM 设置启用后再试')
+      return
+    }
     setCreating(true)
     try {
       await incidentsApi.analyze({ service_key: serviceKey || undefined, time_window: '1h' })
@@ -267,6 +299,10 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return
     }
+    if (aiProviderReady === false) {
+      message.warning('当前未配置可用 AI Provider，请先到 LLM 设置启用后再试')
+      return
+    }
     setGeneratingRecommendation(true)
     try {
       const task = (await recommendationsApi.generate({ incident_id: selectedIncident.incident.incident_id })) as TaskRecord
@@ -281,12 +317,21 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return
     }
+    if (aiProviderReady === false) {
+      message.warning('当前未配置可用 AI Provider，请先到 LLM 设置启用后再试')
+      return
+    }
     setAiSummaryLoading(true)
     try {
       const response = (await incidentsApi.aiSummary(selectedIncident.incident.incident_id)) as IncidentAISummaryResponse
       setAiSummary(response)
       message.success('已生成 AI 异常摘要')
     } catch (err) {
+      if (isProviderUnavailableError(err)) {
+        setAiProviderReady(false)
+        message.warning('AI Provider 不可用，请先到 LLM 设置完成配置')
+        return
+      }
       message.error(err instanceof Error ? err.message : 'AI 摘要生成失败')
     } finally {
       setAiSummaryLoading(false)
@@ -331,7 +376,8 @@ export const IncidentCenter: React.FC = () => {
 
   useEffect(() => {
     void loadIncidents()
-  }, [])
+    void refreshAIProviderAvailability()
+  }, [refreshAIProviderAvailability])
 
   return (
     <div className="ops-page">
@@ -344,11 +390,28 @@ export const IncidentCenter: React.FC = () => {
         </div>
         <Space wrap>
           <Input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="service_key，例如 docker/nginx" style={{ width: 220 }} />
-          <Button type="primary" loading={creating} onClick={() => void createIncidentTask()}>发起分析</Button>
+          <Button
+            type="primary"
+            loading={creating}
+            disabled={aiProviderReady === false || aiProviderChecking}
+            onClick={() => void createIncidentTask()}
+          >
+            发起分析
+          </Button>
         </Space>
       </div>
 
       {error ? <Alert type="error" showIcon message="异常中心加载失败" description={error} style={{ marginBottom: 16 }} /> : null}
+      {aiProviderReady === false ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="AI 功能未启用"
+          description="请先到「LLM 设置」启用可用 Provider，异常总结和 AI 复核入口会在配置后自动恢复。"
+          action={<Button type="link" size="small" onClick={() => navigate('/llm-settings')}>前往 LLM 设置</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={9}>
@@ -378,10 +441,20 @@ export const IncidentCenter: React.FC = () => {
             className="ops-surface-card"
             extra={
               <Space>
-                <Button type="primary" ghost onClick={() => void generateRecommendationForIncident()} disabled={!selectedIncident} loading={generatingRecommendation}>
+                <Button
+                  type="primary"
+                  ghost
+                  onClick={() => void generateRecommendationForIncident()}
+                  disabled={!selectedIncident || aiProviderReady === false || aiProviderChecking}
+                  loading={generatingRecommendation || aiProviderChecking}
+                >
                   生成建议
                 </Button>
-                <Button onClick={() => void generateAiSummaryForIncident()} disabled={!selectedIncident} loading={aiSummaryLoading}>
+                <Button
+                  onClick={() => void generateAiSummaryForIncident()}
+                  disabled={!selectedIncident || aiProviderReady === false || aiProviderChecking}
+                  loading={aiSummaryLoading || aiProviderChecking}
+                >
                   AI 总结
                 </Button>
                 <Button onClick={() => openRecommendationCenter()} disabled={!selectedIncident}>

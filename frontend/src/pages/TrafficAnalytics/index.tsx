@@ -1,5 +1,5 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { AutoComplete, Badge, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { Column, Line, Pie } from '@ant-design/plots'
 import { useSearchParams } from 'react-router-dom'
 import { resourcesApi, trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
@@ -11,6 +11,10 @@ const timeRangeOptions = [
   { label: '最近 6 小时', value: '6h' },
   { label: '最近 24 小时', value: '24h' },
 ]
+
+const timeRangeLabelMap: Record<string, string> = Object.fromEntries(
+  timeRangeOptions.map((item) => [item.value, item.label]),
+) as Record<string, string>
 
 const allowedTimeRanges = new Set(timeRangeOptions.map((item) => item.value))
 
@@ -63,6 +67,8 @@ const TrafficAnalytics: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<TrafficSummary | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
+  const [refreshing, setRefreshing] = useState(false)
+  const bootLoading = loading && !summary
 
   const serviceOptions = useMemo(
     () => serviceKeys.map((item) => ({ value: item, label: item })),
@@ -84,7 +90,12 @@ const TrafficAnalytics: React.FC = () => {
   const loadSummary = async (override?: { timeRange?: string; serviceKey?: string }) => {
     const activeTimeRange = override?.timeRange ?? timeRange
     const activeServiceKey = override?.serviceKey ?? deferredServiceKey
-    setLoading(true)
+    const hasSnapshot = Boolean(summary)
+    if (hasSnapshot) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
+    }
     try {
       const response = (await trafficApi.getSummary({
         time_range: activeTimeRange,
@@ -95,6 +106,7 @@ const TrafficAnalytics: React.FC = () => {
       setServiceKeys((prev) => mergeServiceKeys(prev, keysFromRecords))
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -109,26 +121,25 @@ const TrafficAnalytics: React.FC = () => {
   useEffect(() => {
     const nextTimeRange = normalizeTimeRange(searchParams.get('time_range'))
     const nextServiceKey = searchParams.get('service_key') || ''
-    if (nextTimeRange !== timeRange) {
-      setTimeRange(nextTimeRange)
-    }
-    if (nextServiceKey !== serviceKey) {
-      setServiceKey(nextServiceKey)
-    }
-  }, [searchParams, timeRange, serviceKey])
+    setTimeRange((previous) => (previous === nextTimeRange ? previous : nextTimeRange))
+    setServiceKey((previous) => (previous === nextServiceKey ? previous : nextServiceKey))
+  }, [searchParams])
 
   useEffect(() => {
-    const next = new URLSearchParams(searchParams)
-    next.set('time_range', timeRange)
-    if (serviceKey) {
-      next.set('service_key', serviceKey)
-    } else {
-      next.delete('service_key')
-    }
-    if (next.toString() !== searchParams.toString()) {
-      setSearchParams(next, { replace: true })
-    }
-  }, [timeRange, serviceKey, searchParams, setSearchParams])
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('time_range', timeRange)
+      if (serviceKey) {
+        next.set('service_key', serviceKey)
+      } else {
+        next.delete('service_key')
+      }
+      if (next.toString() === previous.toString()) {
+        return previous
+      }
+      return next
+    }, { replace: true, preventScrollReset: true })
+  }, [timeRange, serviceKey, setSearchParams])
 
   // 把请求数和错误数压平成统一序列，图表层可以直接按类型分组绘制。
   const trendData = useMemo(
@@ -165,33 +176,34 @@ const TrafficAnalytics: React.FC = () => {
             filterOption={(inputValue, option) => String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
           />
           <Button onClick={resetFilters}>重置</Button>
-          <Button type="link" onClick={() => void loadSummary({ serviceKey })}>刷新</Button>
+          <Button type="link" loading={refreshing} onClick={() => void loadSummary({ serviceKey })}>刷新</Button>
         </Space>
       </div>
 
       <Space wrap style={{ marginBottom: 12 }}>
-        <Tag color="blue">时间窗：{timeRange}</Tag>
+        <Tag color="blue">时间窗：{timeRangeLabelMap[timeRange] || timeRange}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
+        <Badge status={refreshing ? 'processing' : 'default'} text={refreshing ? '正在刷新数据' : '数据稳定'} />
       </Space>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={6}>
-          <Card loading={loading} className="ops-surface-card"><Statistic title="总请求数" value={summary?.total_requests || 0} /></Card>
+          <Card loading={bootLoading} className="ops-surface-card"><Statistic title="总请求数" value={summary?.total_requests || 0} /></Card>
         </Col>
         <Col xs={24} sm={6}>
-          <Card loading={loading} className="ops-surface-card"><Statistic title="页面浏览量" value={summary?.page_views || 0} /></Card>
+          <Card loading={bootLoading} className="ops-surface-card"><Statistic title="页面浏览量" value={summary?.page_views || 0} /></Card>
         </Col>
         <Col xs={24} sm={6}>
-          <Card loading={loading} className="ops-surface-card"><Statistic title="错误率" value={summary?.error_rate || 0} precision={2} suffix="%" /></Card>
+          <Card loading={bootLoading} className="ops-surface-card"><Statistic title="错误率" value={summary?.error_rate || 0} precision={2} suffix="%" /></Card>
         </Col>
         <Col xs={24} sm={6}>
-          <Card loading={loading} className="ops-surface-card"><Statistic title="平均延迟" value={(summary?.avg_latency || 0) * 1000} precision={0} suffix="ms" /></Card>
+          <Card loading={bootLoading} className="ops-surface-card"><Statistic title="平均延迟" value={(summary?.avg_latency || 0) * 1000} precision={0} suffix="ms" /></Card>
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={14}>
-          <Card title="请求趋势" loading={loading} className="ops-surface-card">
+          <Card title="请求趋势" loading={bootLoading} className="ops-surface-card">
             {trendData.length ? (
               <Line
                 data={trendData}
@@ -207,7 +219,7 @@ const TrafficAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={10}>
-          <Card title="状态码分布" loading={loading} className="ops-surface-card">
+          <Card title="状态码分布" loading={bootLoading} className="ops-surface-card">
             {summary?.status_distribution?.length ? (
               <Pie
                 data={summary.status_distribution.map((item) => ({ type: item.status, value: item.count }))}
@@ -222,7 +234,7 @@ const TrafficAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={12}>
-          <Card title="热点路径排行" loading={loading} className="ops-surface-card">
+          <Card title="热点路径排行" loading={bootLoading} className="ops-surface-card">
             <Table
               rowKey="path"
               pagination={false}
@@ -243,7 +255,7 @@ const TrafficAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="异常来源 IP" loading={loading} className="ops-surface-card">
+          <Card title="异常来源 IP" loading={bootLoading} className="ops-surface-card">
             <Table
               rowKey="ip"
               pagination={false}
@@ -264,7 +276,7 @@ const TrafficAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={12}>
-          <Card title="热门路径分布" loading={loading} className="ops-surface-card">
+          <Card title="热门路径分布" loading={bootLoading} className="ops-surface-card">
             {summary?.top_paths?.length ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 {summary.top_paths.map((item) => (
@@ -277,7 +289,7 @@ const TrafficAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="终端分布" loading={loading} className="ops-surface-card">
+          <Card title="终端分布" loading={bootLoading} className="ops-surface-card">
             {summary?.ua_distribution?.length ? (
               <Column data={summary.ua_distribution} xField="name" yField="count" color="#0f766e" height={240} />
             ) : <Empty description="暂无终端分布" />}
@@ -287,7 +299,7 @@ const TrafficAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={24}>
-          <Card title="错误请求样本" loading={loading} className="ops-surface-card">
+          <Card title="错误请求样本" loading={bootLoading} className="ops-surface-card">
             <Table
               rowKey={(record: TrafficErrorSample, index?: number) => `${record.timestamp}-${record.path}-${index || 0}`}
               pagination={false}

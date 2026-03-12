@@ -1,13 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Col, Drawer, Empty, Input, List, Modal, Row, Segmented, Select, Space, Tag, Typography, message } from 'antd'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  aiApi,
   incidentsApi,
   recommendationsApi,
   tasksApi,
   type ArtifactContentResponse,
   type IncidentDetailResponse,
   type IncidentRecord,
+  type LLMProviderRecord,
   type RecommendationAIReviewResponse,
   type RecommendationDetailResponse,
   type RecommendationEvidenceRef,
@@ -155,6 +157,17 @@ const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_ty
     return '指标快照'
   }
   return '现场证据'
+}
+
+const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
+  return providers.some((provider) => provider.enabled && provider.api_key_configured && Boolean(provider.model?.trim()))
+}
+
+const isProviderUnavailableError = (error: unknown) => {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return error.message.includes('LLM Provider') || error.message.includes('未启用可用的 LLM Provider')
 }
 
 const buildDiffSummary = (content: string): DiffSummary => {
@@ -395,6 +408,7 @@ const buildBundleMarkdown = (
 }
 
 export const RecommendationCenter: React.FC = () => {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -409,6 +423,8 @@ export const RecommendationCenter: React.FC = () => {
   const [artifactCopyingId, setArtifactCopyingId] = useState('')
   const [bundleCopyingId, setBundleCopyingId] = useState('')
   const [bundleExportingId, setBundleExportingId] = useState('')
+  const [aiProviderReady, setAiProviderReady] = useState<boolean | null>(null)
+  const [aiProviderChecking, setAiProviderChecking] = useState(true)
   const [aiReviewLoadingId, setAiReviewLoadingId] = useState('')
   const [aiReviewByRecommendationId, setAiReviewByRecommendationId] = useState<Record<string, RecommendationAIReviewResponse>>({})
   const [feedbackByRecommendationId, setFeedbackByRecommendationId] = useState<Record<string, RecommendationFeedbackListResponse>>({})
@@ -458,6 +474,19 @@ export const RecommendationCenter: React.FC = () => {
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
   const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
+
+  useEffect(() => {
+    if (!selectedRecommendations.length) {
+      if (activeRecommendationId) {
+        setActiveRecommendationId('')
+      }
+      return
+    }
+    if (activeRecommendationId && selectedRecommendations.some((item) => item.recommendation_id === activeRecommendationId)) {
+      return
+    }
+    setActiveRecommendationId(selectedRecommendations[0].recommendation_id)
+  }, [selectedRecommendations, activeRecommendationId])
 
   const updateRouteState = (incidentId?: string, artifact?: TaskArtifact | null) => {
     const nextParams = new URLSearchParams()
@@ -842,8 +871,25 @@ export const RecommendationCenter: React.FC = () => {
     }
   }
 
+  const refreshAIProviderAvailability = useCallback(async () => {
+    setAiProviderChecking(true)
+    try {
+      const payload = (await aiApi.listProviders()) as { providers?: LLMProviderRecord[] }
+      setAiProviderReady(hasUsableAIProvider(payload.providers || []))
+    } catch {
+      // provider 状态接口失败时保持可尝试，避免误伤主流程。
+      setAiProviderReady(true)
+    } finally {
+      setAiProviderChecking(false)
+    }
+  }, [])
+
   const generate = async () => {
     if (!selected) {
+      return
+    }
+    if (aiProviderReady === false) {
+      message.warning('当前未配置可用 AI Provider，请先到 LLM 设置启用后再试')
       return
     }
     setGenerating(true)
@@ -857,6 +903,10 @@ export const RecommendationCenter: React.FC = () => {
   }
 
   const reviewRecommendationWithAi = async (recommendation: RecommendationRecord) => {
+    if (aiProviderReady === false) {
+      message.warning('当前未配置可用 AI Provider，请先到 LLM 设置启用后再试')
+      return
+    }
     setAiReviewLoadingId(recommendation.recommendation_id)
     try {
       const response = (await recommendationsApi.aiReview(recommendation.recommendation_id)) as RecommendationAIReviewResponse
@@ -866,6 +916,11 @@ export const RecommendationCenter: React.FC = () => {
       }))
       message.success('AI 复核已生成')
     } catch (error) {
+      if (isProviderUnavailableError(error)) {
+        setAiProviderReady(false)
+        message.warning('AI Provider 不可用，请先到 LLM 设置完成配置')
+        return
+      }
       message.error(error instanceof Error ? error.message : 'AI 复核失败')
     } finally {
       setAiReviewLoadingId('')
@@ -874,10 +929,11 @@ export const RecommendationCenter: React.FC = () => {
 
   useEffect(() => {
     void loadData()
-  }, [])
+    void refreshAIProviderAvailability()
+  }, [refreshAIProviderAvailability])
 
   const renderArtifactActions = (artifact: TaskArtifact, recommendation: RecommendationRecord) => (
-    <Space>
+    <Space wrap>
       <Button
         size="small"
         type={preview?.artifact.artifact_id === artifact.artifact_id ? 'primary' : 'default'}
@@ -913,10 +969,27 @@ export const RecommendationCenter: React.FC = () => {
           </Paragraph>
         </div>
         <Space>
-          <Button type="primary" onClick={() => void generate()} loading={generating} disabled={!selected}>生成建议</Button>
+          <Button
+            type="primary"
+            onClick={() => void generate()}
+            loading={generating || aiProviderChecking}
+            disabled={!selected || aiProviderReady === false || aiProviderChecking}
+          >
+            生成建议
+          </Button>
           <Button onClick={() => void loadData()} loading={loading}>刷新详情</Button>
         </Space>
       </div>
+      {aiProviderReady === false ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="AI 功能未启用"
+          description="请先在「LLM 设置」启用可用 Provider，AI 复核入口会在配置完成后自动恢复。"
+          action={<Button type="link" size="small" onClick={() => navigate('/llm-settings')}>前往 LLM 设置</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={7}>
@@ -962,62 +1035,78 @@ export const RecommendationCenter: React.FC = () => {
                           <Paragraph style={{ marginBottom: 8 }}>{item.recommendation}</Paragraph>
                           <Paragraph type="secondary" style={{ marginBottom: 12 }}>{item.risk_note}</Paragraph>
                           <div className="ops-recommendation-item__toolbar">
-                            <Space wrap>
-                              <Button onClick={() => void openRecommendationWorkspace(item)} disabled={!item.artifact_refs.length}>
-                                打开页内工作区
-                              </Button>
-                              <Button
-                                onClick={() => void reviewRecommendationWithAi(item)}
-                                loading={aiReviewLoadingId === item.recommendation_id}
-                              >
-                                AI 复核
-                              </Button>
-                              <Button
-                                onClick={() => void openEvidenceDrawer(item)}
-                                loading={evidenceLoadingId === item.recommendation_id}
-                              >
-                                证据引用
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => void openFeedbackModal(item, 'adopt')}
-                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'adopt'}
-                              >
-                                采纳
-                              </Button>
-                              <Button
-                                size="small"
-                                danger
-                                onClick={() => void openFeedbackModal(item, 'reject')}
-                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'reject'}
-                              >
-                                拒绝
-                              </Button>
-                              <Button
-                                size="small"
-                                type="dashed"
-                                onClick={() => void openFeedbackModal(item, 'rewrite')}
-                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'rewrite'}
-                              >
-                                改写
-                              </Button>
-                              <Button
-                                onClick={() => void copyRecommendationBundle(item)}
-                                loading={bundleCopyingId === item.recommendation_id}
-                                disabled={!item.artifact_refs.length}
-                              >
-                                复制整套草稿
-                              </Button>
-                              <Button
-                                type="primary"
-                                ghost
-                                onClick={() => void exportRecommendationBundle(item)}
-                                loading={bundleExportingId === item.recommendation_id}
-                                disabled={!item.artifact_refs.length}
-                              >
-                                导出整套草稿
-                              </Button>
-                            </Space>
+                            <div className="ops-action-groups">
+                              <div className="ops-action-group">
+                                <Text type="secondary" className="ops-action-group__label">基础</Text>
+                                <Space wrap>
+                                  <Button onClick={() => void openRecommendationWorkspace(item)} disabled={!item.artifact_refs.length}>
+                                    打开页内工作区
+                                  </Button>
+                                  <Button
+                                    onClick={() => void reviewRecommendationWithAi(item)}
+                                    loading={aiReviewLoadingId === item.recommendation_id}
+                                    disabled={aiProviderReady === false || aiProviderChecking}
+                                  >
+                                    AI 复核
+                                  </Button>
+                                  <Button
+                                    onClick={() => void openEvidenceDrawer(item)}
+                                    loading={evidenceLoadingId === item.recommendation_id}
+                                  >
+                                    证据引用
+                                  </Button>
+                                </Space>
+                              </div>
+                              <div className="ops-action-group">
+                                <Text type="secondary" className="ops-action-group__label">反馈</Text>
+                                <Space wrap>
+                                  <Button
+                                    size="small"
+                                    onClick={() => void openFeedbackModal(item, 'adopt')}
+                                    loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'adopt'}
+                                  >
+                                    采纳
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    danger
+                                    onClick={() => void openFeedbackModal(item, 'reject')}
+                                    loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'reject'}
+                                  >
+                                    拒绝
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    type="dashed"
+                                    onClick={() => void openFeedbackModal(item, 'rewrite')}
+                                    loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'rewrite'}
+                                  >
+                                    改写
+                                  </Button>
+                                </Space>
+                              </div>
+                              <div className="ops-action-group">
+                                <Text type="secondary" className="ops-action-group__label">导出</Text>
+                                <Space wrap>
+                                  <Button
+                                    onClick={() => void copyRecommendationBundle(item)}
+                                    loading={bundleCopyingId === item.recommendation_id}
+                                    disabled={!item.artifact_refs.length}
+                                  >
+                                    复制整套草稿
+                                  </Button>
+                                  <Button
+                                    type="primary"
+                                    ghost
+                                    onClick={() => void exportRecommendationBundle(item)}
+                                    loading={bundleExportingId === item.recommendation_id}
+                                    disabled={!item.artifact_refs.length}
+                                  >
+                                    导出整套草稿
+                                  </Button>
+                                </Space>
+                              </div>
+                            </div>
                             <Space size={6} wrap>
                               <Text type="secondary">共 {item.artifact_refs.length} 份产物</Text>
                               <Tag color="green">采纳 {feedbackSummary.adopt}</Tag>
@@ -1030,13 +1119,16 @@ export const RecommendationCenter: React.FC = () => {
                             dataSource={item.artifact_refs}
                             locale={{ emptyText: '暂无草稿产物' }}
                             renderItem={(artifact) => (
-                              <List.Item actions={[renderArtifactActions(artifact, item)]}>
-                                <div style={{ width: '100%' }}>
+                              <List.Item>
+                                <div className="ops-recommendation-artifact-row">
                                   <Space style={{ marginBottom: 6 }}>
                                     <Tag color={artifact.kind === 'diff' ? 'purple' : 'geekblue'}>{artifactLabelMap[artifact.kind] || artifact.kind}</Tag>
                                     <Text code>{getArtifactFilename(artifact)}</Text>
                                   </Space>
                                   <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{artifact.preview || '暂无预览摘要'}</Paragraph>
+                                  <div className="ops-recommendation-artifact-row__actions">
+                                    {renderArtifactActions(artifact, item)}
+                                  </div>
                                 </div>
                               </List.Item>
                             )}
@@ -1053,37 +1145,55 @@ export const RecommendationCenter: React.FC = () => {
               title="草稿工作区"
               className="ops-surface-card"
               extra={preview && activeRecommendation ? (
-                <Space wrap>
-                  <Button onClick={() => void copyPreviewContent()} loading={previewCopying}>{copyLabel}</Button>
-                  <Button
-                    onClick={() => void reviewRecommendationWithAi(activeRecommendation)}
-                    loading={aiReviewLoadingId === activeRecommendation.recommendation_id}
-                  >
-                    AI 复核
-                  </Button>
-                  <Button
-                    onClick={() => void openEvidenceDrawer(activeRecommendation)}
-                    loading={evidenceLoadingId === activeRecommendation.recommendation_id}
-                  >
-                    证据引用
-                  </Button>
-                  <Button size="small" onClick={() => void openFeedbackModal(activeRecommendation, 'adopt')}>采纳</Button>
-                  <Button size="small" danger onClick={() => void openFeedbackModal(activeRecommendation, 'reject')}>拒绝</Button>
-                  <Button size="small" type="dashed" onClick={() => void openFeedbackModal(activeRecommendation, 'rewrite')}>改写</Button>
-                  <Button
-                    onClick={() => void copyRecommendationBundle(activeRecommendation)}
-                    loading={bundleCopyingId === activeRecommendation.recommendation_id}
-                  >
-                    复制整套草稿
-                  </Button>
-                  <Button
-                    onClick={() => void exportRecommendationBundle(activeRecommendation)}
-                    loading={bundleExportingId === activeRecommendation.recommendation_id}
-                  >
-                    导出整套草稿
-                  </Button>
-                  <Button type="primary" onClick={() => downloadArtifact(preview.artifact)}>下载当前视图</Button>
-                </Space>
+                <div className="ops-recommendation-workspace__actions">
+                  <div className="ops-action-groups ops-action-groups--compact">
+                    <div className="ops-action-group">
+                      <Text type="secondary" className="ops-action-group__label">基础</Text>
+                      <Space wrap>
+                        <Button onClick={() => void copyPreviewContent()} loading={previewCopying}>{copyLabel}</Button>
+                        <Button
+                          onClick={() => void reviewRecommendationWithAi(activeRecommendation)}
+                          loading={aiReviewLoadingId === activeRecommendation.recommendation_id}
+                          disabled={aiProviderReady === false || aiProviderChecking}
+                        >
+                          AI 复核
+                        </Button>
+                        <Button
+                          onClick={() => void openEvidenceDrawer(activeRecommendation)}
+                          loading={evidenceLoadingId === activeRecommendation.recommendation_id}
+                        >
+                          证据引用
+                        </Button>
+                      </Space>
+                    </div>
+                    <div className="ops-action-group">
+                      <Text type="secondary" className="ops-action-group__label">反馈</Text>
+                      <Space wrap>
+                        <Button size="small" onClick={() => void openFeedbackModal(activeRecommendation, 'adopt')}>采纳</Button>
+                        <Button size="small" danger onClick={() => void openFeedbackModal(activeRecommendation, 'reject')}>拒绝</Button>
+                        <Button size="small" type="dashed" onClick={() => void openFeedbackModal(activeRecommendation, 'rewrite')}>改写</Button>
+                      </Space>
+                    </div>
+                    <div className="ops-action-group">
+                      <Text type="secondary" className="ops-action-group__label">导出</Text>
+                      <Space wrap>
+                        <Button
+                          onClick={() => void copyRecommendationBundle(activeRecommendation)}
+                          loading={bundleCopyingId === activeRecommendation.recommendation_id}
+                        >
+                          复制整套草稿
+                        </Button>
+                        <Button
+                          onClick={() => void exportRecommendationBundle(activeRecommendation)}
+                          loading={bundleExportingId === activeRecommendation.recommendation_id}
+                        >
+                          导出整套草稿
+                        </Button>
+                        <Button type="primary" onClick={() => downloadArtifact(preview.artifact)}>下载当前视图</Button>
+                      </Space>
+                    </div>
+                  </div>
+                </div>
               ) : null}
             >
               {!preview || !activeRecommendation ? (

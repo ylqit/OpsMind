@@ -1,5 +1,5 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Button, Card, Col, List, Row, Select, Space, Table, Tag, Typography } from 'antd'
+import { AutoComplete, Badge, Button, Card, Col, List, Row, Select, Space, Table, Tag, Typography } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   resourcesApi,
@@ -17,6 +17,10 @@ const timeRangeOptions = [
   { label: '最近 6 小时', value: '6h' },
   { label: '最近 24 小时', value: '24h' },
 ]
+
+const timeRangeLabelMap: Record<string, string> = Object.fromEntries(
+  timeRangeOptions.map((item) => [item.value, item.label]),
+) as Record<string, string>
 
 const allowedTimeRanges = new Set(timeRangeOptions.map((item) => item.value))
 
@@ -134,6 +138,8 @@ const ResourceAnalytics: React.FC = () => {
   const [summary, setSummary] = useState<ResourceSummary | null>(null)
   const [assets, setAssets] = useState<AssetListResponse>({ items: [], total: 0, synced: 0 })
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
+  const [refreshing, setRefreshing] = useState(false)
+  const bootLoading = loading && !summary
 
   const serviceOptions = useMemo(
     () => serviceKeys.map((item) => ({ value: item, label: item })),
@@ -147,7 +153,12 @@ const ResourceAnalytics: React.FC = () => {
   const loadData = async (override?: { timeRange?: string; serviceKey?: string }) => {
     const activeTimeRange = override?.timeRange ?? timeRange
     const activeServiceKey = override?.serviceKey ?? deferredServiceKey
-    setLoading(true)
+    const hasSnapshot = Boolean(summary)
+    if (hasSnapshot) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
+    }
     try {
       const [resourceResponse, assetResponse] = await Promise.all([
         resourcesApi.getSummary({ time_range: activeTimeRange, service_key: activeServiceKey || undefined }) as Promise<ResourceSummary>,
@@ -161,6 +172,7 @@ const ResourceAnalytics: React.FC = () => {
       setServiceKeys((prev) => mergeServiceKeys(prev, keys))
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -171,26 +183,25 @@ const ResourceAnalytics: React.FC = () => {
   useEffect(() => {
     const nextTimeRange = normalizeTimeRange(searchParams.get('time_range'))
     const nextServiceKey = searchParams.get('service_key') || ''
-    if (nextTimeRange !== timeRange) {
-      setTimeRange(nextTimeRange)
-    }
-    if (nextServiceKey !== serviceKey) {
-      setServiceKey(nextServiceKey)
-    }
-  }, [searchParams, timeRange, serviceKey])
+    setTimeRange((previous) => (previous === nextTimeRange ? previous : nextTimeRange))
+    setServiceKey((previous) => (previous === nextServiceKey ? previous : nextServiceKey))
+  }, [searchParams])
 
   useEffect(() => {
-    const next = new URLSearchParams(searchParams)
-    next.set('time_range', timeRange)
-    if (serviceKey) {
-      next.set('service_key', serviceKey)
-    } else {
-      next.delete('service_key')
-    }
-    if (next.toString() !== searchParams.toString()) {
-      setSearchParams(next, { replace: true })
-    }
-  }, [timeRange, serviceKey, searchParams, setSearchParams])
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('time_range', timeRange)
+      if (serviceKey) {
+        next.set('service_key', serviceKey)
+      } else {
+        next.delete('service_key')
+      }
+      if (next.toString() === previous.toString()) {
+        return previous
+      }
+      return next
+    }, { replace: true, preventScrollReset: true })
+  }, [timeRange, serviceKey, setSearchParams])
 
   const hostCpu = Number(summary?.host?.cpu?.usage_percent || 0)
   const hostMemory = Number(summary?.host?.memory?.usage_percent || 0)
@@ -220,18 +231,19 @@ const ResourceAnalytics: React.FC = () => {
             filterOption={(inputValue, option) => String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
           />
           <Button onClick={resetFilters}>重置</Button>
-          <Button type="link" onClick={() => void loadData({ serviceKey })}>刷新</Button>
+          <Button type="link" loading={refreshing} onClick={() => void loadData({ serviceKey })}>刷新</Button>
         </Space>
       </div>
 
       <Space wrap style={{ marginBottom: 12 }}>
-        <Tag color="blue">时间窗：{timeRange}</Tag>
+        <Tag color="blue">时间窗：{timeRangeLabelMap[timeRange] || timeRange}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
+        <Badge status={refreshing ? 'processing' : 'default'} text={refreshing ? '正在刷新数据' : '数据稳定'} />
       </Space>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
         <Col xs={24} md={12}>
-          <Card loading={loading} title="OOM/重启风险概览" className="ops-surface-card">
+          <Card loading={bootLoading} title="OOM/重启风险概览" className="ops-surface-card">
             <List
               dataSource={[
                 { label: '风险总数', value: `${riskSummary.total}` },
@@ -251,7 +263,7 @@ const ResourceAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card loading={loading} title="风险等级分布" className="ops-surface-card">
+          <Card loading={bootLoading} title="风险等级分布" className="ops-surface-card">
             <Space direction="vertical" style={{ width: '100%' }}>
               <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                 <Tag color="red">严重</Tag>
@@ -273,7 +285,7 @@ const ResourceAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
-          <Card loading={loading} title="主机负载" className="ops-surface-card">
+          <Card loading={bootLoading} title="主机负载" className="ops-surface-card">
             <List
               dataSource={[
                 { label: 'CPU 使用率', value: `${hostCpu.toFixed(1)}%` },
@@ -290,7 +302,7 @@ const ResourceAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card loading={loading} title="分层热点概览" className="ops-surface-card">
+          <Card loading={bootLoading} title="分层热点概览" className="ops-surface-card">
             <List
               dataSource={layerMeta}
               renderItem={(item) => (
@@ -309,7 +321,7 @@ const ResourceAnalytics: React.FC = () => {
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         {layerMeta.map((layerItem) => (
           <Col xs={24} lg={12} key={layerItem.key}>
-            <Card loading={loading} title={layerItem.title} className="ops-surface-card">
+            <Card loading={bootLoading} title={layerItem.title} className="ops-surface-card">
               <List
                 dataSource={hotspotLayers[layerItem.key]}
                 locale={{ emptyText: `当前没有${layerItem.title}` }}
@@ -338,7 +350,7 @@ const ResourceAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24}>
-          <Card loading={loading} title="OOM/重启风险清单" className="ops-surface-card">
+          <Card loading={bootLoading} title="OOM/重启风险清单" className="ops-surface-card">
             <Table
               rowKey={(record) => String(record.risk_id)}
               pagination={false}
@@ -383,7 +395,7 @@ const ResourceAnalytics: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} lg={14}>
-          <Card loading={loading} title="容器摘要" className="ops-surface-card">
+          <Card loading={bootLoading} title="容器摘要" className="ops-surface-card">
             <Table
               rowKey={(record) => String(record.asset_id)}
               pagination={false}
@@ -399,7 +411,7 @@ const ResourceAnalytics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={10}>
-          <Card loading={loading} title="资产目录" className="ops-surface-card">
+          <Card loading={bootLoading} title="资产目录" className="ops-surface-card">
             <List
               dataSource={assets.items}
               locale={{ emptyText: '暂无资产' }}
