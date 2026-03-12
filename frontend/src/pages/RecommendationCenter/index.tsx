@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Drawer, Empty, List, Row, Segmented, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Drawer, Empty, Input, List, Modal, Row, Segmented, Select, Space, Tag, Typography, message } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   incidentsApi,
@@ -11,6 +11,10 @@ import {
   type RecommendationAIReviewResponse,
   type RecommendationDetailResponse,
   type RecommendationEvidenceRef,
+  type RecommendationFeedbackAction,
+  type RecommendationFeedbackListResponse,
+  type RecommendationFeedbackRecord,
+  type RecommendationFeedbackSaveResponse,
   type RecommendationRecord,
   type TaskArtifact,
 } from '@/api/client'
@@ -70,6 +74,36 @@ interface BundleArtifactContent {
   artifact: TaskArtifact
   filename: string
   content: string
+}
+
+interface FeedbackDraft {
+  action: RecommendationFeedbackAction
+  reasonCode: string
+  comment: string
+}
+
+const feedbackActionLabel: Record<RecommendationFeedbackAction, string> = {
+  adopt: '采纳',
+  reject: '拒绝',
+  rewrite: '改写',
+}
+
+const feedbackReasonOptions: Record<RecommendationFeedbackAction, Array<{ label: string; value: string }>> = {
+  adopt: [
+    { label: '证据充分', value: 'evidence_sufficient' },
+    { label: '风险可控', value: 'risk_acceptable' },
+    { label: '方案可执行', value: 'execution_ready' },
+  ],
+  reject: [
+    { label: '证据不足', value: 'evidence_insufficient' },
+    { label: '风险过高', value: 'risk_too_high' },
+    { label: '场景不匹配', value: 'scenario_mismatch' },
+  ],
+  rewrite: [
+    { label: '需要改写参数', value: 'tune_parameters' },
+    { label: '需要补充回滚', value: 'missing_rollback' },
+    { label: '需要分阶段执行', value: 'need_staged_rollout' },
+  ],
 }
 
 const artifactLabelMap: Record<string, string> = {
@@ -286,6 +320,18 @@ const shortHash = (value: string, size: number = 12) => {
   return text.slice(0, size)
 }
 
+const buildEmptyFeedbackSummary = () => ({ adopt: 0, reject: 0, rewrite: 0 })
+
+const getFeedbackActionColor = (action: RecommendationFeedbackAction) => {
+  if (action === 'adopt') {
+    return 'green'
+  }
+  if (action === 'reject') {
+    return 'red'
+  }
+  return 'orange'
+}
+
 const downloadTextFile = (filename: string, content: string, mimeType: string = 'text/plain;charset=utf-8') => {
   const blob = new Blob([content], { type: mimeType })
   const objectUrl = URL.createObjectURL(blob)
@@ -365,6 +411,12 @@ export const RecommendationCenter: React.FC = () => {
   const [bundleExportingId, setBundleExportingId] = useState('')
   const [aiReviewLoadingId, setAiReviewLoadingId] = useState('')
   const [aiReviewByRecommendationId, setAiReviewByRecommendationId] = useState<Record<string, RecommendationAIReviewResponse>>({})
+  const [feedbackByRecommendationId, setFeedbackByRecommendationId] = useState<Record<string, RecommendationFeedbackListResponse>>({})
+  const [feedbackLoadingId, setFeedbackLoadingId] = useState('')
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
+  const [feedbackTarget, setFeedbackTarget] = useState<RecommendationRecord | null>(null)
+  const [feedbackDraft, setFeedbackDraft] = useState<FeedbackDraft>({ action: 'adopt', reasonCode: '', comment: '' })
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [evidenceLoadingId, setEvidenceLoadingId] = useState('')
   const [detailByRecommendationId, setDetailByRecommendationId] = useState<Record<string, RecommendationDetailResponse>>({})
@@ -391,6 +443,18 @@ export const RecommendationCenter: React.FC = () => {
     () => (activeRecommendation ? manifestMetaByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, manifestMetaByRecommendationId],
   )
+  const activeFeedbackPayload = useMemo(() => {
+    if (!activeRecommendation) {
+      return null
+    }
+    return (
+      feedbackByRecommendationId[activeRecommendation.recommendation_id] || {
+        recommendation_id: activeRecommendation.recommendation_id,
+        summary: buildEmptyFeedbackSummary(),
+        items: [],
+      }
+    )
+  }, [activeRecommendation, feedbackByRecommendationId])
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
   const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
@@ -429,6 +493,7 @@ export const RecommendationCenter: React.FC = () => {
     setActiveRecommendationId(recommendation.recommendation_id)
     void loadRecommendationDetail(recommendation.recommendation_id)
     void loadManifestMetadata(recommendation)
+    void loadRecommendationFeedback(recommendation.recommendation_id)
     if (!artifact) {
       setPreview(null)
       updateRouteState(selected?.incident.incident_id, null)
@@ -545,6 +610,7 @@ export const RecommendationCenter: React.FC = () => {
     const detail = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
     setSelected(detail)
     setAiReviewByRecommendationId({})
+    setFeedbackByRecommendationId({})
     setDetailByRecommendationId({})
     setManifestMetaByRecommendationId({})
     return detail
@@ -586,6 +652,83 @@ export const RecommendationCenter: React.FC = () => {
     } catch {
       setManifestMetaByRecommendationId((previous) => ({ ...previous, [recommendationId]: null }))
       return null
+    }
+  }
+
+  const loadRecommendationFeedback = async (recommendationId: string, forceRefresh: boolean = false) => {
+    if (!forceRefresh && feedbackByRecommendationId[recommendationId]) {
+      return feedbackByRecommendationId[recommendationId]
+    }
+    setFeedbackLoadingId(recommendationId)
+    try {
+      const payload = (await recommendationsApi.listFeedback(recommendationId)) as RecommendationFeedbackListResponse
+      setFeedbackByRecommendationId((previous) => ({
+        ...previous,
+        [recommendationId]: payload,
+      }))
+      return payload
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '反馈记录加载失败')
+      return null
+    } finally {
+      setFeedbackLoadingId('')
+    }
+  }
+
+  const openFeedbackModal = async (recommendation: RecommendationRecord, action: RecommendationFeedbackAction) => {
+    setActiveRecommendationId(recommendation.recommendation_id)
+    setFeedbackTarget(recommendation)
+    const defaultReason = feedbackReasonOptions[action][0]?.value || ''
+    setFeedbackDraft({
+      action,
+      reasonCode: defaultReason,
+      comment: '',
+    })
+    setFeedbackModalOpen(true)
+    void loadRecommendationFeedback(recommendation.recommendation_id)
+  }
+
+  const submitRecommendationFeedback = async () => {
+    if (!feedbackTarget) {
+      return
+    }
+    if ((feedbackDraft.action === 'reject' || feedbackDraft.action === 'rewrite') && !feedbackDraft.reasonCode.trim()) {
+      message.warning('拒绝或改写反馈请先选择原因')
+      return
+    }
+
+    setFeedbackSubmitting(true)
+    try {
+      const response = (await recommendationsApi.saveFeedback(feedbackTarget.recommendation_id, {
+        action: feedbackDraft.action,
+        reason_code: feedbackDraft.reasonCode,
+        comment: feedbackDraft.comment,
+        operator: 'ops_user',
+      })) as RecommendationFeedbackSaveResponse
+
+      setFeedbackByRecommendationId((previous) => {
+        const existing = previous[feedbackTarget.recommendation_id]
+        const nextItems: RecommendationFeedbackRecord[] = [
+          response.item,
+          ...(existing?.items || []).filter((item) => item.feedback_id !== response.item.feedback_id),
+        ]
+        return {
+          ...previous,
+          [feedbackTarget.recommendation_id]: {
+            recommendation_id: feedbackTarget.recommendation_id,
+            summary: response.summary,
+            items: nextItems,
+          },
+        }
+      })
+
+      message.success(`反馈已提交：${feedbackActionLabel[feedbackDraft.action]}`)
+      setFeedbackModalOpen(false)
+      setFeedbackTarget(null)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '反馈提交失败')
+    } finally {
+      setFeedbackSubmitting(false)
     }
   }
 
@@ -634,6 +777,7 @@ export const RecommendationCenter: React.FC = () => {
     setActiveRecommendationId(firstRecommendation.recommendation_id)
     void loadRecommendationDetail(firstRecommendation.recommendation_id)
     void loadManifestMetadata(firstRecommendation)
+    void loadRecommendationFeedback(firstRecommendation.recommendation_id)
     if (!artifact) {
       updateRouteState(detail.incident.incident_id, null)
       return
@@ -654,6 +798,7 @@ export const RecommendationCenter: React.FC = () => {
     if (artifact && recommendation) {
       void loadRecommendationDetail(recommendation.recommendation_id)
       void loadManifestMetadata(recommendation)
+      void loadRecommendationFeedback(recommendation.recommendation_id)
       await previewArtifact(artifact, recommendation.recommendation_id, detail.incident.incident_id)
       return
     }
@@ -804,6 +949,7 @@ export const RecommendationCenter: React.FC = () => {
                   locale={{ emptyText: '当前没有建议内容，可以先点击“生成建议”' }}
                   renderItem={(item: RecommendationRecord) => {
                     const isActiveRecommendation = item.recommendation_id === activeRecommendationId
+                    const feedbackSummary = feedbackByRecommendationId[item.recommendation_id]?.summary || buildEmptyFeedbackSummary()
                     return (
                       <List.Item className={isActiveRecommendation ? 'ops-recommendation-item ops-recommendation-item--active' : 'ops-recommendation-item'}>
                         <div style={{ width: '100%' }}>
@@ -833,6 +979,29 @@ export const RecommendationCenter: React.FC = () => {
                                 证据引用
                               </Button>
                               <Button
+                                size="small"
+                                onClick={() => void openFeedbackModal(item, 'adopt')}
+                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'adopt'}
+                              >
+                                采纳
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                onClick={() => void openFeedbackModal(item, 'reject')}
+                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'reject'}
+                              >
+                                拒绝
+                              </Button>
+                              <Button
+                                size="small"
+                                type="dashed"
+                                onClick={() => void openFeedbackModal(item, 'rewrite')}
+                                loading={feedbackSubmitting && feedbackTarget?.recommendation_id === item.recommendation_id && feedbackDraft.action === 'rewrite'}
+                              >
+                                改写
+                              </Button>
+                              <Button
                                 onClick={() => void copyRecommendationBundle(item)}
                                 loading={bundleCopyingId === item.recommendation_id}
                                 disabled={!item.artifact_refs.length}
@@ -849,7 +1018,12 @@ export const RecommendationCenter: React.FC = () => {
                                 导出整套草稿
                               </Button>
                             </Space>
-                            <Text type="secondary">共 {item.artifact_refs.length} 份产物</Text>
+                            <Space size={6} wrap>
+                              <Text type="secondary">共 {item.artifact_refs.length} 份产物</Text>
+                              <Tag color="green">采纳 {feedbackSummary.adopt}</Tag>
+                              <Tag color="red">拒绝 {feedbackSummary.reject}</Tag>
+                              <Tag color="orange">改写 {feedbackSummary.rewrite}</Tag>
+                            </Space>
                           </div>
                           <List
                             size="small"
@@ -893,6 +1067,9 @@ export const RecommendationCenter: React.FC = () => {
                   >
                     证据引用
                   </Button>
+                  <Button size="small" onClick={() => void openFeedbackModal(activeRecommendation, 'adopt')}>采纳</Button>
+                  <Button size="small" danger onClick={() => void openFeedbackModal(activeRecommendation, 'reject')}>拒绝</Button>
+                  <Button size="small" type="dashed" onClick={() => void openFeedbackModal(activeRecommendation, 'rewrite')}>改写</Button>
                   <Button
                     onClick={() => void copyRecommendationBundle(activeRecommendation)}
                     loading={bundleCopyingId === activeRecommendation.recommendation_id}
@@ -965,6 +1142,34 @@ export const RecommendationCenter: React.FC = () => {
                           ))}
                         </Space>
                       ) : null}
+                    </Card>
+                  ) : null}
+
+                  {activeFeedbackPayload ? (
+                    <Card type="inner" title="反馈闭环" size="small" loading={Boolean(activeRecommendation) && feedbackLoadingId === activeRecommendation?.recommendation_id}>
+                      <Space wrap style={{ marginBottom: 10 }}>
+                        <Tag color="green">采纳 {activeFeedbackPayload.summary.adopt}</Tag>
+                        <Tag color="red">拒绝 {activeFeedbackPayload.summary.reject}</Tag>
+                        <Tag color="orange">改写 {activeFeedbackPayload.summary.rewrite}</Tag>
+                      </Space>
+                      <List
+                        size="small"
+                        dataSource={activeFeedbackPayload.items.slice(0, 5)}
+                        locale={{ emptyText: '还没有反馈记录' }}
+                        renderItem={(item) => (
+                          <List.Item>
+                            <Space size={8} wrap>
+                              <Tag color={getFeedbackActionColor(item.action)}>{feedbackActionLabel[item.action]}</Tag>
+                              <Text code>{item.reason_code || '-'}</Text>
+                              <Text type="secondary">{item.operator}</Text>
+                              <Text type="secondary">{new Date(item.created_at).toLocaleString('zh-CN', { hour12: false })}</Text>
+                            </Space>
+                            {item.comment ? (
+                              <Paragraph style={{ marginBottom: 0, marginTop: 6 }}>{item.comment}</Paragraph>
+                            ) : null}
+                          </List.Item>
+                        )}
+                      />
                     </Card>
                   ) : null}
 
@@ -1044,6 +1249,62 @@ export const RecommendationCenter: React.FC = () => {
           </div>
         </Col>
       </Row>
+
+      <Modal
+        title={feedbackTarget ? `提交反馈 · ${feedbackActionLabel[feedbackDraft.action]}` : '提交反馈'}
+        open={feedbackModalOpen}
+        onCancel={() => {
+          setFeedbackModalOpen(false)
+          setFeedbackTarget(null)
+        }}
+        onOk={() => void submitRecommendationFeedback()}
+        confirmLoading={feedbackSubmitting}
+        okText="提交反馈"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary">反馈动作</Text>
+            <Segmented
+              block
+              value={feedbackDraft.action}
+              options={[
+                { label: '采纳', value: 'adopt' },
+                { label: '拒绝', value: 'reject' },
+                { label: '改写', value: 'rewrite' },
+              ]}
+              onChange={(value) => {
+                const nextAction = String(value) as RecommendationFeedbackAction
+                const defaultReason = feedbackReasonOptions[nextAction][0]?.value || ''
+                setFeedbackDraft((previous) => ({
+                  ...previous,
+                  action: nextAction,
+                  reasonCode: defaultReason,
+                }))
+              }}
+            />
+          </div>
+          <div>
+            <Text type="secondary">原因代码</Text>
+            <Select
+              style={{ width: '100%' }}
+              value={feedbackDraft.reasonCode}
+              options={feedbackReasonOptions[feedbackDraft.action]}
+              onChange={(value) => setFeedbackDraft((previous) => ({ ...previous, reasonCode: String(value) }))}
+              placeholder="选择反馈原因"
+            />
+          </div>
+          <div>
+            <Text type="secondary">补充说明</Text>
+            <Input.TextArea
+              value={feedbackDraft.comment}
+              rows={4}
+              maxLength={500}
+              placeholder="可选，补充具体理由与建议"
+              onChange={(event) => setFeedbackDraft((previous) => ({ ...previous, comment: event.target.value }))}
+            />
+          </div>
+        </Space>
+      </Modal>
 
       <Drawer
         title="证据引用"

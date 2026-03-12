@@ -229,6 +229,24 @@ class Recommendation(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class RecommendationFeedbackAction(str, Enum):
+    ADOPT = "adopt"
+    REJECT = "reject"
+    REWRITE = "rewrite"
+
+
+class RecommendationFeedback(BaseModel):
+    feedback_id: str = Field(default_factory=lambda: f"feedback_{uuid4().hex[:12]}")
+    recommendation_id: str
+    incident_id: str
+    task_id: Optional[str] = None
+    action: RecommendationFeedbackAction
+    reason_code: str = ""
+    comment: str = ""
+    operator: str = "anonymous"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class TimeSeriesPoint(BaseModel):
     timestamp: str
     value: float

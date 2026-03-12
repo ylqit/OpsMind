@@ -114,6 +114,18 @@ class SQLiteDatabase:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS recommendation_feedback (
+                feedback_id TEXT PRIMARY KEY,
+                recommendation_id TEXT NOT NULL,
+                incident_id TEXT NOT NULL,
+                task_id TEXT,
+                action TEXT NOT NULL,
+                reason_code TEXT,
+                comment TEXT,
+                operator TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ai_call_logs (
                 call_id TEXT PRIMARY KEY,
                 provider_name TEXT NOT NULL,
@@ -146,6 +158,10 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_recommendation ON recommendation_feedback(recommendation_id);
+            CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_incident ON recommendation_feedback(incident_id);
+            CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_created_at ON recommendation_feedback(created_at DESC);
 
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created_at ON ai_call_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_provider ON ai_call_logs(provider_name);

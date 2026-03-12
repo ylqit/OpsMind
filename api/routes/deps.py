@@ -78,6 +78,11 @@ def get_ai_call_log_repository_dep():
     return ai_call_log_repository
 
 
+def get_recommendation_feedback_repository_dep():
+    from main import recommendation_feedback_repository
+    return recommendation_feedback_repository
+
+
 def get_llm_router_dep():
     from main import llm_router_instance
     return llm_router_instance

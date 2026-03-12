@@ -124,6 +124,39 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
   }
 }
 
+export type RecommendationFeedbackAction = 'adopt' | 'reject' | 'rewrite'
+
+export interface RecommendationFeedbackRecord {
+  feedback_id: string
+  recommendation_id: string
+  incident_id: string
+  task_id?: string | null
+  action: RecommendationFeedbackAction
+  reason_code: string
+  comment: string
+  operator: string
+  created_at: string
+}
+
+export interface RecommendationFeedbackListResponse {
+  recommendation_id: string
+  summary: {
+    adopt: number
+    reject: number
+    rewrite: number
+  }
+  items: RecommendationFeedbackRecord[]
+}
+
+export interface RecommendationFeedbackSaveResponse {
+  item: RecommendationFeedbackRecord
+  summary: {
+    adopt: number
+    reject: number
+    rewrite: number
+  }
+}
+
 export interface TaskApproval {
   approved_by: string
   approval_note: string
@@ -524,6 +557,18 @@ export const incidentsApi = {
 
 export const recommendationsApi = {
   get: (recommendationId: string) => apiClient.get(`/recommendations/${encodePathSegment(recommendationId)}`),
+  listFeedback: (recommendationId: string) =>
+    apiClient.get(`/recommendations/${encodePathSegment(recommendationId)}/feedback`),
+  saveFeedback: (
+    recommendationId: string,
+    payload: {
+      action: RecommendationFeedbackAction
+      reason_code?: string
+      comment?: string
+      operator?: string
+      task_id?: string
+    },
+  ) => apiClient.post(`/recommendations/${encodePathSegment(recommendationId)}/feedback`, payload),
   generate: (payload: { incident_id: string; kinds?: string[] }) => apiClient.post('/recommendations/generate', payload),
   aiReview: (recommendationId: string, payload?: { provider?: string }) =>
     apiClient.post(`/recommendations/${encodePathSegment(recommendationId)}/ai-review`, payload ?? {}),

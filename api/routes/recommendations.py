@@ -9,9 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.llm.structured_output import run_guarded_structured_chat
-from engine.runtime.models import ArtifactRef, TaskStatus, TaskType
+from engine.runtime.models import ArtifactRef, RecommendationFeedback, TaskStatus, TaskType
 
-from .deps import get_incident_service, get_llm_router_dep, get_recommendation_service, get_task_manager
+from .deps import (
+    get_incident_service,
+    get_llm_router_dep,
+    get_recommendation_feedback_repository_dep,
+    get_recommendation_service,
+    get_task_manager,
+)
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -59,6 +65,24 @@ class RecommendationAIReviewPayload(BaseModel):
     retry_count: int = 0
     guardrail_error_code: str = ""
     guardrail_error_message: str = ""
+
+
+class RecommendationFeedbackRequest(BaseModel):
+    """建议反馈请求。"""
+
+    action: str = Field(..., pattern="^(adopt|reject|rewrite)$")
+    reason_code: str = Field(default="", max_length=120)
+    comment: str = Field(default="", max_length=1000)
+    operator: str = Field(default="anonymous", max_length=80)
+    task_id: str | None = Field(default=None, max_length=80)
+
+
+class RecommendationFeedbackListResponse(BaseModel):
+    """建议反馈列表响应。"""
+
+    recommendation_id: str
+    summary: dict[str, int]
+    items: list[dict[str, Any]]
 
 
 def _artifact_filename(artifact: dict[str, Any]) -> str:
@@ -355,6 +379,19 @@ def _normalize_review_payload(payload: dict[str, Any], fallback: dict[str, Any])
     }
 
 
+def _resolve_feedback_task_id(recommendation, requested_task_id: str | None) -> str | None:
+    task_id = (requested_task_id or "").strip()
+    if task_id:
+        return task_id
+    for artifact in recommendation.artifact_refs:
+        if not isinstance(artifact, dict):
+            continue
+        candidate = str(artifact.get("task_id") or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+
 @router.get("/{recommendation_id}")
 async def get_recommendation_detail(
     recommendation_id: str,
@@ -371,6 +408,63 @@ async def get_recommendation_detail(
     detail = recommendation.model_dump(mode="json")
     detail.update(evidence_payload)
     return detail
+
+
+@router.get("/{recommendation_id}/feedback")
+async def list_recommendation_feedback(
+    recommendation_id: str,
+    recommendation_service=Depends(get_recommendation_service),
+    feedback_repository=Depends(get_recommendation_feedback_repository_dep),
+):
+    recommendation = recommendation_service.repository.get(recommendation_id)
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="建议不存在")
+    if not feedback_repository:
+        raise HTTPException(status_code=500, detail="反馈存储尚未初始化")
+
+    items = feedback_repository.list_by_recommendation(recommendation_id, limit=80)
+    summary = feedback_repository.summarize_by_recommendation(recommendation_id)
+    payload = RecommendationFeedbackListResponse(
+        recommendation_id=recommendation_id,
+        summary=summary,
+        items=[item.model_dump(mode="json") for item in items],
+    )
+    return payload.model_dump(mode="json")
+
+
+@router.post("/{recommendation_id}/feedback")
+async def save_recommendation_feedback(
+    recommendation_id: str,
+    request: RecommendationFeedbackRequest,
+    recommendation_service=Depends(get_recommendation_service),
+    feedback_repository=Depends(get_recommendation_feedback_repository_dep),
+):
+    recommendation = recommendation_service.repository.get(recommendation_id)
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="建议不存在")
+    if not feedback_repository:
+        raise HTTPException(status_code=500, detail="反馈存储尚未初始化")
+
+    action = request.action.strip().lower()
+    reason_code = request.reason_code.strip()
+    if action in {"reject", "rewrite"} and not reason_code:
+        raise HTTPException(status_code=422, detail="拒绝或改写反馈必须提供 reason_code")
+
+    feedback = RecommendationFeedback(
+        recommendation_id=recommendation.recommendation_id,
+        incident_id=recommendation.incident_id,
+        task_id=_resolve_feedback_task_id(recommendation, request.task_id),
+        action=action,
+        reason_code=reason_code,
+        comment=request.comment.strip(),
+        operator=request.operator.strip() or "anonymous",
+    )
+    saved = feedback_repository.save(feedback)
+    summary = feedback_repository.summarize_by_recommendation(recommendation_id)
+    return {
+        "item": saved.model_dump(mode="json"),
+        "summary": summary,
+    }
 
 
 @router.post("/{recommendation_id}/ai-review")

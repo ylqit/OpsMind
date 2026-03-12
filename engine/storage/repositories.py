@@ -16,6 +16,7 @@ from engine.runtime.models import (
     Asset,
     Incident,
     Recommendation,
+    RecommendationFeedback,
     Signal,
     TaskApproval,
     TaskError,
@@ -387,6 +388,102 @@ class RecommendationRepository:
             if recommendation:
                 items.append(recommendation)
         return items
+
+
+class RecommendationFeedbackRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    def save(self, feedback: RecommendationFeedback) -> RecommendationFeedback:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO recommendation_feedback (
+                feedback_id, recommendation_id, incident_id, task_id, action,
+                reason_code, comment, operator, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                feedback.feedback_id,
+                feedback.recommendation_id,
+                feedback.incident_id,
+                feedback.task_id,
+                feedback.action.value,
+                feedback.reason_code,
+                feedback.comment,
+                feedback.operator,
+                feedback.created_at.isoformat(),
+            ),
+        )
+        return feedback
+
+    def list_by_recommendation(self, recommendation_id: str, limit: int = 50) -> List[RecommendationFeedback]:
+        safe_limit = max(1, min(limit, 200))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM recommendation_feedback
+            WHERE recommendation_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (recommendation_id, safe_limit),
+        )
+        return [
+            RecommendationFeedback(
+                feedback_id=row["feedback_id"],
+                recommendation_id=row["recommendation_id"],
+                incident_id=row["incident_id"],
+                task_id=row["task_id"],
+                action=row["action"],
+                reason_code=row["reason_code"] or "",
+                comment=row["comment"] or "",
+                operator=row["operator"] or "anonymous",
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def list_by_incident(self, incident_id: str, limit: int = 100) -> List[RecommendationFeedback]:
+        safe_limit = max(1, min(limit, 300))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM recommendation_feedback
+            WHERE incident_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (incident_id, safe_limit),
+        )
+        return [
+            RecommendationFeedback(
+                feedback_id=row["feedback_id"],
+                recommendation_id=row["recommendation_id"],
+                incident_id=row["incident_id"],
+                task_id=row["task_id"],
+                action=row["action"],
+                reason_code=row["reason_code"] or "",
+                comment=row["comment"] or "",
+                operator=row["operator"] or "anonymous",
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def summarize_by_recommendation(self, recommendation_id: str) -> dict[str, int]:
+        rows = self.db.fetchall(
+            """
+            SELECT action, COUNT(1) AS count
+            FROM recommendation_feedback
+            WHERE recommendation_id = ?
+            GROUP BY action
+            """,
+            (recommendation_id,),
+        )
+        summary = {"adopt": 0, "reject": 0, "rewrite": 0}
+        for row in rows:
+            action = str(row["action"])
+            if action in summary:
+                summary[action] = int(row["count"])
+        return summary
 
 
 class AICallLogRepository:

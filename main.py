@@ -52,6 +52,7 @@ from engine.storage.repositories import (
     AssetRepository,
     IncidentRepository,
     RecommendationRepository,
+    RecommendationFeedbackRepository,
     SignalRepository,
     TaskRepository,
 )
@@ -79,6 +80,7 @@ resource_analytics_engine: ResourceAnalyticsEngine | None = None
 summary_builder: SummaryBuilder | None = None
 data_sources_status: dict[str, Any] = {}
 ai_call_log_repository: AICallLogRepository | None = None
+recommendation_feedback_repository: RecommendationFeedbackRepository | None = None
 llm_config_manager_instance = None
 llm_router_instance: LLMRouter | None = None
 ai_provider_config_repository: AIProviderConfigRepository | None = None
@@ -250,7 +252,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global config, capability_registry, alert_store, background_task_manager, alert_notifier
     global runtime_db, event_bus, task_manager, asset_service, signal_service
     global incident_service, recommendation_service, traffic_analytics_engine, resource_analytics_engine, summary_builder, data_sources_status
-    global ai_call_log_repository, ai_provider_config_repository, llm_config_manager_instance, llm_router_instance
+    global ai_call_log_repository, recommendation_feedback_repository, ai_provider_config_repository, llm_config_manager_instance, llm_router_instance
 
     logger.info("正在启动 opsMind")
     config = RuntimeConfig.load_from_env()
@@ -270,6 +272,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     signal_repository = SignalRepository(runtime_db)
     incident_repository = IncidentRepository(runtime_db)
     recommendation_repository = RecommendationRepository(runtime_db)
+    recommendation_feedback_repository = RecommendationFeedbackRepository(runtime_db)
     ai_call_log_repository = AICallLogRepository(runtime_db)
     ai_provider_config_repository = AIProviderConfigRepository(runtime_db)
 
@@ -316,6 +319,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.summary_builder = summary_builder
     app.state.data_sources_status = data_sources_status
     app.state.ai_call_log_repository = ai_call_log_repository
+    app.state.recommendation_feedback_repository = recommendation_feedback_repository
     app.state.ai_provider_config_repository = ai_provider_config_repository
     app.state.llm_config_manager = llm_config_manager_instance
     app.state.llm_router = llm_router_instance
