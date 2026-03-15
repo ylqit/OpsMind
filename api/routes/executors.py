@@ -41,6 +41,22 @@ async def get_executor_status(
     return executor_service.get_status(recent_limit=safe_limit)
 
 
+@router.get("/readonly-command-packs")
+async def list_executor_readonly_command_packs(
+    plugin_key: str | None = None,
+    executor_service=Depends(get_executor_service_dep),
+):
+    if not executor_service:
+        raise HTTPException(status_code=409, detail="执行插件服务未初始化")
+
+    try:
+        return executor_service.list_readonly_command_packs(plugin_key=plugin_key)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "不存在" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
 @router.post("/run")
 async def run_executor(
     payload: ExecutorRunRequest,

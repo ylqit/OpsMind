@@ -18,6 +18,7 @@ import {
 } from 'antd'
 import {
   executorsApi,
+  type ExecutorReadonlyCommandPack,
   type ExecutorPluginStatus,
   type ExecutorRunResponse,
   type ExecutorStatusResponse,
@@ -73,6 +74,26 @@ const ExecutorPlugins: React.FC = () => {
     () => (statusData?.plugins || []).map((item) => ({ label: item.display_name, value: item.plugin_key })),
     [statusData],
   )
+
+  const groupedReadonlyCommandPacks = useMemo(() => {
+    if (!selectedPlugin?.readonly_command_packs?.length) {
+      return []
+    }
+    const grouped = new Map<string, { categoryKey: string; categoryLabel: string; items: ExecutorReadonlyCommandPack[] }>()
+    for (const item of selectedPlugin.readonly_command_packs) {
+      const current = grouped.get(item.category_key)
+      if (current) {
+        current.items.push(item)
+        continue
+      }
+      grouped.set(item.category_key, {
+        categoryKey: item.category_key,
+        categoryLabel: item.category_label,
+        items: [item],
+      })
+    }
+    return Array.from(grouped.values())
+  }, [selectedPlugin])
 
   const loadStatus = async () => {
     setLoading(true)
@@ -157,6 +178,12 @@ const ExecutorPlugins: React.FC = () => {
     } finally {
       setRunning(false)
     }
+  }
+
+  const fillCommandFromPack = (pack: ExecutorReadonlyCommandPack) => {
+    // 命令包只提供安全模板，填充时自动切回只读模式，避免误触写操作。
+    setCommand(pack.command)
+    setReadonly(true)
   }
 
   return (
@@ -288,6 +315,28 @@ const ExecutorPlugins: React.FC = () => {
                 autoSize={{ minRows: 3, maxRows: 6 }}
                 placeholder="输入命令，例如 kubectl get pods -A"
               />
+
+              {groupedReadonlyCommandPacks.length ? (
+                <Card size="small" title="只读命令包（可一键填入）">
+                  <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                    {groupedReadonlyCommandPacks.map((group) => (
+                      <div key={group.categoryKey}>
+                        <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                          <Tag color="blue">{group.categoryLabel}</Tag>
+                          <Text type="secondary">{group.items.length} 条模板</Text>
+                        </Space>
+                        <Space wrap>
+                          {group.items.map((item) => (
+                            <Button key={item.template_id} size="small" onClick={() => fillCommandFromPack(item)}>
+                              {item.title}
+                            </Button>
+                          ))}
+                        </Space>
+                      </div>
+                    ))}
+                  </Space>
+                </Card>
+              ) : null}
 
               <Button type="primary" onClick={() => void runCommand()} loading={running}>
                 执行命令

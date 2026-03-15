@@ -825,6 +825,21 @@ export interface LLMCallLogRecord {
 export type ExecutorHealthStatus = 'healthy' | 'degraded' | 'disabled'
 export type ExecutorRunStatus = 'success' | 'error' | 'timeout' | 'rejected' | 'circuit_open'
 
+export interface ExecutorReadonlyCategory {
+  category_key: string
+  category_label: string
+  count: number
+}
+
+export interface ExecutorReadonlyCommandPack {
+  template_id: string
+  category_key: string
+  category_label: string
+  title: string
+  description: string
+  command: string
+}
+
 export interface ExecutorPluginStatus {
   plugin_key: string
   display_name: string
@@ -839,6 +854,8 @@ export interface ExecutorPluginStatus {
   health_status: ExecutorHealthStatus
   readonly_examples: string[]
   write_examples: string[]
+  readonly_categories: ExecutorReadonlyCategory[]
+  readonly_command_packs: ExecutorReadonlyCommandPack[]
   updated_at: string
 }
 
@@ -873,6 +890,16 @@ export interface ExecutorStatusResponse {
 export interface ExecutorRunResponse {
   execution: ExecutorAuditLog
   plugin: ExecutorPluginStatus
+}
+
+export interface ExecutorReadonlyCommandPackListResponse {
+  items: Array<{
+    plugin_key: string
+    display_name: string
+    readonly_categories: ExecutorReadonlyCategory[]
+    readonly_command_packs: ExecutorReadonlyCommandPack[]
+  }>
+  total: number
 }
 
 type HttpClient = {
@@ -1054,6 +1081,8 @@ export const metricsApi = {
 
 export const executorsApi = {
   getStatus: (params?: { limit?: number }) => apiClient.get('/executors/status', { params }),
+  listReadonlyCommandPacks: (params?: { plugin_key?: string }) =>
+    apiClient.get('/executors/readonly-command-packs', { params }),
   run: (payload: {
     plugin_key: string
     command: string

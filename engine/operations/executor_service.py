@@ -27,6 +27,19 @@ class ExecutorPluginSpec:
     description: str
     readonly_prefixes: tuple[tuple[str, ...], ...]
     write_prefixes: tuple[tuple[str, ...], ...]
+    readonly_command_packs: tuple["ReadonlyCommandPackItem", ...]
+
+
+@dataclass(frozen=True)
+class ReadonlyCommandPackItem:
+    """只读命令包模板。"""
+
+    template_id: str
+    category_key: str
+    category_label: str
+    title: str
+    description: str
+    command: str
 
 
 class ExecutorService:
@@ -66,6 +79,56 @@ class ExecutorService:
                     ("systemctl", "restart"),
                     ("systemctl", "stop"),
                 ),
+                readonly_command_packs=(
+                    ReadonlyCommandPackItem(
+                        template_id="linux_proc_top",
+                        category_key="process",
+                        category_label="进程",
+                        title="进程快照",
+                        description="查看当前主机进程概况",
+                        command="ps aux",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="linux_disk_usage",
+                        category_key="storage",
+                        category_label="存储",
+                        title="磁盘使用率",
+                        description="查看各挂载点磁盘占用情况",
+                        command="df -h",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="linux_memory_usage",
+                        category_key="memory",
+                        category_label="内存",
+                        title="内存概览",
+                        description="查看内存和 swap 使用情况",
+                        command="free -m",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="linux_load",
+                        category_key="load",
+                        category_label="负载",
+                        title="系统负载",
+                        description="查看系统 uptime 与负载信息",
+                        command="uptime",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="linux_socket_summary",
+                        category_key="network",
+                        category_label="网络",
+                        title="套接字摘要",
+                        description="查看网络连接状态统计",
+                        command="ss -s",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="linux_proc_loadavg",
+                        category_key="load",
+                        category_label="负载",
+                        title="Loadavg 原始值",
+                        description="读取 /proc/loadavg 用于任务诊断附证",
+                        command="cat /proc/loadavg",
+                    ),
+                ),
             ),
             ExecutorPluginKey.K8S.value: ExecutorPluginSpec(
                 key=ExecutorPluginKey.K8S.value,
@@ -83,6 +146,56 @@ class ExecutorService:
                     ("kubectl", "rollout", "restart"),
                     ("kubectl", "delete"),
                 ),
+                readonly_command_packs=(
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_pods_all",
+                        category_key="workload",
+                        category_label="工作负载",
+                        title="全量 Pod 列表",
+                        description="查看所有命名空间 Pod 状态",
+                        command="kubectl get pods -A",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_nodes",
+                        category_key="node",
+                        category_label="节点",
+                        title="节点状态",
+                        description="查看节点资源与调度状态",
+                        command="kubectl get nodes -o wide",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_top_pods",
+                        category_key="resource",
+                        category_label="资源",
+                        title="Pod 资源用量",
+                        description="查看 Pod CPU/内存实时占用",
+                        command="kubectl top pod -A",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_describe_pod",
+                        category_key="diagnosis",
+                        category_label="诊断",
+                        title="Pod 详情",
+                        description="排查 Pod 事件与调度失败原因",
+                        command="kubectl describe pod <pod-name> -n <namespace>",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_pod_logs",
+                        category_key="logs",
+                        category_label="日志",
+                        title="Pod 日志尾部",
+                        description="读取容器最近日志片段",
+                        command="kubectl logs <pod-name> -n <namespace> --tail=200",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="k8s_cluster_info",
+                        category_key="cluster",
+                        category_label="集群",
+                        title="集群信息",
+                        description="查看 API Server 与集群基础信息",
+                        command="kubectl cluster-info",
+                    ),
+                ),
             ),
             ExecutorPluginKey.DOCKER.value: ExecutorPluginSpec(
                 key=ExecutorPluginKey.DOCKER.value,
@@ -99,6 +212,48 @@ class ExecutorService:
                     ("docker", "restart"),
                     ("docker", "stop"),
                     ("docker", "start"),
+                ),
+                readonly_command_packs=(
+                    ReadonlyCommandPackItem(
+                        template_id="docker_ps",
+                        category_key="runtime",
+                        category_label="运行态",
+                        title="容器列表",
+                        description="查看容器运行状态与端口映射",
+                        command="docker ps",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="docker_stats",
+                        category_key="resource",
+                        category_label="资源",
+                        title="资源快照",
+                        description="查看容器 CPU/内存实时占用",
+                        command="docker stats --no-stream",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="docker_inspect",
+                        category_key="diagnosis",
+                        category_label="诊断",
+                        title="容器详情",
+                        description="查看容器配置、网络与挂载信息",
+                        command="docker inspect <container-id>",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="docker_logs_tail",
+                        category_key="logs",
+                        category_label="日志",
+                        title="容器日志尾部",
+                        description="读取容器最近 200 行日志",
+                        command="docker logs --tail 200 <container-id>",
+                    ),
+                    ReadonlyCommandPackItem(
+                        template_id="docker_images",
+                        category_key="image",
+                        category_label="镜像",
+                        title="镜像列表",
+                        description="查看本机镜像与标签信息",
+                        command="docker images",
+                    ),
                 ),
             ),
         }
@@ -139,6 +294,29 @@ class ExecutorService:
 
         readonly_examples = [" ".join(item) for item in (spec.readonly_prefixes if spec else tuple())]
         write_examples = [" ".join(item) for item in (spec.write_prefixes if spec else tuple())]
+        readonly_command_packs = []
+        readonly_categories: list[dict[str, Any]] = []
+        category_counter: dict[str, dict[str, Any]] = {}
+        if spec:
+            for item in spec.readonly_command_packs:
+                readonly_command_packs.append(
+                    {
+                        "template_id": item.template_id,
+                        "category_key": item.category_key,
+                        "category_label": item.category_label,
+                        "title": item.title,
+                        "description": item.description,
+                        "command": item.command,
+                    }
+                )
+                if item.category_key not in category_counter:
+                    category_counter[item.category_key] = {
+                        "category_key": item.category_key,
+                        "category_label": item.category_label,
+                        "count": 0,
+                    }
+                category_counter[item.category_key]["count"] += 1
+            readonly_categories = list(category_counter.values())
 
         return {
             "plugin_key": plugin.plugin_key,
@@ -154,6 +332,8 @@ class ExecutorService:
             "health_status": health_status,
             "readonly_examples": readonly_examples,
             "write_examples": write_examples,
+            "readonly_categories": readonly_categories,
+            "readonly_command_packs": readonly_command_packs,
             "updated_at": plugin.updated_at.isoformat(),
         }
 
@@ -187,6 +367,41 @@ class ExecutorService:
                 "enabled": sum(1 for item in plugins if item["enabled"]),
                 "degraded": sum(1 for item in plugins if item["health_status"] == ExecutorHealthStatus.DEGRADED.value),
             },
+        }
+
+    def list_readonly_command_packs(self, plugin_key: str | None = None) -> dict[str, Any]:
+        # 命令包单独输出，前端可在不加载审计日志的情况下做模板展示与快速填充。
+        if plugin_key:
+            plugin = self.plugin_repository.get(plugin_key)
+            if not plugin:
+                raise ValueError("插件不存在")
+            serialized = self._serialize_plugin(plugin)
+            return {
+                "items": [
+                    {
+                        "plugin_key": serialized["plugin_key"],
+                        "display_name": serialized["display_name"],
+                        "readonly_categories": serialized["readonly_categories"],
+                        "readonly_command_packs": serialized["readonly_command_packs"],
+                    }
+                ],
+                "total": 1,
+            }
+
+        items = []
+        for plugin in self.plugin_repository.list():
+            serialized = self._serialize_plugin(plugin)
+            items.append(
+                {
+                    "plugin_key": serialized["plugin_key"],
+                    "display_name": serialized["display_name"],
+                    "readonly_categories": serialized["readonly_categories"],
+                    "readonly_command_packs": serialized["readonly_command_packs"],
+                }
+            )
+        return {
+            "items": items,
+            "total": len(items),
         }
 
     def update_plugin(
