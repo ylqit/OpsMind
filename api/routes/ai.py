@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.llm.client import LLMClient
-from engine.llm.config import LLMProviderConfig, LLMProviderType
+from engine.llm.config import (
+    LLMProviderConfig,
+    LLMProviderType,
+    ensure_default_provider_record,
+    serialize_provider_record,
+)
 from engine.runtime.models import AIProviderConfigRecord
 
 from .deps import (
@@ -91,34 +96,6 @@ def _normalize_error_code(error: Exception) -> str:
     return "AI_RUNTIME_ERROR"
 
 
-def _serialize_provider(record: AIProviderConfigRecord) -> dict[str, Any]:
-    return {
-        "provider_id": record.provider_id,
-        "name": record.name,
-        "type": record.provider_type,
-        "model": record.model,
-        "base_url": record.base_url,
-        "enabled": record.enabled,
-        "is_default": record.is_default,
-        "timeout": record.timeout,
-        "max_retries": record.max_retries,
-        "api_key_configured": bool(record.api_key),
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
-    }
-
-
-def _ensure_default_provider(provider_repository) -> None:
-    """保证存在一个可用默认 Provider。"""
-    default_provider = provider_repository.get_default()
-    if default_provider and default_provider.enabled:
-        return
-
-    enabled_items = provider_repository.list(enabled_only=True)
-    if enabled_items:
-        provider_repository.set_default(enabled_items[0].provider_id)
-
-
 def _build_client_from_record(record: AIProviderConfigRecord) -> LLMClient:
     provider_config = LLMProviderConfig(
         name=record.name,
@@ -183,7 +160,7 @@ async def list_ai_providers(provider_repository=Depends(get_ai_provider_config_r
     providers = provider_repository.list()
     default_provider = provider_repository.get_default()
     return {
-        "providers": [_serialize_provider(item) for item in providers],
+        "providers": [serialize_provider_record(item) for item in providers],
         "default_provider": default_provider.name if default_provider else "",
         "default_provider_id": default_provider.provider_id if default_provider else "",
     }
@@ -262,13 +239,13 @@ async def create_ai_provider(
     )
     saved = provider_repository.save(record)
 
-    _ensure_default_provider(provider_repository)
+    ensure_default_provider_record(provider_repository)
     refresh_llm_router()
 
     latest = provider_repository.get(saved.provider_id)
     return {
         "message": "Provider 创建成功",
-        "provider": _serialize_provider(latest or saved),
+        "provider": serialize_provider_record(latest or saved),
     }
 
 
@@ -412,7 +389,7 @@ async def patch_ai_provider(
             raise HTTPException(status_code=400, detail="默认 Provider 必须处于启用状态")
         updated = default_record
 
-    _ensure_default_provider(provider_repository)
+    ensure_default_provider_record(provider_repository)
     refresh_llm_router()
 
     latest = provider_repository.get(provider_id)
@@ -421,7 +398,7 @@ async def patch_ai_provider(
 
     return {
         "message": "Provider 更新成功",
-        "provider": _serialize_provider(latest),
+        "provider": serialize_provider_record(latest),
     }
 
 
@@ -449,6 +426,6 @@ async def delete_ai_provider(
     if not deleted:
         raise HTTPException(status_code=404, detail="Provider 不存在")
 
-    _ensure_default_provider(provider_repository)
+    ensure_default_provider_record(provider_repository)
     refresh_llm_router()
     return {"message": "Provider 删除成功"}

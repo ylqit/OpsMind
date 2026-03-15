@@ -12,9 +12,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.llm.config import LLMProviderType
+from engine.llm.config import serialize_provider_record
 from engine.runtime.models import AICallLog
-from engine.runtime.models import AIProviderConfigRecord
 
+from .ai import (
+    AIProviderCreateRequest,
+    AIProviderPatchRequest,
+    create_ai_provider,
+    delete_ai_provider,
+    list_ai_providers,
+    patch_ai_provider,
+)
 from .deps import (
     get_ai_call_log_repository_dep,
     get_ai_provider_config_repository_dep,
@@ -67,32 +75,6 @@ class AnalyzeRequest(BaseModel):
     max_tokens: int = Field(default=2000, ge=1, le=8192, description="最大输出 token")
 
 
-def _serialize_provider(record: AIProviderConfigRecord) -> dict[str, Any]:
-    return {
-        "provider_id": record.provider_id,
-        "name": record.name,
-        "type": record.provider_type,
-        "model": record.model,
-        "base_url": record.base_url,
-        "enabled": record.enabled,
-        "timeout": record.timeout,
-        "max_retries": record.max_retries,
-        "api_key_configured": bool(record.api_key),
-        "is_default": record.is_default,
-    }
-
-
-def _ensure_default_provider(provider_repository) -> None:
-    """保证始终存在一个可用默认 Provider。"""
-    default_provider = provider_repository.get_default()
-    if default_provider and default_provider.enabled:
-        return
-
-    enabled_items = provider_repository.list(enabled_only=True)
-    if enabled_items:
-        provider_repository.set_default(enabled_items[0].provider_id)
-
-
 def _record_call_log(call_log_repository, payload: dict[str, Any]) -> None:
     """兼容层补充测试调用日志。"""
     if not call_log_repository:
@@ -124,22 +106,10 @@ def _record_call_log(call_log_repository, payload: dict[str, Any]) -> None:
 @router.get("/providers", deprecated=True)
 async def list_providers(provider_repository=Depends(get_ai_provider_config_repository_dep)):
     """列出 Provider，兼容旧路径。"""
-    if not provider_repository:
-        return {
-            "providers": [],
-            "default_provider": "",
-            "default_provider_id": "",
-            "total": 0,
-        }
-
-    providers = provider_repository.list()
-    default_provider = provider_repository.get_default()
-    return {
-        "providers": [_serialize_provider(provider) for provider in providers],
-        "default_provider": default_provider.name if default_provider else "",
-        "default_provider_id": default_provider.provider_id if default_provider else "",
-        "total": len(providers),
-    }
+    payload = await list_ai_providers(provider_repository=provider_repository)
+    providers = payload.get("providers", [])
+    payload["total"] = len(providers)
+    return payload
 
 
 @router.get("/providers/{provider_name}", deprecated=True)
@@ -154,7 +124,7 @@ async def get_provider(
     provider = provider_repository.get_by_name(provider_name)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider 不存在")
-    return _serialize_provider(provider)
+    return serialize_provider_record(provider)
 
 
 @router.get("/call-logs", deprecated=True)
@@ -200,45 +170,28 @@ async def create_provider(
     refresh_llm_router=Depends(get_refresh_llm_router_dep),
 ):
     """创建 Provider，兼容旧路径。"""
-    if not provider_repository:
-        raise HTTPException(status_code=409, detail="Provider 仓储未初始化")
-
-    normalized_name = payload.name.strip()
-    normalized_model = payload.model.strip()
-    if not normalized_name:
-        raise HTTPException(status_code=400, detail="Provider 名称不能为空")
-    if not normalized_model:
-        raise HTTPException(status_code=400, detail="模型名称不能为空")
-    if provider_repository.get_by_name(normalized_name):
-        raise HTTPException(status_code=409, detail="Provider 已存在")
-
-    should_default = payload.is_default if payload.is_default is not None else (
-        provider_repository.get_default() is None and payload.enabled
+    ai_payload = AIProviderCreateRequest.model_validate(
+        {
+            "name": payload.name,
+            "type": payload.type,
+            "api_key": payload.api_key,
+            "model": payload.model,
+            "base_url": payload.base_url,
+            "enabled": payload.enabled,
+            "is_default": payload.is_default,
+            "timeout": payload.timeout,
+            "max_retries": payload.max_retries,
+        }
     )
-    if should_default and not payload.enabled:
-        raise HTTPException(status_code=400, detail="默认 Provider 必须处于启用状态")
-
-    record = AIProviderConfigRecord(
-        name=normalized_name,
-        provider_type=payload.type.value,
-        api_key=(payload.api_key or "").strip(),
-        base_url=(payload.base_url or "").strip() or None,
-        model=normalized_model,
-        enabled=payload.enabled,
-        is_default=should_default,
-        timeout=payload.timeout,
-        max_retries=payload.max_retries,
+    result = await create_ai_provider(
+        ai_payload,
+        provider_repository=provider_repository,
+        refresh_llm_router=refresh_llm_router,
     )
-    saved = provider_repository.save(record)
-    _ensure_default_provider(provider_repository)
-    refresh_llm_router()
-
-    latest = provider_repository.get(saved.provider_id)
-    return {
-        "message": "Provider 添加成功",
-        "provider": _serialize_provider(latest or saved),
-        "default_provider": (provider_repository.get_default().name if provider_repository.get_default() else ""),
-    }
+    if not result.get("default_provider"):
+        default_provider = provider_repository.get_default() if provider_repository else None
+        result["default_provider"] = default_provider.name if default_provider else ""
+    return result
 
 
 @router.put("/providers/{provider_name}", deprecated=True)
@@ -256,55 +209,39 @@ async def update_provider(
     if not current:
         raise HTTPException(status_code=404, detail="Provider 不存在")
 
-    updates: dict[str, Any] = {}
-    if payload.type is not None:
-        updates["provider_type"] = payload.type.value
-    if payload.model is not None:
-        model_name = payload.model.strip()
-        if not model_name:
-            raise HTTPException(status_code=400, detail="模型名称不能为空")
-        updates["model"] = model_name
-    if payload.base_url is not None:
-        updates["base_url"] = payload.base_url.strip() or None
-    if payload.enabled is not None:
-        if current.is_default and not payload.enabled:
-            raise HTTPException(status_code=400, detail="默认 Provider 不能直接禁用，请先切换默认")
-        updates["enabled"] = payload.enabled
-    if payload.timeout is not None:
-        updates["timeout"] = payload.timeout
-    if payload.max_retries is not None:
-        updates["max_retries"] = payload.max_retries
-    if payload.api_key is not None and payload.api_key.strip():
-        updates["api_key"] = payload.api_key.strip()
-    if payload.name is not None:
-        new_name = payload.name.strip()
-        if not new_name:
-            raise HTTPException(status_code=400, detail="Provider 名称不能为空")
-        duplicate = provider_repository.get_by_name(new_name)
-        if duplicate and duplicate.provider_id != current.provider_id:
-            raise HTTPException(status_code=409, detail="Provider 名称已存在")
-        updates["name"] = new_name
-
-    if not updates:
+    if (
+        payload.name is None
+        and payload.type is None
+        and payload.api_key is None
+        and payload.model is None
+        and payload.base_url is None
+        and payload.enabled is None
+        and payload.timeout is None
+        and payload.max_retries is None
+    ):
         return {
             "message": "Provider 无需更新",
-            "provider": _serialize_provider(current),
+            "provider": serialize_provider_record(current),
         }
 
-    updated = provider_repository.update(current.provider_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="Provider 不存在")
-
-    _ensure_default_provider(provider_repository)
-    refresh_llm_router()
-
-    latest = provider_repository.get(current.provider_id)
-    if not latest:
-        raise HTTPException(status_code=500, detail="Provider 更新后读取失败")
-    return {
-        "message": "Provider 更新成功",
-        "provider": _serialize_provider(latest),
-    }
+    ai_payload = AIProviderPatchRequest.model_validate(
+        {
+            "name": payload.name,
+            "type": payload.type,
+            "api_key": payload.api_key,
+            "model": payload.model,
+            "base_url": payload.base_url,
+            "enabled": payload.enabled,
+            "timeout": payload.timeout,
+            "max_retries": payload.max_retries,
+        }
+    )
+    return await patch_ai_provider(
+        current.provider_id,
+        ai_payload,
+        provider_repository=provider_repository,
+        refresh_llm_router=refresh_llm_router,
+    )
 
 
 @router.delete("/providers/{provider_name}", deprecated=True)
@@ -320,19 +257,11 @@ async def delete_provider(
     current = provider_repository.get_by_name(provider_name)
     if not current:
         raise HTTPException(status_code=404, detail="Provider 不存在")
-    if provider_repository.count() <= 1:
-        raise HTTPException(status_code=409, detail="至少保留一个 Provider")
-
-    enabled_items = provider_repository.list(enabled_only=True)
-    if current.is_default and len(enabled_items) <= 1:
-        raise HTTPException(status_code=409, detail="至少保留一个启用状态的默认 Provider")
-
-    deleted = provider_repository.delete(current.provider_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Provider 不存在")
-
-    _ensure_default_provider(provider_repository)
-    refresh_llm_router()
+    await delete_ai_provider(
+        current.provider_id,
+        provider_repository=provider_repository,
+        refresh_llm_router=refresh_llm_router,
+    )
     latest_default = provider_repository.get_default()
     return {
         "message": "Provider 删除成功",
@@ -354,11 +283,12 @@ async def set_default_provider(
     if not provider:
         raise HTTPException(status_code=404, detail="Provider 不存在")
 
-    default_record = provider_repository.set_default(provider.provider_id)
-    if not default_record:
-        raise HTTPException(status_code=400, detail="默认 Provider 必须处于启用状态")
-
-    refresh_llm_router()
+    await patch_ai_provider(
+        provider.provider_id,
+        AIProviderPatchRequest(is_default=True),
+        provider_repository=provider_repository,
+        refresh_llm_router=refresh_llm_router,
+    )
     return {
         "message": "默认 Provider 设置成功",
         "default_provider": payload.provider_name,

@@ -9,6 +9,8 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
+from engine.runtime.models import AIProviderConfigRecord
+
 
 class LLMProviderType(str, Enum):
     """LLM Provider 类型"""
@@ -274,3 +276,38 @@ def get_llm_config_manager(config_dir: Optional[Path] = None) -> LLMConfigManage
     if _llm_config_manager is None:
         _llm_config_manager = LLMConfigManager(config_dir)
     return _llm_config_manager
+
+
+def serialize_provider_record(record: AIProviderConfigRecord) -> dict[str, Any]:
+    """统一 Provider 输出结构，避免多套路由字段漂移。"""
+    return {
+        "provider_id": record.provider_id,
+        "name": record.name,
+        "type": record.provider_type,
+        "model": record.model,
+        "base_url": record.base_url,
+        "enabled": record.enabled,
+        "is_default": record.is_default,
+        "timeout": record.timeout,
+        "max_retries": record.max_retries,
+        "api_key_configured": bool(record.api_key),
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+    }
+
+
+def ensure_default_provider_record(provider_repository) -> AIProviderConfigRecord | None:
+    """保证始终存在一个可用默认 Provider。"""
+    if not provider_repository:
+        return None
+
+    current_default = provider_repository.get_default()
+    if current_default and current_default.enabled:
+        return current_default
+
+    enabled_items = provider_repository.list(enabled_only=True)
+    if not enabled_items:
+        return None
+
+    switched = provider_repository.set_default(enabled_items[0].provider_id)
+    return switched or enabled_items[0]

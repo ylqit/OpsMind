@@ -36,7 +36,12 @@ from engine.domain.incident_service import IncidentService
 from engine.domain.recommendation_service import RecommendationService
 from engine.domain.signal_service import SignalService
 from engine.llm.client import LLMClient, LLMRouter
-from engine.llm.config import LLMProviderConfig, LLMProviderType, get_llm_config_manager
+from engine.llm.config import (
+    LLMProviderConfig,
+    LLMProviderType,
+    ensure_default_provider_record,
+    get_llm_config_manager,
+)
 from engine.operations.executor_service import ExecutorService
 from engine.operations.incident_reporter import IncidentReporter
 from engine.operations.skill_orchestrator import SkillOrchestrator
@@ -148,10 +153,13 @@ def _seed_provider_configs_if_needed(provider_repository: AIProviderConfigReposi
 
     for item in seed_records:
         provider_repository.save(item)
+    # 启动种子写入后统一走默认 Provider 兜底逻辑，避免出现无默认可用状态。
+    ensure_default_provider_record(provider_repository)
 
 
 def _build_llm_router_from_provider_configs(provider_repository: AIProviderConfigRepository) -> LLMRouter | None:
     """根据数据库中的 Provider 配置构建路由器。"""
+    ensure_default_provider_record(provider_repository)
     provider_records = provider_repository.list(enabled_only=True)
     if not provider_records:
         return None
@@ -195,6 +203,8 @@ def refresh_llm_router_from_db() -> LLMRouter | None:
     if not ai_provider_config_repository:
         return llm_router_instance
 
+    # 所有 Provider 改动统一通过该函数触发刷新，保证路由行为一致。
+    ensure_default_provider_record(ai_provider_config_repository)
     llm_router_instance = _build_llm_router_from_provider_configs(ai_provider_config_repository)
     if "app" in globals():
         app.state.llm_router = llm_router_instance
