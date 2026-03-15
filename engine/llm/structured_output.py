@@ -46,6 +46,30 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def build_structured_guardrail_messages(
+    *,
+    assistant_role: str,
+    required_fields: str,
+    context_lines: list[str],
+) -> list[dict[str, str]]:
+    """构建统一的结构化输出消息模板。"""
+    normalized_role = str(assistant_role or "").strip() or "运维分析助手"
+    normalized_fields = str(required_fields or "").strip() or "请按约定字段输出"
+    normalized_lines = [str(line).strip() for line in context_lines if str(line).strip()]
+    context = "\n".join(normalized_lines) if normalized_lines else "-"
+
+    system_prompt = (
+        f"你是{normalized_role}。"
+        "请严格输出 JSON 对象，字段固定为："
+        f"{normalized_fields}。"
+        "不要输出 markdown，不要输出额外字段。"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": context},
+    ]
+
+
 async def run_guarded_structured_chat(
     *,
     llm_router: Any,
@@ -171,4 +195,39 @@ async def run_guarded_structured_chat(
         error_code=last_error_code or "AI_OUTPUT_GUARDRAIL_FALLBACK",
         error_message=last_error_message or "模型输出未通过校验，已降级为模板结果",
         raw_preview=last_preview,
+    )
+
+
+async def run_guarded_scenario_chat(
+    *,
+    llm_router: Any,
+    assistant_role: str,
+    required_fields: str,
+    context_lines: list[str],
+    schema_model: type[BaseModel],
+    fallback_payload: dict[str, Any],
+    provider: str | None = None,
+    temperature: float = 0.1,
+    max_tokens: int = 600,
+    source: str = "runtime",
+    endpoint: str = "structured_chat",
+    max_retries: int = 1,
+) -> StructuredOutputGuardrailResult:
+    """统一场景化护栏入口，减少业务路由重复实现。"""
+    messages = build_structured_guardrail_messages(
+        assistant_role=assistant_role,
+        required_fields=required_fields,
+        context_lines=context_lines,
+    )
+    return await run_guarded_structured_chat(
+        llm_router=llm_router,
+        messages=messages,
+        schema_model=schema_model,
+        fallback_payload=fallback_payload,
+        provider=provider,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        source=source,
+        endpoint=endpoint,
+        max_retries=max_retries,
     )

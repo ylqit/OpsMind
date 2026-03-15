@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence, summarize_incident_evidence
-from engine.llm.structured_output import run_guarded_structured_chat
+from engine.llm.structured_output import run_guarded_scenario_chat
 from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
 
 from .deps import (
@@ -323,9 +323,14 @@ async def generate_incident_ai_summary(
         },
     ]
 
-    guardrail_result = await run_guarded_structured_chat(
+    guardrail_result = await run_guarded_scenario_chat(
         llm_router=llm_router,
-        messages=messages,
+        assistant_role="运维分析助手",
+        required_fields=(
+            "summary(string), risk_level(high|medium|low), confidence(0-1), "
+            "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[])"
+        ),
+        context_lines=[str(messages[1].get("content") or "-")],
         schema_model=IncidentSummarySchema,
         fallback_payload=fallback_payload,
         provider=request.provider,

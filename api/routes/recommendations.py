@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from engine.llm.structured_output import run_guarded_structured_chat
+from engine.llm.structured_output import run_guarded_scenario_chat
 from engine.runtime.models import ArtifactRef, RecommendationFeedback, TaskStatus, TaskType
 
 from .deps import (
@@ -1158,9 +1158,15 @@ async def review_recommendation_with_ai(
         },
     ]
 
-    guardrail_result = await run_guarded_structured_chat(
+    guardrail_result = await run_guarded_scenario_chat(
         llm_router=llm_router,
-        messages=messages,
+        assistant_role="资深 SRE 评审助手",
+        required_fields=(
+            "summary(string), risk_level(high|medium|low), confidence(0-1), "
+            "risk_assessment(string), rollback_plan(string[]), "
+            "validation_checks(string[]), evidence_citations(string[])"
+        ),
+        context_lines=[str(messages[1].get("content") or "-")],
         schema_model=RecommendationReviewSchema,
         fallback_payload=fallback_payload,
         provider=request.provider,
