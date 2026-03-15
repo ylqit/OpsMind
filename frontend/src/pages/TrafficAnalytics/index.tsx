@@ -3,6 +3,7 @@ import { AutoComplete, Badge, Button, Card, Col, Empty, Row, Select, Space, Stat
 import { Column, Line, Pie } from '@ant-design/plots'
 import { useSearchParams } from 'react-router-dom'
 import { resourcesApi, trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
+import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -16,21 +17,12 @@ const timeRangeLabelMap: Record<string, string> = Object.fromEntries(
   timeRangeOptions.map((item) => [item.value, item.label]),
 ) as Record<string, string>
 
-const allowedTimeRanges = new Set(timeRangeOptions.map((item) => item.value))
-
 interface AssetLite {
   service_key?: string
 }
 
 interface AssetListResponse {
   items: AssetLite[]
-}
-
-const normalizeTimeRange = (value: string | null | undefined) => {
-  if (!value || !allowedTimeRanges.has(value)) {
-    return '1h'
-  }
-  return value
 }
 
 const mergeServiceKeys = (base: string[], incoming: string[]) => {
@@ -60,14 +52,19 @@ const formatLatency = (value: number) => `${Math.round(value * 1000)} ms`
 
 const TrafficAnalytics: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [timeRange, setTimeRange] = useState(() => normalizeTimeRange(searchParams.get('time_range')))
-  const [serviceKey, setServiceKey] = useState(() => searchParams.get('service_key') || '')
+  const timeRange = useWorkspaceFilterStore((state) => state.timeRange)
+  const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
+  const setTimeRange = useWorkspaceFilterStore((state) => state.setTimeRange)
+  const setServiceKey = useWorkspaceFilterStore((state) => state.setServiceKey)
+  const syncOpsFilters = useWorkspaceFilterStore((state) => state.syncOpsFilters)
+  const resetOpsFilters = useWorkspaceFilterStore((state) => state.resetOpsFilters)
   const deferredServiceKey = useDeferredValue(serviceKey)
 
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<TrafficSummary | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [filtersReady, setFiltersReady] = useState(false)
   const bootLoading = loading && !summary
 
   const serviceOptions = useMemo(
@@ -115,15 +112,18 @@ const TrafficAnalytics: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    if (!filtersReady) {
+      return
+    }
     void loadSummary()
-  }, [timeRange, deferredServiceKey])
+  }, [filtersReady, timeRange, deferredServiceKey])
 
   useEffect(() => {
-    const nextTimeRange = normalizeTimeRange(searchParams.get('time_range'))
-    const nextServiceKey = searchParams.get('service_key') || ''
-    setTimeRange((previous) => (previous === nextTimeRange ? previous : nextTimeRange))
-    setServiceKey((previous) => (previous === nextServiceKey ? previous : nextServiceKey))
-  }, [searchParams])
+    const nextTimeRange = searchParams.get('time_range')
+    const nextServiceKey = searchParams.get('service_key')
+    syncOpsFilters({ timeRange: nextTimeRange, serviceKey: nextServiceKey })
+    setFiltersReady(true)
+  }, [searchParams, syncOpsFilters])
 
   useEffect(() => {
     setSearchParams((previous) => {
@@ -151,10 +151,7 @@ const TrafficAnalytics: React.FC = () => {
     [summary],
   )
 
-  const resetFilters = () => {
-    setTimeRange('1h')
-    setServiceKey('')
-  }
+  const resetFilters = () => resetOpsFilters()
 
   return (
     <div className="ops-page">

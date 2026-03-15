@@ -15,6 +15,7 @@ import {
   type TaskRecord,
 } from '@/api/client'
 import { useTaskEventStream, type TaskEventMessage } from '@/hooks/useTaskEventStream'
+import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -142,10 +143,13 @@ const getTaskAlertMeta = (task: RecommendationTaskState) => {
 
 export const IncidentCenter: React.FC = () => {
   const navigate = useNavigate()
+  const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
+  const timeRange = useWorkspaceFilterStore((state) => state.timeRange)
+  const setServiceKey = useWorkspaceFilterStore((state) => state.setServiceKey)
+  const setTimeRange = useWorkspaceFilterStore((state) => state.setTimeRange)
   const [loading, setLoading] = useState(true)
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [selectedIncident, setSelectedIncident] = useState<IncidentDetailResponse | null>(null)
-  const [serviceKey, setServiceKey] = useState('unknown/root')
   const [creating, setCreating] = useState(false)
   const [generatingRecommendation, setGeneratingRecommendation] = useState(false)
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
@@ -250,7 +254,7 @@ export const IncidentCenter: React.FC = () => {
     }
     setCreating(true)
     try {
-      await incidentsApi.analyze({ service_key: serviceKey || undefined, time_window: '1h' })
+      await incidentsApi.analyze({ service_key: serviceKey || undefined, time_window: timeRange })
       await loadIncidents()
     } finally {
       setCreating(false)
@@ -261,6 +265,9 @@ export const IncidentCenter: React.FC = () => {
     const incidentId = selectedIncident?.incident.incident_id
     if (!incidentId) {
       return
+    }
+    if (selectedIncident?.incident.service_key) {
+      setServiceKey(selectedIncident.incident.service_key)
     }
     const params = new URLSearchParams()
     params.set('incidentId', incidentId)
@@ -290,6 +297,8 @@ export const IncidentCenter: React.FC = () => {
     const durationMs = Math.max(0, timeWindowEnd.getTime() - timeWindowStart.getTime())
     const hours = durationMs / (1000 * 60 * 60)
     const timeRange = hours > 6 ? '24h' : hours > 1 ? '6h' : '1h'
+    setTimeRange(timeRange)
+    setServiceKey(selectedIncident.incident.service_key)
     params.set('time_range', timeRange)
     params.set('service_key', selectedIncident.incident.service_key)
     navigate(`/traffic?${params.toString()}`)

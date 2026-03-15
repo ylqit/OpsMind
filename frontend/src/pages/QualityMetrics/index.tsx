@@ -8,6 +8,7 @@ import {
   type AIUsageMetricsResponse,
   type RecommendationMetricsResponse,
 } from '@/api/client'
+import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph } = Typography
 
@@ -24,15 +25,6 @@ const windowOptions = [
   { label: '最近 14 天', value: '14d' },
   { label: '最近 30 天', value: '30d' },
 ]
-
-const allowedWindows = new Set(windowOptions.map((item) => item.value))
-
-const normalizeWindow = (value: string | null | undefined) => {
-  if (!value || !allowedWindows.has(value)) {
-    return '7d'
-  }
-  return value
-}
 
 const resolveDateRange = (windowValue: string) => {
   const now = new Date()
@@ -58,14 +50,20 @@ const mergeServiceKeys = (base: string[], incoming: string[]) => {
 
 const QualityMetrics: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [windowSize, setWindowSize] = useState(() => normalizeWindow(searchParams.get('window')))
-  const [serviceKey, setServiceKey] = useState(() => searchParams.get('service_key') || '')
-  const [model, setModel] = useState(() => searchParams.get('model') || '')
+  const windowSize = useWorkspaceFilterStore((state) => state.qualityWindow)
+  const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
+  const model = useWorkspaceFilterStore((state) => state.model)
+  const setWindowSize = useWorkspaceFilterStore((state) => state.setQualityWindow)
+  const setServiceKey = useWorkspaceFilterStore((state) => state.setServiceKey)
+  const setModel = useWorkspaceFilterStore((state) => state.setModel)
+  const syncQualityFilters = useWorkspaceFilterStore((state) => state.syncQualityFilters)
+  const resetQualityFilters = useWorkspaceFilterStore((state) => state.resetQualityFilters)
 
   const [loading, setLoading] = useState(true)
   const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationMetricsResponse | null>(null)
   const [aiUsageMetrics, setAiUsageMetrics] = useState<AIUsageMetricsResponse | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
+  const [filtersReady, setFiltersReady] = useState(false)
 
   const serviceOptions = useMemo(() => serviceKeys.map((item) => ({ label: item, value: item })), [serviceKeys])
   const modelOptions = useMemo(
@@ -142,32 +140,43 @@ const QualityMetrics: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    if (!filtersReady) {
+      return
+    }
     void loadMetrics()
-  }, [windowSize, serviceKey, model])
+  }, [filtersReady, windowSize, serviceKey, model])
 
   useEffect(() => {
-    const next = new URLSearchParams(searchParams)
-    next.set('window', windowSize)
-    if (serviceKey) {
-      next.set('service_key', serviceKey)
-    } else {
-      next.delete('service_key')
-    }
-    if (model) {
-      next.set('model', model)
-    } else {
-      next.delete('model')
-    }
-    if (next.toString() !== searchParams.toString()) {
-      setSearchParams(next, { replace: true })
-    }
-  }, [windowSize, serviceKey, model, searchParams, setSearchParams])
+    syncQualityFilters({
+      window: searchParams.get('window'),
+      serviceKey: searchParams.get('service_key'),
+      model: searchParams.get('model'),
+    })
+    setFiltersReady(true)
+  }, [searchParams, syncQualityFilters])
 
-  const resetFilters = () => {
-    setWindowSize('7d')
-    setServiceKey('')
-    setModel('')
-  }
+  useEffect(() => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('window', windowSize)
+      if (serviceKey) {
+        next.set('service_key', serviceKey)
+      } else {
+        next.delete('service_key')
+      }
+      if (model) {
+        next.set('model', model)
+      } else {
+        next.delete('model')
+      }
+      if (next.toString() === previous.toString()) {
+        return previous
+      }
+      return next
+    }, { replace: true, preventScrollReset: true })
+  }, [windowSize, serviceKey, model, setSearchParams])
+
+  const resetFilters = () => resetQualityFilters()
 
   return (
     <div className="ops-page">

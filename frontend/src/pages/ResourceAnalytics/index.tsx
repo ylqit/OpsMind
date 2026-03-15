@@ -9,6 +9,7 @@ import {
   type ResourceRiskSummary,
   type ResourceSummary,
 } from '@/api/client'
+import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -21,8 +22,6 @@ const timeRangeOptions = [
 const timeRangeLabelMap: Record<string, string> = Object.fromEntries(
   timeRangeOptions.map((item) => [item.value, item.label]),
 ) as Record<string, string>
-
-const allowedTimeRanges = new Set(timeRangeOptions.map((item) => item.value))
 
 interface AssetItem {
   asset_id?: string
@@ -64,13 +63,6 @@ const emptyRiskSummary: ResourceRiskSummary = {
     high: 0,
     medium: 0,
   },
-}
-
-const normalizeTimeRange = (value: string | null | undefined) => {
-  if (!value || !allowedTimeRanges.has(value)) {
-    return '1h'
-  }
-  return value
 }
 
 const mergeServiceKeys = (base: string[], incoming: string[]) => {
@@ -130,8 +122,12 @@ const layerMeta: Array<{ key: keyof ResourceHotspotLayers; title: string; color:
 
 const ResourceAnalytics: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [timeRange, setTimeRange] = useState(() => normalizeTimeRange(searchParams.get('time_range')))
-  const [serviceKey, setServiceKey] = useState(() => searchParams.get('service_key') || '')
+  const timeRange = useWorkspaceFilterStore((state) => state.timeRange)
+  const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
+  const setTimeRange = useWorkspaceFilterStore((state) => state.setTimeRange)
+  const setServiceKey = useWorkspaceFilterStore((state) => state.setServiceKey)
+  const syncOpsFilters = useWorkspaceFilterStore((state) => state.syncOpsFilters)
+  const resetOpsFilters = useWorkspaceFilterStore((state) => state.resetOpsFilters)
   const deferredServiceKey = useDeferredValue(serviceKey)
 
   const [loading, setLoading] = useState(true)
@@ -139,6 +135,7 @@ const ResourceAnalytics: React.FC = () => {
   const [assets, setAssets] = useState<AssetListResponse>({ items: [], total: 0, synced: 0 })
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [filtersReady, setFiltersReady] = useState(false)
   const bootLoading = loading && !summary
 
   const serviceOptions = useMemo(
@@ -177,15 +174,18 @@ const ResourceAnalytics: React.FC = () => {
   }
 
   useEffect(() => {
+    if (!filtersReady) {
+      return
+    }
     void loadData()
-  }, [timeRange, deferredServiceKey])
+  }, [filtersReady, timeRange, deferredServiceKey])
 
   useEffect(() => {
-    const nextTimeRange = normalizeTimeRange(searchParams.get('time_range'))
-    const nextServiceKey = searchParams.get('service_key') || ''
-    setTimeRange((previous) => (previous === nextTimeRange ? previous : nextTimeRange))
-    setServiceKey((previous) => (previous === nextServiceKey ? previous : nextServiceKey))
-  }, [searchParams])
+    const nextTimeRange = searchParams.get('time_range')
+    const nextServiceKey = searchParams.get('service_key')
+    syncOpsFilters({ timeRange: nextTimeRange, serviceKey: nextServiceKey })
+    setFiltersReady(true)
+  }, [searchParams, syncOpsFilters])
 
   useEffect(() => {
     setSearchParams((previous) => {
@@ -206,10 +206,7 @@ const ResourceAnalytics: React.FC = () => {
   const hostCpu = Number(summary?.host?.cpu?.usage_percent || 0)
   const hostMemory = Number(summary?.host?.memory?.usage_percent || 0)
 
-  const resetFilters = () => {
-    setTimeRange('1h')
-    setServiceKey('')
-  }
+  const resetFilters = () => resetOpsFilters()
 
   return (
     <div className="ops-page">

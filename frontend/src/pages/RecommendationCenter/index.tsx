@@ -489,7 +489,10 @@ export const RecommendationCenter: React.FC = () => {
   }, [selectedRecommendations, activeRecommendationId])
 
   const updateRouteState = (incidentId?: string, artifact?: TaskArtifact | null) => {
-    const nextParams = new URLSearchParams()
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('incidentId')
+    nextParams.delete('taskId')
+    nextParams.delete('artifactId')
     if (incidentId) {
       nextParams.set('incidentId', incidentId)
     }
