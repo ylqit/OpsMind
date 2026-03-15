@@ -17,6 +17,8 @@ from .deps import (
     get_recommendation_feedback_repository_dep,
     get_recommendation_service,
     get_task_manager,
+    get_traffic_engine,
+    resolve_access_logs,
 )
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -250,6 +252,28 @@ def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     return refs
 
 
+def _build_log_sample_evidence(log_samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for index, item in enumerate(log_samples[:4]):
+        status = int(item.get("status") or 0)
+        latency_ms = float(item.get("latency_ms") or 0.0)
+        refs.append(
+            {
+                "evidence_id": f"log_sample_{index}",
+                "source_type": "log_snippet",
+                "title": f"{item.get('path') or '/'} 访问日志样本",
+                "summary": f"状态码 {status}，耗时 {round(latency_ms, 2)} ms，来源 {item.get('client_ip') or '-'}",
+                "quote": str(item.get("user_agent") or "").strip(),
+                "metric": "status" if status >= 500 else "latency_ms",
+                "priority": 90 if status >= 500 else 76,
+                "signal_strength": "high" if status >= 500 else "medium",
+                "artifact_ref": None,
+                "jump": {"kind": "none"},
+            }
+        )
+    return refs
+
+
 def _deduplicate_evidence(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduplicated: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
@@ -269,9 +293,10 @@ def _deduplicate_evidence(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(deduplicated, key=lambda item: int(item.get("priority") or 0), reverse=True)
 
 
-def _build_recommendation_evidence_payload(recommendation, incident) -> dict[str, Any]:
+def _build_recommendation_evidence_payload(recommendation, incident, log_samples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     refs: list[dict[str, Any]] = []
     refs.extend(_build_incident_metric_evidence(incident))
+    refs.extend(_build_log_sample_evidence(log_samples or []))
     for artifact in recommendation.artifact_refs:
         if isinstance(artifact, dict):
             refs.extend(_build_artifact_evidence(artifact))
@@ -397,16 +422,28 @@ async def get_recommendation_detail(
     recommendation_id: str,
     recommendation_service=Depends(get_recommendation_service),
     incident_service=Depends(get_incident_service),
+    traffic_engine=Depends(get_traffic_engine),
 ):
     recommendation = recommendation_service.repository.get(recommendation_id)
     if not recommendation:
         raise HTTPException(status_code=404, detail="建议不存在")
 
     incident = incident_service.get_incident(recommendation.incident_id)
-    evidence_payload = _build_recommendation_evidence_payload(recommendation, incident)
+    log_samples: list[dict[str, Any]] = []
+    log_paths = resolve_access_logs()
+    if incident and log_paths:
+        log_samples = traffic_engine.sample_records(
+            log_paths,
+            service_key=incident.service_key,
+            start_time=incident.time_window_start,
+            end_time=incident.time_window_end,
+            limit=5,
+        )
+    evidence_payload = _build_recommendation_evidence_payload(recommendation, incident, log_samples=log_samples)
 
     detail = recommendation.model_dump(mode="json")
     detail.update(evidence_payload)
+    detail["log_samples"] = log_samples
     return detail
 
 

@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from .aggregators import LogAggregators
 from .log_enricher import LogEnricher
 from .log_parser import AccessLogParser
+from .log_samples import build_log_samples
 
 
 class LogPipeline:
@@ -80,12 +81,7 @@ class LogPipeline:
             start_time=start_time,
             end_time=end_time,
         )
-        interesting = [
-            item for item in records
-            if int(item.get("status") or 0) >= 500 or float(item.get("request_time") or 0.0) >= 1
-        ]
-        source = interesting or records
-        return source[:limit]
+        return build_log_samples(records, limit=limit)
 
     def _resolve_cutoff(self, time_range: str) -> datetime:
         time_range = (time_range or "1h").strip().lower()

@@ -9,6 +9,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Dict, Iterable, List
 
+from .log_samples import build_log_samples
+
 
 class LogAggregators:
     """日志聚合工具。"""
@@ -160,33 +162,4 @@ class LogAggregators:
         return ranked[:limit]
 
     def _error_samples(self, items: List[Dict[str, object]], limit: int = 8) -> List[Dict[str, object]]:
-        error_items = [item for item in items if int(item.get("status", 0)) >= 500 or float(item.get("request_time", 0.0)) >= 1]
-        ranked = sorted(
-            error_items,
-            key=lambda item: (
-                -int(item.get("status", 0)),
-                -float(item.get("request_time", 0.0)),
-                str(item.get("timestamp", "")),
-            ),
-        )
-        samples: List[Dict[str, object]] = []
-        for item in ranked[:limit]:
-            geo = item.get("geo") or {}
-            ua = item.get("ua") or {}
-            samples.append(
-                {
-                    "timestamp": item.get("timestamp"),
-                    "method": item.get("method") or "GET",
-                    "path": item.get("path") or "/",
-                    "status": int(item.get("status", 0)),
-                    "latency_ms": round(float(item.get("request_time", 0.0)) * 1000, 2),
-                    "client_ip": item.get("remote_addr") or "-",
-                    "geo_label": "/".join(
-                        [str(part) for part in [geo.get("country"), geo.get("region"), geo.get("city")] if part],
-                    ) or "未知",
-                    "browser": ua.get("browser") or "Unknown",
-                    "os": ua.get("os") or "Unknown",
-                    "device": ua.get("device") or "Unknown",
-                }
-            )
-        return samples
+        return build_log_samples(items, limit=limit)

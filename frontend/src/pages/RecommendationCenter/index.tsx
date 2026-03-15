@@ -1449,6 +1449,32 @@ export const RecommendationCenter: React.FC = () => {
               <Text strong>建议结论：</Text>
               {activeRecommendationDetail.recommendation_effective}
             </Paragraph>
+            <div>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>现场日志样本</Text>
+              <List
+                size="small"
+                dataSource={activeRecommendationDetail.log_samples}
+                locale={{ emptyText: '暂无现场日志样本' }}
+                renderItem={(item) => (
+                  <List.Item>
+                    <div style={{ width: '100%' }}>
+                      <Space wrap style={{ marginBottom: 6 }}>
+                        <Tag color={item.status >= 500 ? 'red' : item.status >= 400 ? 'orange' : 'blue'}>{item.status}</Tag>
+                        <Tag>{item.method}</Tag>
+                        <Text code>{item.path}</Text>
+                        <Tag color="geekblue">{item.latency_ms} ms</Tag>
+                      </Space>
+                      <Paragraph style={{ marginBottom: 4 }}>
+                        {item.timestamp} · {item.client_ip} · {item.geo_label}
+                      </Paragraph>
+                      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                        {item.browser} / {item.os} / {item.device} · {item.user_agent}
+                      </Paragraph>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </div>
             <List
               size="small"
               dataSource={activeRecommendationDetail.evidence_refs}

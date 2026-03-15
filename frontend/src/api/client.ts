@@ -112,6 +112,7 @@ export interface RecommendationEvidenceRef {
 
 export interface RecommendationDetailResponse extends RecommendationRecord {
   evidence_refs: RecommendationEvidenceRef[]
+  log_samples: LogSampleRecord[]
   evidence_status: 'sufficient' | 'insufficient'
   evidence_message: string
   confidence_effective: number
@@ -197,7 +198,7 @@ export interface DashboardOverview {
   data_sources: Record<string, unknown>
 }
 
-export interface TrafficErrorSample {
+export interface LogSampleRecord {
   timestamp: string
   method: string
   path: string
@@ -205,10 +206,14 @@ export interface TrafficErrorSample {
   latency_ms: number
   client_ip: string
   geo_label: string
+  user_agent: string
   browser: string
   os: string
   device: string
+  service_key: string
 }
+
+export type TrafficErrorSample = LogSampleRecord
 
 export interface TrafficSummary {
   total_requests: number
@@ -223,7 +228,7 @@ export interface TrafficSummary {
   geo_distribution: Array<{ name: string; count: number }>
   ua_distribution: Array<{ name: string; count: number }>
   trend: Array<{ timestamp: string; requests: number; errors: number }>
-  error_samples: TrafficErrorSample[]
+  error_samples: LogSampleRecord[]
   records_sample?: Array<Record<string, unknown>>
 }
 
@@ -349,25 +354,12 @@ export interface TaskDetailResponse {
   failure_diagnosis?: TaskFailureDiagnosis | null
 }
 
-export interface IncidentLogSample {
-  timestamp: string
-  method: string
-  path: string
-  status: number
-  latency_ms: number
-  client_ip: string
-  geo_label: string
-  user_agent: string
-  browser: string
-  os: string
-  device: string
-  service_key: string
-}
+export type IncidentLogSample = LogSampleRecord
 
 export interface IncidentDetailResponse {
   incident: IncidentRecord
   recommendations: RecommendationRecord[]
-  log_samples: IncidentLogSample[]
+  log_samples: LogSampleRecord[]
 }
 
 export interface IncidentAISummaryResponse {

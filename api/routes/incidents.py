@@ -84,29 +84,6 @@ async def list_incidents(
     return {"items": [incident.model_dump(mode="json") for incident in incidents], "total": len(incidents)}
 
 
-# 把原始访问记录压成详情页可读样本，避免前端处理复杂日志字段。
-def _format_log_sample(record: dict[str, Any]) -> dict[str, Any]:
-    geo = record.get("geo") or {}
-    ua = record.get("ua") or {}
-    return {
-        "timestamp": record.get("timestamp"),
-        "method": record.get("method") or "GET",
-        "path": record.get("path") or "/",
-        "status": int(record.get("status") or 0),
-        "latency_ms": round(float(record.get("request_time") or 0.0) * 1000, 2),
-        "client_ip": record.get("remote_addr") or "-",
-        "geo_label": "/".join(
-            [str(item) for item in [geo.get("country"), geo.get("region"), geo.get("city")] if item],
-        )
-        or "unknown",
-        "user_agent": record.get("user_agent") or "Unknown",
-        "browser": ua.get("browser") or "Unknown",
-        "os": ua.get("os") or "Unknown",
-        "device": ua.get("device") or "Unknown",
-        "service_key": record.get("service_key") or "unknown/root",
-    }
-
-
 def _to_string_list(value: Any, limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -199,7 +176,7 @@ async def get_incident_detail(
             end_time=incident.time_window_end,
             limit=8,
         )
-        log_samples = [_format_log_sample(item) for item in samples]
+        log_samples = samples
 
     return {
         "incident": incident.model_dump(mode="json"),
@@ -237,7 +214,7 @@ async def generate_incident_ai_summary(
         )
 
     sample_lines = [
-        f"- {item.get('timestamp')} {item.get('method')} {item.get('path')} status={item.get('status')} rt={item.get('request_time')}"
+        f"- {item.get('timestamp')} {item.get('method')} {item.get('path')} status={item.get('status')} latency_ms={item.get('latency_ms')} ip={item.get('client_ip')}"
         for item in samples
     ]
     recommendation_lines = [f"- {item.kind.value}: {item.recommendation}" for item in recommendations[:5]]
