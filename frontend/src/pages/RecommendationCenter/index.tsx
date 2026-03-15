@@ -178,6 +178,22 @@ const getChangeLevelColor = (changeLevel: string) => {
   return 'blue'
 }
 
+const getTaskStatusColor = (status: string) => {
+  if (status === 'COMPLETED') {
+    return 'green'
+  }
+  if (status === 'WAITING_CONFIRM') {
+    return 'gold'
+  }
+  if (status === 'FAILED' || status === 'CANCELLED') {
+    return 'red'
+  }
+  if (status === 'ANALYZING' || status === 'COLLECTING' || status === 'GENERATING') {
+    return 'blue'
+  }
+  return 'default'
+}
+
 const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_type']) => {
   if (sourceType === 'artifact') {
     return '任务产物'
@@ -558,6 +574,18 @@ export const RecommendationCenter: React.FC = () => {
     () => activeRecommendationDetail?.artifact_views || null,
     [activeRecommendationDetail],
   )
+  const activeTaskContext = useMemo(
+    () => activeRecommendationDetail?.task_context || null,
+    [activeRecommendationDetail],
+  )
+  const activeTaskTracePreview = useMemo(
+    () => activeRecommendationDetail?.task_trace_preview || [],
+    [activeRecommendationDetail],
+  )
+  const activeTaskTraceSummary = useMemo(
+    () => activeRecommendationDetail?.task_trace_summary || null,
+    [activeRecommendationDetail],
+  )
   const activeManifestMeta = useMemo(
     () => (activeRecommendation ? manifestMetaByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, manifestMetaByRecommendationId],
@@ -566,14 +594,20 @@ export const RecommendationCenter: React.FC = () => {
     if (!activeRecommendation) {
       return null
     }
-    return (
-      feedbackByRecommendationId[activeRecommendation.recommendation_id] || {
+    const detailFeedback = activeRecommendationDetail
+    if (detailFeedback?.feedback_summary) {
+      return {
         recommendation_id: activeRecommendation.recommendation_id,
-        summary: buildEmptyFeedbackSummary(),
-        items: [],
+        summary: detailFeedback.feedback_summary,
+        items: detailFeedback.feedback_items || [],
       }
-    )
-  }, [activeRecommendation, feedbackByRecommendationId])
+    }
+    return feedbackByRecommendationId[activeRecommendation.recommendation_id] || {
+      recommendation_id: activeRecommendation.recommendation_id,
+      summary: buildEmptyFeedbackSummary(),
+      items: [],
+    }
+  }, [activeRecommendation, activeRecommendationDetail, feedbackByRecommendationId])
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
   const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
@@ -844,6 +878,17 @@ export const RecommendationCenter: React.FC = () => {
         ...previous,
         [recommendationId]: detail,
       }))
+      // 详情接口已经回传 feedback 聚合时，直接回灌到本地状态，避免页面二次请求造成闪动。
+      if (detail.feedback_summary) {
+        setFeedbackByRecommendationId((previous) => ({
+          ...previous,
+          [recommendationId]: {
+            recommendation_id: recommendationId,
+            summary: detail.feedback_summary || buildEmptyFeedbackSummary(),
+            items: detail.feedback_items || [],
+          },
+        }))
+      }
       return detail
     } finally {
       setEvidenceLoadingId('')
@@ -956,6 +1001,14 @@ export const RecommendationCenter: React.FC = () => {
     } catch (error) {
       message.error(error instanceof Error ? error.message : '证据加载失败')
     }
+  }
+
+  const jumpToTaskCenter = (taskId: string) => {
+    const normalizedTaskId = taskId.trim()
+    if (!normalizedTaskId) {
+      return
+    }
+    navigate(`/tasks?taskId=${encodeURIComponent(normalizedTaskId)}`)
   }
 
   const jumpToEvidence = async (evidence: RecommendationEvidenceRef) => {
@@ -1504,6 +1557,77 @@ export const RecommendationCenter: React.FC = () => {
                           ))}
                         </Space>
                       ) : null}
+                    </Card>
+                  ) : null}
+
+                  {activeTaskContext ? (
+                    <Card type="inner" title="任务追踪" size="small">
+                      <Space wrap style={{ marginBottom: 10 }}>
+                        <Tag color={getTaskStatusColor(activeTaskContext.status)}>
+                          任务状态：{activeTaskContext.status}
+                        </Tag>
+                        <Tag>阶段：{activeTaskContext.current_stage}</Tag>
+                        <Tag color="blue">进度：{activeTaskContext.progress}%</Tag>
+                        {activeTaskContext.completed_at ? (
+                          <Tag color="green">
+                            完成时间：{new Date(activeTaskContext.completed_at).toLocaleString('zh-CN', { hour12: false })}
+                          </Tag>
+                        ) : null}
+                      </Space>
+                      <Paragraph style={{ marginBottom: 8 }}>
+                        <Text strong>当前说明：</Text>
+                        {activeTaskContext.progress_message || '-'}
+                      </Paragraph>
+                      {activeTaskContext.approval ? (
+                        <Alert
+                          type="success"
+                          showIcon
+                          style={{ marginBottom: 10 }}
+                          message={`审批通过：${activeTaskContext.approval.approved_by}`}
+                          description={activeTaskContext.approval.approval_note || '未填写审批备注'}
+                        />
+                      ) : (
+                        <Alert
+                          type="info"
+                          showIcon
+                          style={{ marginBottom: 10 }}
+                          message="审批状态：未确认"
+                          description="当前建议尚未被人工审批。"
+                        />
+                      )}
+                      <Space style={{ marginBottom: 8 }}>
+                        <Button size="small" onClick={() => jumpToTaskCenter(activeTaskContext.task_id)}>
+                          打开任务中心
+                        </Button>
+                        <Text type="secondary">
+                          Trace 步骤：{activeTaskTraceSummary?.total_steps || activeTaskTracePreview.length}
+                        </Text>
+                      </Space>
+                      <List
+                        size="small"
+                        dataSource={activeTaskTracePreview.slice(-6).reverse()}
+                        locale={{ emptyText: '暂无 Trace 记录' }}
+                        renderItem={(item) => {
+                          const observation = (item.observation as Record<string, unknown> | undefined) || {}
+                          return (
+                            <List.Item>
+                              <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                <Space wrap size={8}>
+                                  <Tag color="blue">{String(item.stage || '-')}</Tag>
+                                  <Text code>{String(item.step || '-')}</Text>
+                                  <Text type="secondary">{String(item.action || '-')}</Text>
+                                  <Text type="secondary">
+                                    {item.created_at ? new Date(String(item.created_at)).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                                  </Text>
+                                </Space>
+                                <Paragraph style={{ marginBottom: 0 }}>
+                                  {String(observation.summary || '-')}
+                                </Paragraph>
+                              </Space>
+                            </List.Item>
+                          )
+                        }}
+                      />
                     </Card>
                   ) : null}
 

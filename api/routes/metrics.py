@@ -154,9 +154,12 @@ async def get_recommendation_metrics(
             "reject": 0,
             "rewrite": 0,
             "feedback_total": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
             "task_total": 0,
             "task_success": 0,
             "task_failed": 0,
+            "task_approved": 0,
             "task_duration_sum_ms": 0,
             "task_duration_count": 0,
         }
@@ -168,9 +171,12 @@ async def get_recommendation_metrics(
             "adopt": 0,
             "reject": 0,
             "rewrite": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
             "task_total": 0,
             "task_success": 0,
             "task_failed": 0,
+            "task_approved": 0,
             "task_duration_sum_ms": 0,
             "task_duration_count": 0,
         }
@@ -192,6 +198,15 @@ async def get_recommendation_metrics(
         if action in {"adopt", "reject", "rewrite"}:
             service_metrics[current_service][action] += 1
 
+        # 反馈与任务是否绑定，决定闭环链路是否完整可追踪。
+        has_bound_task = bool(item.task_id and task_manager.task_repository.get(str(item.task_id)))
+        if has_bound_task:
+            day_metrics[day_key]["feedback_bound_task"] += 1
+            service_metrics[current_service]["feedback_bound_task"] += 1
+        else:
+            day_metrics[day_key]["feedback_unbound_task"] += 1
+            service_metrics[current_service]["feedback_unbound_task"] += 1
+
     for task in task_items:
         current_service = _resolve_service_from_task(task, incident_service_map)
         if service_key and current_service != service_key:
@@ -209,6 +224,10 @@ async def get_recommendation_metrics(
         if status in {"FAILED", "CANCELLED"}:
             day_metrics[day_key]["task_failed"] += 1
             service_metrics[current_service]["task_failed"] += 1
+        # recommendation 任务审批通过后，纳入质量看板统计。
+        if task.approval:
+            day_metrics[day_key]["task_approved"] += 1
+            service_metrics[current_service]["task_approved"] += 1
 
         if task.completed_at:
             duration_ms = max(0, int((task.completed_at - task.created_at).total_seconds() * 1000))
@@ -226,9 +245,14 @@ async def get_recommendation_metrics(
         "adopt_rate": 0.0,
         "reject_rate": 0.0,
         "rewrite_rate": 0.0,
+        "feedback_bound_task": 0,
+        "feedback_unbound_task": 0,
+        "feedback_bound_rate": 0.0,
         "task_total": 0,
         "task_success": 0,
         "task_failed": 0,
+        "task_approved": 0,
+        "task_approval_rate": 0.0,
         "task_success_rate": 0.0,
         "avg_task_duration_ms": 0.0,
     }
@@ -241,14 +265,19 @@ async def get_recommendation_metrics(
             "reject": 0,
             "rewrite": 0,
             "feedback_total": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
             "task_total": 0,
             "task_success": 0,
             "task_failed": 0,
+            "task_approved": 0,
             "task_duration_sum_ms": 0,
             "task_duration_count": 0,
         }
         feedback_total = int(row["feedback_total"])
+        feedback_bound_task = int(row["feedback_bound_task"])
         task_total = int(row["task_total"])
+        task_approved = int(row["task_approved"])
         task_duration_count = int(row["task_duration_count"])
         avg_task_duration = (
             round(float(row["task_duration_sum_ms"]) / task_duration_count, 2)
@@ -266,9 +295,14 @@ async def get_recommendation_metrics(
                 "adopt_rate": _safe_rate(int(row["adopt"]), feedback_total),
                 "reject_rate": _safe_rate(int(row["reject"]), feedback_total),
                 "rewrite_rate": _safe_rate(int(row["rewrite"]), feedback_total),
+                "feedback_bound_task": feedback_bound_task,
+                "feedback_unbound_task": int(row["feedback_unbound_task"]),
+                "feedback_bound_rate": _safe_rate(feedback_bound_task, feedback_total),
                 "task_total": task_total,
                 "task_success": int(row["task_success"]),
                 "task_failed": int(row["task_failed"]),
+                "task_approved": task_approved,
+                "task_approval_rate": _safe_rate(task_approved, task_total),
                 "task_success_rate": _safe_rate(int(row["task_success"]), task_total),
                 "avg_task_duration_ms": avg_task_duration,
             }
@@ -278,23 +312,30 @@ async def get_recommendation_metrics(
         summary["adopt"] += int(row["adopt"])
         summary["reject"] += int(row["reject"])
         summary["rewrite"] += int(row["rewrite"])
+        summary["feedback_bound_task"] += feedback_bound_task
+        summary["feedback_unbound_task"] += int(row["feedback_unbound_task"])
         summary["task_total"] += task_total
         summary["task_success"] += int(row["task_success"])
         summary["task_failed"] += int(row["task_failed"])
+        summary["task_approved"] += task_approved
         total_duration += int(row["task_duration_sum_ms"])
         total_duration_count += task_duration_count
 
     summary["adopt_rate"] = _safe_rate(summary["adopt"], summary["feedback_total"])
     summary["reject_rate"] = _safe_rate(summary["reject"], summary["feedback_total"])
     summary["rewrite_rate"] = _safe_rate(summary["rewrite"], summary["feedback_total"])
+    summary["feedback_bound_rate"] = _safe_rate(summary["feedback_bound_task"], summary["feedback_total"])
     summary["task_success_rate"] = _safe_rate(summary["task_success"], summary["task_total"])
+    summary["task_approval_rate"] = _safe_rate(summary["task_approved"], summary["task_total"])
     summary["avg_task_duration_ms"] = round(total_duration / total_duration_count, 2) if total_duration_count > 0 else 0.0
 
     service_breakdown = []
     for key in sorted(service_metrics.keys()):
         row = service_metrics[key]
         feedback_total = int(row["feedback_total"])
+        feedback_bound_task = int(row["feedback_bound_task"])
         task_total = int(row["task_total"])
+        task_approved = int(row["task_approved"])
         duration_count = int(row["task_duration_count"])
         service_breakdown.append(
             {
@@ -304,9 +345,14 @@ async def get_recommendation_metrics(
                 "reject": int(row["reject"]),
                 "rewrite": int(row["rewrite"]),
                 "adopt_rate": _safe_rate(int(row["adopt"]), feedback_total),
+                "feedback_bound_task": feedback_bound_task,
+                "feedback_unbound_task": int(row["feedback_unbound_task"]),
+                "feedback_bound_rate": _safe_rate(feedback_bound_task, feedback_total),
                 "task_total": task_total,
                 "task_success": int(row["task_success"]),
                 "task_failed": int(row["task_failed"]),
+                "task_approved": task_approved,
+                "task_approval_rate": _safe_rate(task_approved, task_total),
                 "task_success_rate": _safe_rate(int(row["task_success"]), task_total),
                 "avg_task_duration_ms": (
                     round(float(row["task_duration_sum_ms"]) / duration_count, 2)

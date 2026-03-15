@@ -866,12 +866,119 @@ def _resolve_feedback_task_id(recommendation, requested_task_id: str | None) -> 
     return None
 
 
+def _status_value(value: Any) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _serialize_feedback_item(item: Any) -> dict[str, Any]:
+    if hasattr(item, "model_dump"):
+        return item.model_dump(mode="json")
+    if isinstance(item, dict):
+        return item
+    return {
+        "feedback_id": str(getattr(item, "feedback_id", "")),
+        "recommendation_id": str(getattr(item, "recommendation_id", "")),
+        "incident_id": str(getattr(item, "incident_id", "")),
+        "task_id": str(getattr(item, "task_id", "") or ""),
+        "action": str(getattr(item, "action", "")),
+        "reason_code": str(getattr(item, "reason_code", "")),
+        "comment": str(getattr(item, "comment", "")),
+        "operator": str(getattr(item, "operator", "")),
+        "created_at": str(getattr(item, "created_at", "")),
+    }
+
+
+def _collect_task_candidates(recommendation, feedback_items: list[dict[str, Any]]) -> list[str]:
+    # 先用产物里的 task_id，再补充反馈里的 task_id，保证推荐详情可回溯到任务链路。
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for artifact in recommendation.artifact_refs:
+        if not isinstance(artifact, dict):
+            continue
+        task_id = str(artifact.get("task_id") or "").strip()
+        if not task_id or task_id in seen:
+            continue
+        ordered.append(task_id)
+        seen.add(task_id)
+
+    for item in feedback_items:
+        task_id = str(item.get("task_id") or "").strip()
+        if not task_id or task_id in seen:
+            continue
+        ordered.append(task_id)
+        seen.add(task_id)
+    return ordered
+
+
+def _read_task_trace_preview(task_manager, task_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    if not task_manager or not task_id.strip():
+        return []
+    trace_store = getattr(task_manager, "trace_store", None)
+    tasks_base_dir = getattr(trace_store, "tasks_base_dir", None)
+    if not tasks_base_dir:
+        return []
+    trace_file = Path(tasks_base_dir) / task_id / "trace.jsonl"
+    if not trace_file.exists() or not trace_file.is_file():
+        return []
+    try:
+        lines = trace_file.read_text(encoding="utf-8").splitlines()[-limit:]
+    except Exception:  # noqa: BLE001
+        return []
+    preview: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            preview.append(payload)
+    return preview
+
+
+def _build_task_context(task) -> dict[str, Any]:
+    approval = task.approval.model_dump(mode="json") if getattr(task, "approval", None) else None
+    return {
+        "task_id": str(task.task_id),
+        "task_type": _status_value(task.task_type),
+        "status": _status_value(task.status),
+        "current_stage": _status_value(task.current_stage),
+        "progress": int(task.progress),
+        "progress_message": str(task.progress_message or ""),
+        "created_at": task.created_at.isoformat() if getattr(task, "created_at", None) else "",
+        "updated_at": task.updated_at.isoformat() if getattr(task, "updated_at", None) else "",
+        "completed_at": task.completed_at.isoformat() if getattr(task, "completed_at", None) else None,
+        "approval": approval,
+    }
+
+
+def _build_task_trace_summary(trace_preview: list[dict[str, Any]]) -> dict[str, Any]:
+    if not trace_preview:
+        return {"total_steps": 0, "last_step": None}
+    last_step = trace_preview[-1]
+    observation = last_step.get("observation") if isinstance(last_step, dict) else {}
+    if not isinstance(observation, dict):
+        observation = {}
+    return {
+        "total_steps": len(trace_preview),
+        "last_step": {
+            "step": str(last_step.get("step") or "-"),
+            "action": str(last_step.get("action") or "-"),
+            "stage": str(last_step.get("stage") or "-"),
+            "summary": str(observation.get("summary") or "-"),
+            "created_at": str(last_step.get("created_at") or "-"),
+        },
+    }
+
+
 @router.get("/{recommendation_id}")
 async def get_recommendation_detail(
     recommendation_id: str,
     recommendation_service=Depends(get_recommendation_service),
     incident_service=Depends(get_incident_service),
     traffic_engine=Depends(get_traffic_engine),
+    task_manager=Depends(get_task_manager),
+    feedback_repository=Depends(get_recommendation_feedback_repository_dep),
 ):
     recommendation = recommendation_service.repository.get(recommendation_id)
     if not recommendation:
@@ -890,11 +997,36 @@ async def get_recommendation_detail(
         )
     evidence_payload = _build_recommendation_evidence_payload(recommendation, incident, log_samples=log_samples)
     artifact_views = _build_artifact_views_payload(recommendation)
+    feedback_items: list[dict[str, Any]] = []
+    feedback_summary = {"adopt": 0, "reject": 0, "rewrite": 0}
+    if feedback_repository and hasattr(feedback_repository, "list_by_recommendation"):
+        raw_items = feedback_repository.list_by_recommendation(recommendation_id, limit=80)
+        feedback_items = [_serialize_feedback_item(item) for item in raw_items]
+        if hasattr(feedback_repository, "summarize_by_recommendation"):
+            feedback_summary = feedback_repository.summarize_by_recommendation(recommendation_id)
+
+    task_candidates = _collect_task_candidates(recommendation, feedback_items)
+    linked_task = None
+    if task_manager and hasattr(task_manager, "get_task"):
+        for candidate_id in task_candidates:
+            task = task_manager.get_task(candidate_id)
+            if task:
+                linked_task = task
+                break
+
+    trace_task_id = str(linked_task.task_id) if linked_task else (task_candidates[0] if task_candidates else "")
+    task_trace_preview = _read_task_trace_preview(task_manager, trace_task_id, limit=30)
+    task_context = _build_task_context(linked_task) if linked_task else None
 
     detail = recommendation.model_dump(mode="json")
     detail.update(evidence_payload)
     detail["log_samples"] = log_samples
     detail["artifact_views"] = artifact_views
+    detail["feedback_summary"] = feedback_summary
+    detail["feedback_items"] = feedback_items
+    detail["task_context"] = task_context
+    detail["task_trace_preview"] = task_trace_preview
+    detail["task_trace_summary"] = _build_task_trace_summary(task_trace_preview)
     return detail
 
 

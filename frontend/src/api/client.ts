@@ -232,6 +232,35 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
     incident_evidence?: number
   }
   artifact_views?: RecommendationArtifactViewsPayload
+  feedback_summary?: {
+    adopt: number
+    reject: number
+    rewrite: number
+  }
+  feedback_items?: RecommendationFeedbackRecord[]
+  task_context?: {
+    task_id: string
+    task_type: string
+    status: string
+    current_stage: string
+    progress: number
+    progress_message: string
+    created_at: string
+    updated_at: string
+    completed_at?: string | null
+    approval?: TaskApproval | null
+  } | null
+  task_trace_preview?: Array<Record<string, unknown>>
+  task_trace_summary?: {
+    total_steps: number
+    last_step: {
+      step: string
+      action: string
+      stage: string
+      summary: string
+      created_at: string
+    } | null
+  }
 }
 
 export type RecommendationFeedbackAction = 'adopt' | 'reject' | 'rewrite'
@@ -583,9 +612,14 @@ export interface RecommendationMetricsTrendItem {
   adopt_rate: number
   reject_rate: number
   rewrite_rate: number
+  feedback_bound_task: number
+  feedback_unbound_task: number
+  feedback_bound_rate: number
   task_total: number
   task_success: number
   task_failed: number
+  task_approved: number
+  task_approval_rate: number
   task_success_rate: number
   avg_task_duration_ms: number
 }
@@ -597,9 +631,14 @@ export interface RecommendationMetricsServiceItem {
   reject: number
   rewrite: number
   adopt_rate: number
+  feedback_bound_task: number
+  feedback_unbound_task: number
+  feedback_bound_rate: number
   task_total: number
   task_success: number
   task_failed: number
+  task_approved: number
+  task_approval_rate: number
   task_success_rate: number
   avg_task_duration_ms: number
 }
@@ -616,9 +655,14 @@ export interface RecommendationMetricsResponse {
     adopt_rate: number
     reject_rate: number
     rewrite_rate: number
+    feedback_bound_task: number
+    feedback_unbound_task: number
+    feedback_bound_rate: number
     task_total: number
     task_success: number
     task_failed: number
+    task_approved: number
+    task_approval_rate: number
     task_success_rate: number
     avg_task_duration_ms: number
   }
