@@ -178,6 +178,32 @@ export interface RecommendationArtifactView {
   added_lines?: number
   removed_lines?: number
   hunk_count?: number
+  total_changed_lines?: number
+  change_level?: 'high' | 'medium' | 'low' | string
+  risk_level?: 'high' | 'medium' | 'low' | string
+  resource_types?: Array<{ kind: string; count: number }>
+}
+
+export interface RecommendationRiskSummary {
+  level: 'high' | 'medium' | 'low' | string
+  score: number
+  review_required: boolean
+  highlights: string[]
+}
+
+export interface RecommendationResourceHints {
+  baseline_types: Array<{ kind: string; count: number }>
+  recommended_types: Array<{ kind: string; count: number }>
+  added_types: string[]
+  removed_types: string[]
+}
+
+export interface RecommendationChangeStats {
+  total_changed_lines: number
+  change_level: 'high' | 'medium' | 'low' | string
+  added_lines: number
+  removed_lines: number
+  hunk_count: number
 }
 
 export interface RecommendationArtifactViewsPayload {
@@ -186,6 +212,9 @@ export interface RecommendationArtifactViewsPayload {
   baseline?: RecommendationArtifactView | null
   recommended?: RecommendationArtifactView | null
   diff?: RecommendationArtifactView | null
+  risk_summary?: RecommendationRiskSummary | null
+  resource_hints?: RecommendationResourceHints | null
+  change_stats?: RecommendationChangeStats | null
 }
 
 export interface RecommendationDetailResponse extends RecommendationRecord {

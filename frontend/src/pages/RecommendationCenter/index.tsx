@@ -57,6 +57,8 @@ interface ManifestMetadataDiff {
   added_lines: number
   removed_lines: number
   hunk_count: number
+  total_changed_lines: number
+  change_level: string
 }
 
 interface ManifestMetadataDocument {
@@ -64,6 +66,21 @@ interface ManifestMetadataDocument {
   sha256: string
   line_count: number
   document_count: number
+  resource_types: Array<{ kind: string; count: number }>
+}
+
+interface ManifestRiskSummary {
+  level: string
+  score: number
+  review_required: boolean
+  highlights: string[]
+}
+
+interface ManifestResourceHints {
+  baseline_types: Array<{ kind: string; count: number }>
+  recommended_types: Array<{ kind: string; count: number }>
+  added_types: string[]
+  removed_types: string[]
 }
 
 interface ManifestMetadata {
@@ -73,6 +90,8 @@ interface ManifestMetadata {
   recommended: ManifestMetadataDocument
   diff: ManifestMetadataDiff
   risk_rules: string[]
+  risk_summary: ManifestRiskSummary | null
+  resource_hints: ManifestResourceHints | null
 }
 
 interface BundleArtifactContent {
@@ -147,6 +166,16 @@ const getRiskLevelColor = (riskLevel: string) => {
     return 'orange'
   }
   return 'green'
+}
+
+const getChangeLevelColor = (changeLevel: string) => {
+  if (changeLevel === 'high') {
+    return 'red'
+  }
+  if (changeLevel === 'medium') {
+    return 'orange'
+  }
+  return 'blue'
 }
 
 const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_type']) => {
@@ -302,6 +331,7 @@ const getFenceLanguage = (artifact: TaskArtifact) => {
 }
 
 const parseManifestMetadata = (content: string): ManifestMetadata | null => {
+  // 兼容后端 metadata 渐进扩展，保证老产物也能继续展示。
   try {
     const parsed = JSON.parse(content) as Partial<ManifestMetadata>
     if (!parsed || typeof parsed !== 'object') {
@@ -318,20 +348,76 @@ const parseManifestMetadata = (content: string): ManifestMetadata | null => {
         sha256: String(parsed.baseline.sha256 || ''),
         line_count: Number(parsed.baseline.line_count || 0),
         document_count: Number(parsed.baseline.document_count || 0),
+        resource_types: Array.isArray((parsed.baseline as ManifestMetadataDocument).resource_types)
+          ? (parsed.baseline as ManifestMetadataDocument).resource_types
+            .map((item) => ({
+              kind: String(item?.kind || '').trim(),
+              count: Number(item?.count || 0),
+            }))
+            .filter((item) => Boolean(item.kind))
+          : [],
       },
       recommended: {
         filename: String(parsed.recommended.filename || ''),
         sha256: String(parsed.recommended.sha256 || ''),
         line_count: Number(parsed.recommended.line_count || 0),
         document_count: Number(parsed.recommended.document_count || 0),
+        resource_types: Array.isArray((parsed.recommended as ManifestMetadataDocument).resource_types)
+          ? (parsed.recommended as ManifestMetadataDocument).resource_types
+            .map((item) => ({
+              kind: String(item?.kind || '').trim(),
+              count: Number(item?.count || 0),
+            }))
+            .filter((item) => Boolean(item.kind))
+          : [],
       },
       diff: {
         filename: String(parsed.diff.filename || ''),
         added_lines: Number(parsed.diff.added_lines || 0),
         removed_lines: Number(parsed.diff.removed_lines || 0),
         hunk_count: Number(parsed.diff.hunk_count || 0),
+        total_changed_lines: Number((parsed.diff as ManifestMetadataDiff).total_changed_lines || (parsed.diff.added_lines || 0) + (parsed.diff.removed_lines || 0)),
+        change_level: String((parsed.diff as ManifestMetadataDiff).change_level || 'low'),
       },
       risk_rules: Array.isArray(parsed.risk_rules) ? parsed.risk_rules.map((item) => String(item)).filter(Boolean) : [],
+      risk_summary:
+        parsed.risk_summary && typeof parsed.risk_summary === 'object'
+          ? {
+            level: String((parsed.risk_summary as ManifestRiskSummary).level || 'medium'),
+            score: Number((parsed.risk_summary as ManifestRiskSummary).score || 0),
+            review_required: Boolean((parsed.risk_summary as ManifestRiskSummary).review_required ?? true),
+            highlights: Array.isArray((parsed.risk_summary as ManifestRiskSummary).highlights)
+              ? (parsed.risk_summary as ManifestRiskSummary).highlights.map((item) => String(item)).filter(Boolean)
+              : [],
+          }
+          : null,
+      resource_hints:
+        parsed.resource_hints && typeof parsed.resource_hints === 'object'
+          ? {
+            baseline_types: Array.isArray((parsed.resource_hints as ManifestResourceHints).baseline_types)
+              ? (parsed.resource_hints as ManifestResourceHints).baseline_types
+                .map((item) => ({
+                  kind: String(item?.kind || '').trim(),
+                  count: Number(item?.count || 0),
+                }))
+                .filter((item) => Boolean(item.kind))
+              : [],
+            recommended_types: Array.isArray((parsed.resource_hints as ManifestResourceHints).recommended_types)
+              ? (parsed.resource_hints as ManifestResourceHints).recommended_types
+                .map((item) => ({
+                  kind: String(item?.kind || '').trim(),
+                  count: Number(item?.count || 0),
+                }))
+                .filter((item) => Boolean(item.kind))
+              : [],
+            added_types: Array.isArray((parsed.resource_hints as ManifestResourceHints).added_types)
+              ? (parsed.resource_hints as ManifestResourceHints).added_types.map((item) => String(item)).filter(Boolean)
+              : [],
+            removed_types: Array.isArray((parsed.resource_hints as ManifestResourceHints).removed_types)
+              ? (parsed.resource_hints as ManifestResourceHints).removed_types.map((item) => String(item)).filter(Boolean)
+              : [],
+          }
+          : null,
     }
   } catch {
     return null
@@ -504,6 +590,7 @@ export const RecommendationCenter: React.FC = () => {
     return activeArtifactViews.recommended || null
   }, [activeArtifactView, activeArtifactViews])
   const manifestMetaDisplay = useMemo(() => {
+    // 优先使用后端聚合字段，缺失时回退到本地 metadata 解析结果。
     if (activeArtifactViews?.baseline || activeArtifactViews?.recommended || activeArtifactViews?.diff) {
       return {
         schemaVersion: 'artifact_views',
@@ -511,6 +598,9 @@ export const RecommendationCenter: React.FC = () => {
         recommended: activeArtifactViews.recommended || null,
         diff: activeArtifactViews.diff || null,
         riskRules: activeManifestMeta?.risk_rules || [],
+        riskSummary: activeArtifactViews.risk_summary || activeManifestMeta?.risk_summary || null,
+        resourceHints: activeArtifactViews.resource_hints || activeManifestMeta?.resource_hints || null,
+        changeStats: activeArtifactViews.change_stats || null,
       }
     }
     if (!activeManifestMeta) {
@@ -523,19 +613,33 @@ export const RecommendationCenter: React.FC = () => {
         document_count: activeManifestMeta.baseline.document_count,
         line_count: activeManifestMeta.baseline.line_count,
         sha256: activeManifestMeta.baseline.sha256,
+        resource_types: activeManifestMeta.baseline.resource_types || [],
       },
       recommended: {
         filename: activeManifestMeta.recommended.filename,
         document_count: activeManifestMeta.recommended.document_count,
         line_count: activeManifestMeta.recommended.line_count,
         sha256: activeManifestMeta.recommended.sha256,
+        resource_types: activeManifestMeta.recommended.resource_types || [],
       },
       diff: {
+        filename: activeManifestMeta.diff.filename,
+        added_lines: activeManifestMeta.diff.added_lines,
+        removed_lines: activeManifestMeta.diff.removed_lines,
+        hunk_count: activeManifestMeta.diff.hunk_count,
+        total_changed_lines: activeManifestMeta.diff.total_changed_lines,
+        change_level: activeManifestMeta.diff.change_level,
+      },
+      riskRules: activeManifestMeta.risk_rules,
+      riskSummary: activeManifestMeta.risk_summary,
+      resourceHints: activeManifestMeta.resource_hints,
+      changeStats: {
+        total_changed_lines: activeManifestMeta.diff.total_changed_lines,
+        change_level: activeManifestMeta.diff.change_level,
         added_lines: activeManifestMeta.diff.added_lines,
         removed_lines: activeManifestMeta.diff.removed_lines,
         hunk_count: activeManifestMeta.diff.hunk_count,
       },
-      riskRules: activeManifestMeta.risk_rules,
     }
   }, [activeArtifactViews, activeManifestMeta])
   const resolvedDiffSummary = useMemo(() => {
@@ -1340,6 +1444,59 @@ export const RecommendationCenter: React.FC = () => {
                           <Text type="secondary">SHA {shortHash(manifestMetaDisplay.recommended?.sha256 || '')}</Text>
                         </div>
                       </div>
+                      <Space wrap style={{ marginTop: 10 }}>
+                        <Tag color={getChangeLevelColor(manifestMetaDisplay.changeStats?.change_level || manifestMetaDisplay.diff?.change_level || 'low')}>
+                          变更强度：{manifestMetaDisplay.changeStats?.change_level || manifestMetaDisplay.diff?.change_level || 'low'}
+                        </Tag>
+                        <Tag>
+                          变更总行数：{manifestMetaDisplay.changeStats?.total_changed_lines || manifestMetaDisplay.diff?.total_changed_lines || 0}
+                        </Tag>
+                        {manifestMetaDisplay.riskSummary ? (
+                          <Tag color={getRiskLevelColor(manifestMetaDisplay.riskSummary.level)}>
+                            风险等级：{manifestMetaDisplay.riskSummary.level}
+                          </Tag>
+                        ) : null}
+                      </Space>
+                      {Array.isArray(manifestMetaDisplay.baseline?.resource_types) && manifestMetaDisplay.baseline.resource_types.length > 0 ? (
+                        <Space wrap style={{ marginTop: 8 }}>
+                          <Text type="secondary">基线对象：</Text>
+                          {manifestMetaDisplay.baseline.resource_types.map((item: { kind: string; count: number }) => (
+                            <Tag key={`baseline-kind-${item.kind}`} color="blue">{item.kind} x{item.count}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                      {Array.isArray(manifestMetaDisplay.recommended?.resource_types) && manifestMetaDisplay.recommended.resource_types.length > 0 ? (
+                        <Space wrap style={{ marginTop: 8 }}>
+                          <Text type="secondary">建议对象：</Text>
+                          {manifestMetaDisplay.recommended.resource_types.map((item: { kind: string; count: number }) => (
+                            <Tag key={`recommended-kind-${item.kind}`} color="geekblue">{item.kind} x{item.count}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                      {manifestMetaDisplay.resourceHints?.added_types?.length ? (
+                        <Space wrap style={{ marginTop: 8 }}>
+                          <Text type="secondary">新增对象：</Text>
+                          {manifestMetaDisplay.resourceHints.added_types.map((kind) => (
+                            <Tag key={`added-kind-${kind}`} color="green">{kind}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                      {manifestMetaDisplay.resourceHints?.removed_types?.length ? (
+                        <Space wrap style={{ marginTop: 8 }}>
+                          <Text type="secondary">移除对象：</Text>
+                          {manifestMetaDisplay.resourceHints.removed_types.map((kind) => (
+                            <Tag key={`removed-kind-${kind}`} color="red">{kind}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                      {manifestMetaDisplay.riskSummary?.highlights?.length ? (
+                        <List
+                          size="small"
+                          style={{ marginTop: 10 }}
+                          dataSource={manifestMetaDisplay.riskSummary.highlights}
+                          renderItem={(item) => <List.Item>{item}</List.Item>}
+                        />
+                      ) : null}
                       {manifestMetaDisplay.riskRules.length > 0 ? (
                         <Space wrap style={{ marginTop: 10 }}>
                           {manifestMetaDisplay.riskRules.map((rule) => (

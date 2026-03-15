@@ -398,7 +398,7 @@ def _read_artifact_json(path_value: str) -> dict[str, Any] | None:
         return None
 
 
-def _summarize_diff_preview(artifact: dict[str, Any]) -> dict[str, Any]:
+def _summarize_diff_preview_v2(artifact: dict[str, Any]) -> dict[str, Any]:
     content = str(artifact.get("preview") or "").strip()
     from_filename = ""
     to_filename = ""
@@ -429,7 +429,7 @@ def _summarize_diff_preview(artifact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_artifact_view_entry(view_key: str, artifact: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+def _build_artifact_view_entry_v2(view_key: str, artifact: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
     filename = _artifact_filename(artifact)
     entry = {
         "view_key": view_key,
@@ -470,7 +470,7 @@ def _build_artifact_view_entry(view_key: str, artifact: dict[str, Any], metadata
             }
         )
     else:
-        entry.update(_summarize_diff_preview(artifact))
+        entry.update(_summarize_diff_preview_v2(artifact))
     entry["summary"] = (
         f"差异摘要：新增 {entry.get('added_lines', 0)} 行，"
         f"删除 {entry.get('removed_lines', 0)} 行，"
@@ -479,7 +479,7 @@ def _build_artifact_view_entry(view_key: str, artifact: dict[str, Any], metadata
     return entry
 
 
-def _build_artifact_views_payload(recommendation) -> dict[str, Any]:
+def _build_artifact_views_payload_v2(recommendation) -> dict[str, Any]:
     artifacts = [item for item in recommendation.artifact_refs if isinstance(item, dict)]
     if not artifacts:
         return {
@@ -499,17 +499,17 @@ def _build_artifact_views_payload(recommendation) -> dict[str, Any]:
     )
 
     baseline_entry = (
-        _build_artifact_view_entry("baseline", group["baseline"], metadata)
+        _build_artifact_view_entry_v2("baseline", group["baseline"], metadata)
         if isinstance(group.get("baseline"), dict)
         else None
     )
     recommended_entry = (
-        _build_artifact_view_entry("recommended", group["recommended"], metadata)
+        _build_artifact_view_entry_v2("recommended", group["recommended"], metadata)
         if isinstance(group.get("recommended"), dict)
         else None
     )
     diff_entry = (
-        _build_artifact_view_entry("diff", group["diff"], metadata)
+        _build_artifact_view_entry_v2("diff", group["diff"], metadata)
         if isinstance(group.get("diff"), dict)
         else None
     )
@@ -530,6 +530,255 @@ def _build_artifact_views_payload(recommendation) -> dict[str, Any]:
         "baseline": baseline_entry,
         "recommended": recommended_entry,
         "diff": diff_entry,
+    }
+
+
+def _summarize_diff_preview(artifact: dict[str, Any]) -> dict[str, Any]:
+    content = str(artifact.get("preview") or "").strip()
+    from_filename = ""
+    to_filename = ""
+    added_lines = 0
+    removed_lines = 0
+    hunk_count = 0
+    for line in content.splitlines():
+        if line.startswith("--- "):
+            from_filename = line.replace("--- ", "", 1).strip()
+            continue
+        if line.startswith("+++ "):
+            to_filename = line.replace("+++ ", "", 1).strip()
+            continue
+        if line.startswith("@@"):
+            hunk_count += 1
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            added_lines += 1
+            continue
+        if line.startswith("-") and not line.startswith("---"):
+            removed_lines += 1
+    return {
+        "from_filename": from_filename,
+        "to_filename": to_filename,
+        "added_lines": added_lines,
+        "removed_lines": removed_lines,
+        "hunk_count": hunk_count,
+    }
+
+
+def _normalize_resource_types(value: Any) -> list[dict[str, Any]]:
+    """标准化资源对象列表，避免前端处理异常结构。"""
+    if not isinstance(value, list):
+        return []
+    resource_types: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip()
+        if not kind:
+            continue
+        try:
+            count = max(0, int(item.get("count") or 0))
+        except (TypeError, ValueError):
+            count = 0
+        resource_types.append({"kind": kind, "count": count})
+    return resource_types
+
+
+def _infer_change_level(total_changed_lines: int, hunk_count: int) -> str:
+    if total_changed_lines >= 30 or hunk_count >= 6:
+        return "high"
+    if total_changed_lines >= 10 or hunk_count >= 3:
+        return "medium"
+    return "low"
+
+
+def _normalize_risk_summary(value: Any) -> dict[str, Any] | None:
+    """统一风险摘要结构，确保字段稳定。"""
+    if not isinstance(value, dict):
+        return None
+    level = str(value.get("level") or "").strip().lower()
+    if level not in {"high", "medium", "low"}:
+        level = "medium"
+    highlights = (
+        [str(item).strip() for item in value.get("highlights", []) if str(item).strip()]
+        if isinstance(value.get("highlights"), list)
+        else []
+    )
+    try:
+        score = max(0, int(value.get("score") or 0))
+    except (TypeError, ValueError):
+        score = 0
+    return {
+        "level": level,
+        "score": score,
+        "review_required": bool(value.get("review_required", True)),
+        "highlights": highlights[:6],
+    }
+
+
+def _normalize_resource_hints(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    added_types = (
+        [str(item).strip() for item in value.get("added_types", []) if str(item).strip()]
+        if isinstance(value.get("added_types"), list)
+        else []
+    )
+    removed_types = (
+        [str(item).strip() for item in value.get("removed_types", []) if str(item).strip()]
+        if isinstance(value.get("removed_types"), list)
+        else []
+    )
+    return {
+        "baseline_types": _normalize_resource_types(value.get("baseline_types")),
+        "recommended_types": _normalize_resource_types(value.get("recommended_types")),
+        "added_types": added_types,
+        "removed_types": removed_types,
+    }
+
+
+def _build_artifact_view_entry(view_key: str, artifact: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+    filename = _artifact_filename(artifact)
+    entry = {
+        "view_key": view_key,
+        "label": "基线" if view_key == "baseline" else "建议" if view_key == "recommended" else "Diff",
+        "filename": filename,
+        "kind": str(artifact.get("kind") or ""),
+        "artifact_id": str(artifact.get("artifact_id") or ""),
+        "task_id": str(artifact.get("task_id") or ""),
+        "summary": str(artifact.get("preview") or "").strip(),
+    }
+
+    if view_key in {"baseline", "recommended"}:
+        section = metadata.get(view_key) if isinstance(metadata, dict) else None
+        if isinstance(section, dict):
+            resource_types = _normalize_resource_types(section.get("resource_types"))
+            entry.update(
+                {
+                    "line_count": int(section.get("line_count") or 0),
+                    "document_count": int(section.get("document_count") or 0),
+                    "sha256": str(section.get("sha256") or ""),
+                    "resource_types": resource_types,
+                }
+            )
+            if entry["line_count"] or entry["document_count"]:
+                entry["summary"] = (
+                    f"{entry['label']} YAML，文档 {entry['document_count']} 个，"
+                    f"行数 {entry['line_count']}"
+                )
+            if resource_types:
+                resource_summary = "、".join(f"{item['kind']} x{item['count']}" for item in resource_types[:4])
+                entry["summary"] = f"{entry['summary']}，对象 {resource_summary}"
+        return entry
+
+    diff_section = metadata.get("diff") if isinstance(metadata, dict) else None
+    if isinstance(diff_section, dict):
+        added_lines = int(diff_section.get("added_lines") or 0)
+        removed_lines = int(diff_section.get("removed_lines") or 0)
+        hunk_count = int(diff_section.get("hunk_count") or 0)
+        total_changed_lines = int(diff_section.get("total_changed_lines") or (added_lines + removed_lines))
+        entry.update(
+            {
+                "from_filename": str((metadata.get("baseline") or {}).get("filename") or ""),
+                "to_filename": str((metadata.get("recommended") or {}).get("filename") or ""),
+                "added_lines": added_lines,
+                "removed_lines": removed_lines,
+                "hunk_count": hunk_count,
+                "total_changed_lines": total_changed_lines,
+                "change_level": str(diff_section.get("change_level") or _infer_change_level(total_changed_lines, hunk_count)),
+            }
+        )
+    else:
+        entry.update(_summarize_diff_preview(artifact))
+        total_changed_lines = int(entry.get("added_lines") or 0) + int(entry.get("removed_lines") or 0)
+        entry["total_changed_lines"] = total_changed_lines
+        entry["change_level"] = _infer_change_level(total_changed_lines, int(entry.get("hunk_count") or 0))
+    entry["summary"] = (
+        f"差异摘要：新增 {entry.get('added_lines', 0)} 行，"
+        f"删除 {entry.get('removed_lines', 0)} 行，"
+        f"变更块 {entry.get('hunk_count', 0)} 处，"
+        f"强度 {entry.get('change_level', 'low')}"
+    )
+    return entry
+
+
+def _build_artifact_views_payload(recommendation) -> dict[str, Any]:
+    """构建三视图载荷，同时补充风险与变更评审信息。"""
+    artifacts = [item for item in recommendation.artifact_refs if isinstance(item, dict)]
+    if not artifacts:
+        return {
+            "primary_view": None,
+            "available_views": [],
+            "baseline": None,
+            "recommended": None,
+            "diff": None,
+            "risk_summary": None,
+            "resource_hints": None,
+            "change_stats": None,
+        }
+
+    group = _build_artifact_group(artifacts)
+    metadata_artifact = group.get("metadata")
+    metadata = (
+        _read_artifact_json(str(metadata_artifact.get("path") or ""))
+        if isinstance(metadata_artifact, dict)
+        else None
+    )
+    risk_summary = _normalize_risk_summary(metadata.get("risk_summary")) if isinstance(metadata, dict) else None
+    resource_hints = _normalize_resource_hints(metadata.get("resource_hints")) if isinstance(metadata, dict) else None
+
+    baseline_entry = (
+        _build_artifact_view_entry("baseline", group["baseline"], metadata)
+        if isinstance(group.get("baseline"), dict)
+        else None
+    )
+    recommended_entry = (
+        _build_artifact_view_entry("recommended", group["recommended"], metadata)
+        if isinstance(group.get("recommended"), dict)
+        else None
+    )
+    diff_entry = (
+        _build_artifact_view_entry("diff", group["diff"], metadata)
+        if isinstance(group.get("diff"), dict)
+        else None
+    )
+
+    if baseline_entry and not baseline_entry.get("resource_types") and resource_hints:
+        baseline_entry["resource_types"] = resource_hints.get("baseline_types") or []
+    if recommended_entry and not recommended_entry.get("resource_types") and resource_hints:
+        recommended_entry["resource_types"] = resource_hints.get("recommended_types") or []
+    if diff_entry and risk_summary:
+        diff_entry["risk_level"] = risk_summary.get("level")
+
+    available_views = [
+        key
+        for key, entry in (
+            ("baseline", baseline_entry),
+            ("recommended", recommended_entry),
+            ("diff", diff_entry),
+        )
+        if entry
+    ]
+    primary_view = "recommended" if recommended_entry else "diff" if diff_entry else "baseline" if baseline_entry else None
+    change_stats = (
+        {
+            "total_changed_lines": int((diff_entry or {}).get("total_changed_lines") or 0),
+            "change_level": str((diff_entry or {}).get("change_level") or "low"),
+            "added_lines": int((diff_entry or {}).get("added_lines") or 0),
+            "removed_lines": int((diff_entry or {}).get("removed_lines") or 0),
+            "hunk_count": int((diff_entry or {}).get("hunk_count") or 0),
+        }
+        if diff_entry
+        else None
+    )
+    return {
+        "primary_view": primary_view,
+        "available_views": available_views,
+        "baseline": baseline_entry,
+        "recommended": recommended_entry,
+        "diff": diff_entry,
+        "risk_summary": risk_summary,
+        "resource_hints": resource_hints,
+        "change_stats": change_stats,
     }
 
 

@@ -370,7 +370,9 @@ class RecommendationService:
         diff_filename: str,
         risk_rules: list[str],
     ) -> str:
-        diff_stats = self._summarize_diff(diff_content)
+        diff_stats = self._enrich_diff_stats(self._summarize_diff(diff_content))
+        baseline_kind_counts = self._extract_manifest_kind_counts(baseline_manifest)
+        recommended_kind_counts = self._extract_manifest_kind_counts(recommended_manifest)
         metadata = {
             "schema_version": "v1",
             "generated_at": f"{datetime.utcnow().isoformat()}Z",
@@ -379,18 +381,29 @@ class RecommendationService:
                 "sha256": self._sha256_text(baseline_manifest),
                 "line_count": self._count_non_empty_lines(baseline_manifest),
                 "document_count": self._count_manifest_documents(baseline_manifest),
+                "resource_types": self._format_resource_types(baseline_kind_counts),
             },
             "recommended": {
                 "filename": recommended_filename,
                 "sha256": self._sha256_text(recommended_manifest),
                 "line_count": self._count_non_empty_lines(recommended_manifest),
                 "document_count": self._count_manifest_documents(recommended_manifest),
+                "resource_types": self._format_resource_types(recommended_kind_counts),
             },
             "diff": {
                 "filename": diff_filename,
                 **diff_stats,
             },
             "risk_rules": risk_rules,
+            "risk_summary": self._build_manifest_risk_summary(
+                diff_stats=diff_stats,
+                risk_rules=risk_rules,
+                recommended_kind_counts=recommended_kind_counts,
+            ),
+            "resource_hints": self._build_manifest_resource_hints(
+                baseline_kind_counts=baseline_kind_counts,
+                recommended_kind_counts=recommended_kind_counts,
+            ),
         }
         return json.dumps(metadata, ensure_ascii=False, indent=2)
 
@@ -413,6 +426,26 @@ class RecommendationService:
             "hunk_count": hunk_count,
         }
 
+    def _enrich_diff_stats(self, diff_stats: dict[str, int]) -> dict[str, Any]:
+        added_lines = int(diff_stats.get("added_lines") or 0)
+        removed_lines = int(diff_stats.get("removed_lines") or 0)
+        hunk_count = int(diff_stats.get("hunk_count") or 0)
+        total_changed_lines = added_lines + removed_lines
+        # 这里使用固定阈值给出变更强度，保证评审信息稳定可解释。
+        if total_changed_lines >= 30 or hunk_count >= 6:
+            change_level = "high"
+        elif total_changed_lines >= 10 or hunk_count >= 3:
+            change_level = "medium"
+        else:
+            change_level = "low"
+        return {
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+            "hunk_count": hunk_count,
+            "total_changed_lines": total_changed_lines,
+            "change_level": change_level,
+        }
+
     def _sha256_text(self, content: str) -> str:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -421,6 +454,84 @@ class RecommendationService:
 
     def _count_manifest_documents(self, content: str) -> int:
         return len([item for item in content.split("\n---\n") if item.strip()])
+
+    def _extract_manifest_kind_counts(self, content: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith("kind:"):
+                continue
+            _, _, raw_kind = stripped.partition(":")
+            kind = raw_kind.strip()
+            if not kind:
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+        return counts
+
+    def _format_resource_types(self, kind_counts: dict[str, int]) -> list[dict[str, Any]]:
+        return [{"kind": key, "count": int(value)} for key, value in sorted(kind_counts.items(), key=lambda item: item[0])]
+
+    def _build_manifest_resource_hints(
+        self,
+        baseline_kind_counts: dict[str, int],
+        recommended_kind_counts: dict[str, int],
+    ) -> dict[str, Any]:
+        baseline_set = set(baseline_kind_counts.keys())
+        recommended_set = set(recommended_kind_counts.keys())
+        return {
+            "baseline_types": self._format_resource_types(baseline_kind_counts),
+            "recommended_types": self._format_resource_types(recommended_kind_counts),
+            "added_types": sorted(recommended_set - baseline_set),
+            "removed_types": sorted(baseline_set - recommended_set),
+        }
+
+    def _build_manifest_risk_summary(
+        self,
+        diff_stats: dict[str, Any],
+        risk_rules: list[str],
+        recommended_kind_counts: dict[str, int],
+    ) -> dict[str, Any]:
+        score = 0
+        highlights: list[str] = []
+
+        rule_count = len(risk_rules)
+        if rule_count > 0:
+            score += min(rule_count, 4)
+            highlights.append(f"应用 {rule_count} 条风险约束规则")
+
+        total_changed_lines = int(diff_stats.get("total_changed_lines") or 0)
+        if total_changed_lines >= 30:
+            score += 3
+            highlights.append(f"变更行数较高（{total_changed_lines} 行）")
+        elif total_changed_lines >= 10:
+            score += 2
+            highlights.append(f"变更行数中等（{total_changed_lines} 行）")
+        elif total_changed_lines > 0:
+            score += 1
+            highlights.append(f"变更行数较低（{total_changed_lines} 行）")
+
+        ingress_count = int(recommended_kind_counts.get("Ingress") or 0)
+        hpa_count = int(recommended_kind_counts.get("HorizontalPodAutoscaler") or 0)
+        if ingress_count > 0:
+            score += 1
+            highlights.append("涉及 Ingress 路由对象变更")
+        if hpa_count > 0:
+            score += 1
+            highlights.append("涉及 HPA 自动扩缩容对象变更")
+
+        if score >= 6:
+            level = "high"
+        elif score >= 3:
+            level = "medium"
+        else:
+            level = "low"
+
+        return {
+            "level": level,
+            "score": score,
+            "review_required": True,
+            "highlights": highlights[:5],
+        }
 
     def _apply_risk_constraints(
         self,
