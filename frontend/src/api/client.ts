@@ -253,10 +253,16 @@ export interface ResourceHotspot {
   type: string
   layer: string
   score: number
+  severity: 'critical' | 'high' | 'medium'
+  category: 'cpu' | 'memory' | 'restart' | 'oom' | 'status' | 'disk' | 'network' | 'other'
   reason: string
+  explanation: string
+  recommended_action: string
   metric: string
   value: string | number
   unit?: string
+  source?: string
+  labels?: string[]
   service_key?: string
   namespace?: string
 }
@@ -317,6 +323,21 @@ export interface ResourceSummary {
   }
   hotspots: ResourceHotspot[]
   hotspot_layers: ResourceHotspotLayers
+  hotspot_summary: {
+    total: number
+    layers: Record<string, number>
+    severities: {
+      critical: number
+      high: number
+      medium: number
+    }
+    categories: Record<string, number>
+    top_services: Array<{
+      service_key: string
+      count: number
+      top_score: number
+    }>
+  }
   risk_summary: ResourceRiskSummary
   risk_items: ResourceRiskItem[]
 }

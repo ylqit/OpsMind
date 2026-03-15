@@ -66,6 +66,24 @@ const emptyRiskSummary: ResourceRiskSummary = {
   },
 }
 
+const emptyHotspotSummary: ResourceSummary['hotspot_summary'] = {
+  total: 0,
+  layers: {
+    host: 0,
+    container: 0,
+    pod: 0,
+    service: 0,
+    other: 0,
+  },
+  severities: {
+    critical: 0,
+    high: 0,
+    medium: 0,
+  },
+  categories: {},
+  top_services: [],
+}
+
 const mergeServiceKeys = (base: string[], incoming: string[]) => {
   const set = new Set(base)
   incoming.filter(Boolean).forEach((item) => set.add(item))
@@ -113,6 +131,40 @@ const riskLevelColor = (level: string) => {
   return 'gold'
 }
 
+const hotspotSeverityLabel = (severity: string) => {
+  if (severity === 'critical') {
+    return '严重'
+  }
+  if (severity === 'high') {
+    return '高'
+  }
+  return '中'
+}
+
+const hotspotSeverityColor = (severity: string) => {
+  if (severity === 'critical') {
+    return 'red'
+  }
+  if (severity === 'high') {
+    return 'orange'
+  }
+  return 'gold'
+}
+
+const hotspotCategoryLabel = (category: string) => {
+  const mapping: Record<string, string> = {
+    cpu: 'CPU',
+    memory: '内存',
+    restart: '重启',
+    oom: 'OOM',
+    status: '状态',
+    disk: '磁盘',
+    network: '网络',
+    other: '其他',
+  }
+  return mapping[category] || category
+}
+
 const layerMeta: Array<{ key: keyof ResourceHotspotLayers; title: string; color: string }> = [
   { key: 'host', title: '主机热点', color: 'geekblue' },
   { key: 'container', title: '容器热点', color: 'orange' },
@@ -146,6 +198,7 @@ const ResourceAnalytics: React.FC = () => {
   )
 
   const hotspotLayers = summary?.hotspot_layers || emptyHotspotLayers
+  const hotspotSummary = summary?.hotspot_summary || emptyHotspotSummary
   const riskSummary = summary?.risk_summary || emptyRiskSummary
   const riskItems = summary?.risk_items || []
 
@@ -321,11 +374,16 @@ const ResourceAnalytics: React.FC = () => {
                 <List.Item>
                   <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                     <Tag color={item.color}>{item.title}</Tag>
-                    <Text strong>{hotspotLayers[item.key].length} 项</Text>
+                    <Text strong>{hotspotSummary.layers[item.key] || hotspotLayers[item.key].length} 项</Text>
                   </Space>
                 </List.Item>
               )}
             />
+            <Space wrap style={{ marginTop: 12 }}>
+              <Tag color="red">严重 {hotspotSummary.severities.critical}</Tag>
+              <Tag color="orange">高 {hotspotSummary.severities.high}</Tag>
+              <Tag color="gold">中 {hotspotSummary.severities.medium}</Tag>
+            </Space>
           </Card>
         </Col>
       </Row>
@@ -346,11 +404,17 @@ const ResourceAnalytics: React.FC = () => {
                       </Space>
                       <Paragraph style={{ marginBottom: 6 }}>{item.reason}</Paragraph>
                       <Space wrap>
+                        <Tag color={hotspotSeverityColor(item.severity)}>{hotspotSeverityLabel(item.severity)}</Tag>
+                        <Tag>{hotspotCategoryLabel(item.category)}</Tag>
                         <Tag>{item.metric}</Tag>
                         <Tag color="geekblue">{formatHotspotValue(item)}</Tag>
                         {item.service_key ? <Tag color="cyan">{item.service_key}</Tag> : null}
                         {item.namespace ? <Tag>{item.namespace}</Tag> : null}
                       </Space>
+                      <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 6 }}>
+                        {item.explanation}
+                      </Paragraph>
+                      <Text type="secondary">建议动作：{item.recommended_action}</Text>
                     </div>
                   </List.Item>
                 )}
@@ -425,6 +489,15 @@ const ResourceAnalytics: React.FC = () => {
         </Col>
         <Col xs={24} lg={10}>
           <Card loading={bootLoading} title="资产目录" className="ops-surface-card">
+            {hotspotSummary.top_services.length ? (
+              <Space wrap style={{ marginBottom: 12 }}>
+                {hotspotSummary.top_services.map((item) => (
+                  <Tag key={item.service_key} color="cyan">
+                    {item.service_key} · {item.count} 项 · 最高 {item.top_score}
+                  </Tag>
+                ))}
+              </Space>
+            ) : null}
             <List
               dataSource={assets.items}
               locale={{ emptyText: <CardEmptyState title="暂无资产" /> }}
