@@ -230,6 +230,22 @@ export interface TrafficSummary {
   trend: Array<{ timestamp: string; requests: number; errors: number }>
   error_samples: LogSampleRecord[]
   records_sample?: Array<Record<string, unknown>>
+  data_status?: 'ready' | 'empty' | 'degraded' | 'unavailable'
+  data_message?: string
+  degradation_reasons?: string[]
+  load_stats?: {
+    configured_paths: number
+    scanned_files: number
+    missing_files: number
+    unreadable_files: number
+    lines_read: number
+    parsed_lines: number
+    matched_records: number
+    parse_failures: number
+    enrich_failures: number
+    time_filtered: number
+    service_filtered: number
+  }
 }
 
 export interface ResourceHotspot {

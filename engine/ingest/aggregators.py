@@ -9,41 +9,28 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Dict, Iterable, List
 
-from .log_samples import build_log_samples
+from .log_samples import build_log_samples, collect_log_sample_candidates
 
 
 class LogAggregators:
     """日志聚合工具。"""
 
-    def summarize(self, records: Iterable[Dict[str, object]]) -> Dict[str, object]:
-        items = list(records)
-        if not items:
-            return {
-                "total_requests": 0,
-                "page_views": 0,
-                "error_rate": 0.0,
-                "avg_latency": 0.0,
-                "top_paths": [],
-                "hot_paths": [],
-                "top_ips": [],
-                "hot_ips": [],
-                "status_distribution": [],
-                "geo_distribution": [],
-                "ua_distribution": [],
-                "trend": [],
-                "error_samples": [],
-            }
+    def summarize(
+        self,
+        records: Iterable[Dict[str, object]],
+        sample_limit: int = 8,
+        records_sample_limit: int = 20,
+    ) -> Dict[str, object]:
+        total = 0
+        page_views = 0
+        error_count = 0
+        latency_sum = 0.0
 
-        total = len(items)
-        page_views = sum(1 for item in items if item.get("is_page_view"))
-        error_count = sum(1 for item in items if int(item.get("status", 0)) >= 500)
-        avg_latency = round(sum(float(item.get("request_time", 0.0)) for item in items) / total, 4)
-
-        path_counter = Counter(str(item.get("path", "/")) for item in items)
-        ip_counter = Counter(str(item.get("remote_addr", "unknown")) for item in items)
-        status_counter = Counter(str(item.get("status", 0)) for item in items)
-        geo_counter = Counter(str((item.get("geo") or {}).get("region", "未知")) for item in items)
-        ua_counter = Counter(str((item.get("ua") or {}).get("browser", "Unknown")) for item in items)
+        path_counter: Counter[str] = Counter()
+        ip_counter: Counter[str] = Counter()
+        status_counter: Counter[str] = Counter()
+        geo_counter: Counter[str] = Counter()
+        ua_counter: Counter[str] = Counter()
 
         trend_map: Dict[str, Dict[str, float]] = defaultdict(lambda: {"requests": 0, "errors": 0})
         path_metrics: Dict[str, Dict[str, float]] = defaultdict(lambda: {"count": 0, "errors": 0, "latency_sum": 0.0})
@@ -56,15 +43,36 @@ class LogAggregators:
                 "geo_label": "未知",
             }
         )
-        for item in items:
-            ts = str(item.get("timestamp", ""))
-            bucket = self._bucket_minute(ts)
-            trend_map[bucket]["requests"] += 1
+        sample_candidates: List[Dict[str, object]] = []
+        records_sample: List[Dict[str, object]] = []
 
-            path = str(item.get("path", "/"))
-            ip = str(item.get("remote_addr", "unknown"))
+        for item in records:
+            total += 1
+            if item.get("is_page_view"):
+                page_views += 1
+
             status = int(item.get("status", 0))
             latency = float(item.get("request_time", 0.0))
+            path = str(item.get("path", "/"))
+            ip = str(item.get("remote_addr", "unknown"))
+            ts = str(item.get("timestamp", ""))
+
+            if status >= 500:
+                error_count += 1
+            latency_sum += latency
+
+            if len(records_sample) < records_sample_limit:
+                records_sample.append(item)
+            collect_log_sample_candidates(sample_candidates, item, limit=max(sample_limit * 8, 32))
+
+            path_counter[path] += 1
+            ip_counter[ip] += 1
+            status_counter[str(status)] += 1
+            geo_counter[str((item.get("geo") or {}).get("region", "未知"))] += 1
+            ua_counter[str((item.get("ua") or {}).get("browser", "Unknown"))] += 1
+
+            bucket = self._bucket_minute(ts)
+            trend_map[bucket]["requests"] += 1
 
             path_metrics[path]["count"] += 1
             path_metrics[path]["latency_sum"] += latency
@@ -84,11 +92,14 @@ class LogAggregators:
                 path_metrics[path]["errors"] += 1
                 ip_metrics[ip]["errors"] = int(ip_metrics[ip]["errors"]) + 1
 
+        if not total:
+            return self._empty_summary()
+
         return {
             "total_requests": total,
             "page_views": page_views,
-            "error_rate": round((error_count / total) * 100, 2) if total else 0.0,
-            "avg_latency": avg_latency,
+            "error_rate": round((error_count / total) * 100, 2),
+            "avg_latency": round(latency_sum / total, 4),
             "top_paths": self._top_paths(path_counter),
             "hot_paths": self._hot_paths(path_metrics),
             "top_ips": self._top_ips(ip_counter),
@@ -98,9 +109,28 @@ class LogAggregators:
             "ua_distribution": self._counter_to_named_list(ua_counter, limit=10),
             "trend": [
                 {"timestamp": bucket, "requests": values["requests"], "errors": values["errors"]}
-                for bucket, values in sorted(trend_map.items(), key=lambda item: item[0])
+                for bucket, values in sorted(trend_map.items(), key=lambda pair: pair[0])
             ],
-            "error_samples": self._error_samples(items),
+            "error_samples": build_log_samples(sample_candidates, limit=sample_limit),
+            "records_sample": records_sample,
+        }
+
+    def _empty_summary(self) -> Dict[str, object]:
+        return {
+            "total_requests": 0,
+            "page_views": 0,
+            "error_rate": 0.0,
+            "avg_latency": 0.0,
+            "top_paths": [],
+            "hot_paths": [],
+            "top_ips": [],
+            "hot_ips": [],
+            "status_distribution": [],
+            "geo_distribution": [],
+            "ua_distribution": [],
+            "trend": [],
+            "error_samples": [],
+            "records_sample": [],
         }
 
     def _bucket_minute(self, iso_text: str) -> str:
@@ -108,18 +138,17 @@ class LogAggregators:
             parsed = datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
             return parsed.replace(second=0, microsecond=0).isoformat()
         except ValueError:
-            return datetime.utcnow().replace(second=0, microsecond=0).isoformat()
+            return datetime.now().replace(second=0, microsecond=0).isoformat()
 
-    def _counter_to_named_list(self, counter: Counter, limit: int = 5, key_name: str = "name") -> List[Dict[str, object]]:
+    def _counter_to_named_list(self, counter: Counter[str], limit: int = 5, key_name: str = "name") -> List[Dict[str, object]]:
         return [{key_name: name, "count": count} for name, count in counter.most_common(limit)]
 
-    def _top_paths(self, counter: Counter, limit: int = 8) -> List[Dict[str, object]]:
+    def _top_paths(self, counter: Counter[str], limit: int = 8) -> List[Dict[str, object]]:
         return [{"path": path, "count": count} for path, count in counter.most_common(limit)]
 
-    def _top_ips(self, counter: Counter, limit: int = 8) -> List[Dict[str, object]]:
+    def _top_ips(self, counter: Counter[str], limit: int = 8) -> List[Dict[str, object]]:
         return [{"ip": ip, "count": count} for ip, count in counter.most_common(limit)]
 
-    # 热点路径不只看请求量，也把错误密度和平均耗时一起带上，前端可以直接用于排障排序。
     def _hot_paths(self, path_metrics: Dict[str, Dict[str, float]], limit: int = 8) -> List[Dict[str, object]]:
         ranked: List[Dict[str, object]] = []
         for path, metrics in path_metrics.items():
@@ -139,7 +168,6 @@ class LogAggregators:
         ranked.sort(key=lambda item: (-item["error_count"], -item["count"], -item["avg_latency"], item["path"]))
         return ranked[:limit]
 
-    # 异常来源 IP 需要带上路径样本和地域，前端才能直接拿来做入口排障定位。
     def _hot_ips(self, ip_metrics: Dict[str, Dict[str, object]], limit: int = 8) -> List[Dict[str, object]]:
         ranked: List[Dict[str, object]] = []
         for ip, metrics in ip_metrics.items():
@@ -160,6 +188,3 @@ class LogAggregators:
             )
         ranked.sort(key=lambda item: (-item["error_count"], -item["count"], -item["avg_latency"], item["ip"]))
         return ranked[:limit]
-
-    def _error_samples(self, items: List[Dict[str, object]], limit: int = 8) -> List[Dict[str, object]]:
-        return build_log_samples(items, limit=limit)

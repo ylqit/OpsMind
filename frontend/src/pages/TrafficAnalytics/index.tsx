@@ -73,6 +73,41 @@ const TrafficAnalytics: React.FC = () => {
     () => serviceKeys.map((item) => ({ value: item, label: item })),
     [serviceKeys],
   )
+  const dataStatusBanner = useMemo(() => {
+    if (!summary || error) {
+      return null
+    }
+
+    const loadStats = summary.load_stats
+    if (summary.data_status === 'unavailable') {
+      return {
+        type: 'warning' as const,
+        title: '访问日志源未配置',
+        description: summary.data_message || '当前环境还没有可读取的访问日志文件。',
+      }
+    }
+    if (summary.data_status === 'degraded') {
+      const details = [
+        summary.data_message || '部分日志已降级处理。',
+        loadStats
+          ? `已扫描 ${loadStats.scanned_files} 个文件，解析失败 ${loadStats.parse_failures} 行，富化降级 ${loadStats.enrich_failures} 行。`
+          : '',
+      ].filter(Boolean)
+      return {
+        type: 'warning' as const,
+        title: '流量数据部分降级',
+        description: details.join(' '),
+      }
+    }
+    if (summary.data_status === 'empty') {
+      return {
+        type: 'info' as const,
+        title: '当前时间窗暂无访问日志',
+        description: summary.data_message || '可以切换时间窗或服务范围继续查看。',
+      }
+    }
+    return null
+  }, [summary, error])
 
   const loadServiceKeys = async () => {
     try {
@@ -189,6 +224,14 @@ const TrafficAnalytics: React.FC = () => {
           description={error}
           actionText="重新加载"
           onAction={() => void loadSummary()}
+        />
+      ) : null}
+
+      {dataStatusBanner ? (
+        <PageStatusBanner
+          type={dataStatusBanner.type}
+          title={dataStatusBanner.title}
+          description={dataStatusBanner.description}
         />
       ) : null}
 

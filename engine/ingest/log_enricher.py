@@ -14,16 +14,48 @@ class LogEnricher:
     """对结构化日志做轻量富化。"""
 
     def enrich(self, record: Dict[str, object], host_hint: str = "") -> Dict[str, object]:
-        remote_addr = str(record.get("remote_addr") or "")
-        user_agent = str(record.get("user_agent") or "")
-        path = str(record.get("path") or "/")
-        host = host_hint or self._extract_host(str(record.get("referer") or ""))
-        record["ip_scope"] = self._detect_ip_scope(remote_addr)
-        record["geo"] = self._build_geo(remote_addr)
-        record["ua"] = self._parse_user_agent(user_agent)
-        record["is_page_view"] = self._is_page_view(path)
-        record["service_key"] = self._build_service_key(host, path)
-        return record
+        enriched = dict(record)
+        remote_addr = str(enriched.get("remote_addr") or "")
+        user_agent = str(enriched.get("user_agent") or "")
+        path = str(enriched.get("path") or "/")
+        host = host_hint or self._extract_host(str(enriched.get("referer") or ""))
+        geo = self._build_geo(remote_addr)
+        ua = self._parse_user_agent(user_agent)
+
+        enriched["ip_scope"] = self._detect_ip_scope(remote_addr)
+        enriched["geo"] = geo
+        enriched["ua"] = ua
+        enriched["geo_label"] = self._build_geo_label(geo)
+        enriched["browser"] = ua["browser"]
+        enriched["os"] = ua["os"]
+        enriched["device"] = ua["device"]
+        enriched["client_ip"] = remote_addr or "-"
+        enriched["is_page_view"] = self._is_page_view(path)
+        enriched["service_key"] = self._build_service_key(host, path)
+        return enriched
+
+    def fallback_enrich(self, record: Dict[str, object], host_hint: str = "") -> Dict[str, object]:
+        """当富化过程异常时，返回最小可用字段，避免整批日志被丢弃。"""
+        enriched = dict(record)
+        path = str(enriched.get("path") or "/")
+        remote_addr = str(enriched.get("remote_addr") or "")
+        user_agent = str(enriched.get("user_agent") or "")
+        host = host_hint or "unknown-host"
+        geo = self._build_geo(remote_addr)
+        ua = self._parse_user_agent(user_agent)
+
+        enriched["ip_scope"] = self._detect_ip_scope(remote_addr)
+        enriched["geo"] = geo
+        enriched["ua"] = ua
+        enriched["geo_label"] = self._build_geo_label(geo)
+        enriched["browser"] = ua["browser"]
+        enriched["os"] = ua["os"]
+        enriched["device"] = ua["device"]
+        enriched["client_ip"] = remote_addr or "-"
+        enriched["is_page_view"] = self._is_page_view(path)
+        enriched["service_key"] = self._build_service_key(host, path)
+        enriched["enrich_fallback"] = True
+        return enriched
 
     def _detect_ip_scope(self, ip_text: str) -> str:
         try:
@@ -45,6 +77,11 @@ class LogEnricher:
         if scope == "public":
             return {"country": "公网", "region": "未知区域", "city": "未知城市"}
         return {"country": "未知", "region": "未知", "city": "未知"}
+
+    def _build_geo_label(self, geo: Dict[str, str]) -> str:
+        return "/".join(
+            [str(part) for part in [geo.get("country"), geo.get("region"), geo.get("city")] if part],
+        ) or "未知"
 
     def _parse_user_agent(self, user_agent: str) -> Dict[str, str]:
         ua = user_agent.lower()

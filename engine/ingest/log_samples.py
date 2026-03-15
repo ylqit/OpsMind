@@ -3,7 +3,7 @@
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 
 def format_log_sample(record: Dict[str, object]) -> Dict[str, object]:
@@ -37,6 +37,27 @@ def format_log_sample(record: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def log_sample_rank_key(record: Dict[str, object]) -> Tuple[float, float, str]:
+    """统一日志样本排序规则，错误优先，其次看耗时和时间。"""
+    return (
+        -float(record.get("status") or 0),
+        -float(record.get("request_time") or 0.0),
+        str(record.get("timestamp") or ""),
+    )
+
+
+def collect_log_sample_candidates(
+    candidates: List[Dict[str, object]],
+    record: Dict[str, object],
+    limit: int = 64,
+) -> None:
+    """把候选样本控制在一个小窗口内，避免大日志量时无限堆积。"""
+    candidates.append(record)
+    candidates.sort(key=log_sample_rank_key)
+    if len(candidates) > limit:
+        del candidates[limit:]
+
+
 def select_log_sample_records(records: Iterable[Dict[str, object]], limit: int = 8) -> List[Dict[str, object]]:
     """挑出更适合直接排障阅读的日志记录。"""
     items = list(records)
@@ -47,11 +68,7 @@ def select_log_sample_records(records: Iterable[Dict[str, object]], limit: int =
     source = interesting or items
     ranked = sorted(
         source,
-        key=lambda item: (
-            -int(item.get("status") or 0),
-            -float(item.get("request_time") or 0.0),
-            str(item.get("timestamp") or ""),
-        ),
+        key=log_sample_rank_key,
     )
     return ranked[:limit]
 
