@@ -20,6 +20,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   executorsApi,
   type ExecutorReadonlyCommandPack,
+  type ExecutorFailureDigest,
   type ExecutorPluginStatus,
   type ExecutorRunResponse,
   type ExecutorStatusResponse,
@@ -51,6 +52,18 @@ const formatDateTime = (value?: string | null) => {
     return value
   }
   return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const summarizeText = (value?: string | null, maxChars = 120) => {
+  const normalized = (value || '').trim()
+  if (!normalized) {
+    return '-'
+  }
+  const firstLine = normalized.split('\n').find((line) => line.trim())?.trim() || normalized
+  if (firstLine.length <= maxChars) {
+    return firstLine
+  }
+  return `${firstLine.slice(0, Math.max(1, maxChars - 3))}...`
 }
 
 const ExecutorPlugins: React.FC = () => {
@@ -97,6 +110,35 @@ const ExecutorPlugins: React.FC = () => {
     }
     return Array.from(grouped.values())
   }, [selectedPlugin])
+
+  const recentFailures = useMemo<ExecutorFailureDigest[]>(() => {
+    // 后端已返回 recent_failures 时直接使用；否则退化为前端基于 recent_logs 的兜底计算。
+    if (statusData?.recent_failures?.length) {
+      return statusData.recent_failures
+    }
+    return (statusData?.recent_logs || [])
+      .filter((item) => item.status !== 'success')
+      .slice(0, 8)
+      .map((item) => ({
+        ...item,
+        stderr_summary: summarizeText(item.stderr_preview || item.error_message || '-'),
+        approval_required: item.error_code === 'EXECUTOR_APPROVAL_REQUIRED',
+        has_approval_ticket: Boolean(item.approval_ticket),
+      }))
+  }, [statusData])
+
+  const statusSummary = useMemo(() => {
+    const summary = statusData?.summary
+    if (!summary) {
+      return '暂无执行统计'
+    }
+    const success = summary.success || 0
+    const error = summary.error || 0
+    const timeout = summary.timeout || 0
+    const rejected = summary.rejected || 0
+    const circuitOpen = summary.circuit_open || 0
+    return `成功 ${success}，失败 ${error}，超时 ${timeout}，拦截 ${rejected}，熔断 ${circuitOpen}`
+  }, [statusData])
 
   const loadStatus = async () => {
     setLoading(true)
@@ -249,6 +291,16 @@ const ExecutorPlugins: React.FC = () => {
                     ),
                   },
                   {
+                    title: '失败信息',
+                    dataIndex: 'last_error',
+                    render: (_: string, record: ExecutorPluginStatus) => (
+                      <Space direction="vertical" size={2}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>失败次数 {record.failure_count}</Text>
+                        <Text style={{ fontSize: 12 }}>{summarizeText(record.last_error || '-')}</Text>
+                      </Space>
+                    ),
+                  },
+                  {
                     title: '启停',
                     dataIndex: 'enabled',
                     render: (value: boolean, record: ExecutorPluginStatus) => (
@@ -388,6 +440,7 @@ const ExecutorPlugins: React.FC = () => {
                 </Space>
                 <Descriptions column={1} size="small" bordered>
                   <Descriptions.Item label="命令">{runResult.execution.command}</Descriptions.Item>
+                  <Descriptions.Item label="审批单">{runResult.execution.approval_ticket || '-'}</Descriptions.Item>
                   <Descriptions.Item label="错误码">{runResult.execution.error_code || '-'}</Descriptions.Item>
                   <Descriptions.Item label="错误消息">{runResult.execution.error_message || '-'}</Descriptions.Item>
                   <Descriptions.Item label="标准输出">
@@ -397,6 +450,22 @@ const ExecutorPlugins: React.FC = () => {
                     <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{runResult.execution.stderr_preview || '-'}</pre>
                   </Descriptions.Item>
                 </Descriptions>
+                {runResult.execution.status === 'circuit_open' ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`插件处于熔断状态，预计 ${runResult.plugin.circuit_remaining_seconds}s 后恢复`}
+                    description={summarizeText(runResult.plugin.last_error || runResult.execution.error_message || '-')}
+                  />
+                ) : null}
+                {runResult.execution.error_code === 'EXECUTOR_APPROVAL_REQUIRED' ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="写操作缺少审批单"
+                    description="本次命令已被拦截，请补充审批单后重试。"
+                  />
+                ) : null}
                 {runResult.task_evidence ? (
                   // 任务挂链结果单独展示，避免用户误以为执行成功就一定写入了任务证据链。
                   <Alert
@@ -434,38 +503,69 @@ const ExecutorPlugins: React.FC = () => {
             {!statusData ? (
               <CardEmptyState title="暂无日志" />
             ) : (
-              <Table
-                size="small"
-                rowKey="execution_id"
-                pagination={false}
-                dataSource={statusData.recent_logs}
-                locale={{ emptyText: <CardEmptyState title="暂无审计日志" /> }}
-                columns={[
-                  {
-                    title: '时间',
-                    dataIndex: 'created_at',
-                    width: 170,
-                    render: (value: string) => formatDateTime(value),
-                  },
-                  {
-                    title: '插件',
-                    dataIndex: 'plugin_key',
-                    width: 90,
-                    render: (value: string) => <Tag>{value}</Tag>,
-                  },
-                  {
-                    title: '状态',
-                    dataIndex: 'status',
-                    width: 120,
-                    render: (value: string) => <Tag color={runStatusColorMap[value] || 'default'}>{value}</Tag>,
-                  },
-                  {
-                    title: '命令',
-                    dataIndex: 'command',
-                    render: (value: string) => <Text code>{value}</Text>,
-                  },
-                ]}
-              />
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Alert
+                  type={recentFailures.length > 0 ? 'warning' : 'success'}
+                  showIcon
+                  message={statusSummary}
+                  description={
+                    <>
+                      <div>审批拦截 {statusData.summary.approval_required || 0} 次，熔断插件 {statusData.summary.circuit_open_plugins || 0} 个。</div>
+                      <div>
+                        高频错误：
+                        {(statusData.summary.top_error_codes || [])
+                          .map((item) => `${item.error_code}(${item.count})`)
+                          .join('，') || '暂无'}
+                      </div>
+                    </>
+                  }
+                />
+                <Table
+                  size="small"
+                  rowKey="execution_id"
+                  pagination={false}
+                  dataSource={statusData.recent_logs}
+                  locale={{ emptyText: <CardEmptyState title="暂无审计日志" /> }}
+                  columns={[
+                    {
+                      title: '时间',
+                      dataIndex: 'created_at',
+                      width: 170,
+                      render: (value: string) => formatDateTime(value),
+                    },
+                    {
+                      title: '插件',
+                      dataIndex: 'plugin_key',
+                      width: 90,
+                      render: (value: string) => <Tag>{value}</Tag>,
+                    },
+                    {
+                      title: '状态',
+                      dataIndex: 'status',
+                      width: 120,
+                      render: (value: string) => <Tag color={runStatusColorMap[value] || 'default'}>{value}</Tag>,
+                    },
+                    {
+                      title: '审批单',
+                      dataIndex: 'approval_ticket',
+                      width: 140,
+                      render: (value: string) => (value ? <Tag color="blue">{value}</Tag> : <Text type="secondary">-</Text>),
+                    },
+                    {
+                      title: 'stderr 摘要',
+                      key: 'stderr_summary',
+                      render: (_: unknown, record: ExecutorFailureDigest) => (
+                        <Text>{summarizeText(record.stderr_summary || record.stderr_preview || record.error_message || '-')}</Text>
+                      ),
+                    },
+                    {
+                      title: '命令',
+                      dataIndex: 'command',
+                      render: (value: string) => <Text code>{value}</Text>,
+                    },
+                  ]}
+                />
+              </Space>
             )}
           </Card>
         </Col>

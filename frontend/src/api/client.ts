@@ -877,13 +877,32 @@ export interface ExecutorAuditLog {
   created_at: string
 }
 
+export interface ExecutorFailureDigest extends ExecutorAuditLog {
+  stderr_summary?: string
+  approval_required?: boolean
+  has_approval_ticket?: boolean
+}
+
 export interface ExecutorStatusResponse {
   plugins: ExecutorPluginStatus[]
   recent_logs: ExecutorAuditLog[]
+  recent_failures?: ExecutorFailureDigest[]
+  recent_limit?: number
   summary: {
     total: number
     enabled: number
     degraded: number
+    success?: number
+    error?: number
+    timeout?: number
+    rejected?: number
+    circuit_open?: number
+    approval_required?: number
+    circuit_open_plugins?: number
+    top_error_codes?: Array<{
+      error_code: string
+      count: number
+    }>
   }
 }
 

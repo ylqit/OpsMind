@@ -280,6 +280,34 @@ class ExecutorService:
             return ""
         return raw[: self.MAX_PREVIEW_CHARS]
 
+    def _build_stderr_summary(self, stderr_preview: str, error_message: str, max_chars: int = 160) -> str:
+        text = (stderr_preview or "").strip()
+        if text:
+            first_non_empty = next((line.strip() for line in text.splitlines() if line.strip()), "")
+            candidate = first_non_empty or text
+        else:
+            candidate = (error_message or "").strip()
+        if not candidate:
+            return "-"
+        if len(candidate) <= max_chars:
+            return candidate
+        return f"{candidate[: max_chars - 3]}..."
+
+    def _build_recent_failure_item(self, audit_payload: dict[str, Any]) -> dict[str, Any]:
+        error_code = str(audit_payload.get("error_code") or "").strip()
+        approval_ticket = str(audit_payload.get("approval_ticket") or "").strip()
+        stderr_summary = self._build_stderr_summary(
+            str(audit_payload.get("stderr_preview") or ""),
+            str(audit_payload.get("error_message") or ""),
+        )
+        # 失败摘要字段直接服务前端表格，避免页面重复拼接规则。
+        return {
+            **audit_payload,
+            "stderr_summary": stderr_summary,
+            "approval_required": error_code == "EXECUTOR_APPROVAL_REQUIRED",
+            "has_approval_ticket": bool(approval_ticket),
+        }
+
     def _serialize_plugin(self, plugin: ExecutorPluginRecord) -> dict[str, Any]:
         spec = self._specs.get(plugin.plugin_key)
         now = datetime.utcnow()
@@ -391,15 +419,54 @@ class ExecutorService:
 
     def get_status(self, recent_limit: int = 30) -> dict[str, Any]:
         plugins = [self._serialize_plugin(item) for item in self.plugin_repository.list()]
-        recent_logs = [self._serialize_audit(item) for item in self.audit_repository.list(limit=recent_limit)]
+        safe_recent_limit = max(1, min(recent_limit, 200))
+        recent_logs = [self._serialize_audit(item) for item in self.audit_repository.list(limit=safe_recent_limit)]
+        failure_logs = [self._serialize_audit(item) for item in self.audit_repository.list_failures(limit=safe_recent_limit)]
+
+        status_counter: dict[str, int] = {
+            ExecutorRunStatus.SUCCESS.value: 0,
+            ExecutorRunStatus.ERROR.value: 0,
+            ExecutorRunStatus.TIMEOUT.value: 0,
+            ExecutorRunStatus.REJECTED.value: 0,
+            ExecutorRunStatus.CIRCUIT_OPEN.value: 0,
+        }
+        for item in recent_logs:
+            status_key = str(item.get("status") or "")
+            if status_key in status_counter:
+                status_counter[status_key] += 1
+
+        # 仅返回近期失败样本，前端可直接展示“熔断/审批/stderr”摘要。
+        recent_failures = [self._build_recent_failure_item(item) for item in failure_logs[:8]]
+        approval_required_count = sum(1 for item in failure_logs if item.get("error_code") == "EXECUTOR_APPROVAL_REQUIRED")
+        circuit_plugins = [item for item in plugins if int(item.get("circuit_remaining_seconds") or 0) > 0]
+
+        error_code_counter: dict[str, int] = {}
+        for item in failure_logs:
+            error_code = str(item.get("error_code") or "").strip() or "UNKNOWN"
+            error_code_counter[error_code] = error_code_counter.get(error_code, 0) + 1
+        top_error_codes = [
+            {"error_code": key, "count": value}
+            for key, value in sorted(error_code_counter.items(), key=lambda pair: pair[1], reverse=True)[:5]
+        ]
+
         return {
             "plugins": plugins,
             "recent_logs": recent_logs,
+            "recent_failures": recent_failures,
             "summary": {
                 "total": len(plugins),
                 "enabled": sum(1 for item in plugins if item["enabled"]),
                 "degraded": sum(1 for item in plugins if item["health_status"] == ExecutorHealthStatus.DEGRADED.value),
+                "success": status_counter[ExecutorRunStatus.SUCCESS.value],
+                "error": status_counter[ExecutorRunStatus.ERROR.value],
+                "timeout": status_counter[ExecutorRunStatus.TIMEOUT.value],
+                "rejected": status_counter[ExecutorRunStatus.REJECTED.value],
+                "circuit_open": status_counter[ExecutorRunStatus.CIRCUIT_OPEN.value],
+                "approval_required": approval_required_count,
+                "circuit_open_plugins": len(circuit_plugins),
+                "top_error_codes": top_error_codes,
             },
+            "recent_limit": safe_recent_limit,
         }
 
     def list_readonly_command_packs(self, plugin_key: str | None = None) -> dict[str, Any]:

@@ -16,6 +16,7 @@ from engine.runtime.models import (
     Asset,
     ExecutorAuditRecord,
     ExecutorPluginRecord,
+    ExecutorRunStatus,
     Incident,
     Recommendation,
     RecommendationFeedback,
@@ -999,5 +1000,18 @@ class ExecutorAuditLogRepository:
         rows = self.db.fetchall(
             f"SELECT * FROM executor_audit_logs {where_clause} ORDER BY created_at DESC LIMIT ?",
             [*params, safe_limit],
+        )
+        return [self._from_row(row) for row in rows]
+
+    def list_failures(self, limit: int = 100) -> List[ExecutorAuditRecord]:
+        safe_limit = max(1, min(limit, 500))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM executor_audit_logs
+            WHERE status != ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (ExecutorRunStatus.SUCCESS.value, safe_limit),
         )
         return [self._from_row(row) for row in rows]
