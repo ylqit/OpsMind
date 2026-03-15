@@ -52,6 +52,7 @@ class IncidentAISummaryPayload(BaseModel):
     primary_causes: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
+    role_views: dict[str, dict[str, Any]] = Field(default_factory=dict)
     parse_mode: str = "fallback"
     validation_status: str = "fallback_template"
     retry_count: int = 0
@@ -59,6 +60,22 @@ class IncidentAISummaryPayload(BaseModel):
     guardrail_error_message: str = ""
     log_sample_count: int = 0
     recommendation_count: int = 0
+
+
+class IncidentRoleViewSchema(BaseModel):
+    """异常总结中的单视角结构。"""
+
+    headline: str = Field(..., min_length=1, max_length=300)
+    key_findings: list[str] = Field(default_factory=list, max_length=6)
+    actions: list[str] = Field(default_factory=list, max_length=6)
+
+
+class IncidentRoleViewsSchema(BaseModel):
+    """异常总结中的多视角结构。"""
+
+    traffic: IncidentRoleViewSchema | None = None
+    resource: IncidentRoleViewSchema | None = None
+    risk: IncidentRoleViewSchema | None = None
 
 
 class IncidentSummarySchema(BaseModel):
@@ -70,6 +87,7 @@ class IncidentSummarySchema(BaseModel):
     primary_causes: list[str] = Field(default_factory=list, max_length=6)
     recommended_actions: list[str] = Field(default_factory=list, max_length=10)
     evidence_citations: list[str] = Field(default_factory=list, max_length=10)
+    role_views: IncidentRoleViewsSchema | None = None
 
 
 def _serialize_incident(incident) -> dict[str, Any]:
@@ -183,6 +201,93 @@ def _normalize_confidence(value: Any) -> float:
     return max(0.0, min(1.0, score))
 
 
+def _build_fallback_role_views(
+    incident,
+    primary_causes: list[str],
+    recommended_actions: list[str],
+    samples: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    high_status_samples = [item for item in samples if int(item.get("status") or 0) >= 500]
+    traffic_findings = [
+        f"{item.get('method')} {item.get('path')} status={item.get('status')} latency={item.get('latency_ms')}ms"
+        for item in (high_status_samples or samples)[:3]
+    ]
+    if not traffic_findings:
+        traffic_findings = [cause for cause in primary_causes if "流量" in cause or "请求" in cause][:2]
+    if not traffic_findings:
+        traffic_findings = ["当前时间窗缺少可用流量样本"]
+
+    resource_findings = [cause for cause in primary_causes if any(keyword in cause for keyword in ["CPU", "内存", "资源", "重启", "OOM"])]
+    if not resource_findings:
+        resource_findings = primary_causes[:2]
+    if not resource_findings:
+        resource_findings = ["资源侧证据不足，建议结合监控继续观察"]
+
+    risk_findings = []
+    if str(incident.severity).lower() == "critical":
+        risk_findings.append("当前异常等级为 critical，需优先控制变更风险")
+    risk_findings.extend(primary_causes[:2])
+    if not risk_findings:
+        risk_findings = ["当前异常风险可控，建议继续观察趋势变化"]
+
+    traffic_headline = "入口流量侧存在异常波动，建议优先确认错误峰值与热点路径。"
+    if high_status_samples:
+        traffic_headline = "入口流量侧出现 5xx 聚集，需要先抑制失败请求扩散。"
+    if not samples:
+        traffic_headline = "缺少流量样本，流量侧结论可信度有限。"
+
+    resource_headline = "资源侧出现紧张信号，建议优先核对容量与限额配置。"
+    if not any(keyword in " ".join(resource_findings) for keyword in ["CPU", "内存", "资源", "重启", "OOM"]):
+        resource_headline = "资源侧暂未观察到明确瓶颈，建议继续跟踪关键指标。"
+
+    risk_headline = "风险侧建议采用小步变更策略，先验证再放量。"
+    if str(incident.severity).lower() == "critical":
+        risk_headline = "风险侧优先建议止血与回滚预案并行，避免影响继续扩大。"
+
+    return {
+        "traffic": {
+            "headline": traffic_headline,
+            "key_findings": traffic_findings[:6],
+            "actions": (recommended_actions[:2] or ["先定位异常路径，再逐步限流验证"])[:6],
+        },
+        "resource": {
+            "headline": resource_headline,
+            "key_findings": resource_findings[:6],
+            "actions": (recommended_actions[1:3] or recommended_actions[:2] or ["核对资源限额并补充容量余量"])[:6],
+        },
+        "risk": {
+            "headline": risk_headline,
+            "key_findings": risk_findings[:6],
+            "actions": (recommended_actions[:3] or ["保留回滚预案并设定观察窗口"])[:6],
+        },
+    }
+
+
+def _normalize_role_view(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        value = {}
+    headline = str(value.get("headline") or "").strip() or str(fallback.get("headline") or "").strip() or "暂无结论"
+    key_findings = _to_string_list(value.get("key_findings"), limit=6) or _to_string_list(fallback.get("key_findings"), limit=6)
+    actions = _to_string_list(value.get("actions"), limit=6) or _to_string_list(fallback.get("actions"), limit=6)
+    return {
+        "headline": headline,
+        "key_findings": key_findings,
+        "actions": actions,
+    }
+
+
+def _normalize_role_views(payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_views = payload.get("role_views")
+    if not isinstance(raw_views, dict):
+        raw_views = {}
+    # 统一补齐三类视角，保证前端展示结构稳定。
+    return {
+        "traffic": _normalize_role_view(raw_views.get("traffic"), fallback["traffic"]),
+        "resource": _normalize_role_view(raw_views.get("resource"), fallback["resource"]),
+        "risk": _normalize_role_view(raw_views.get("risk"), fallback["risk"]),
+    }
+
+
 def _build_fallback_payload(incident, recommendations: list[Any], samples: list[dict[str, Any]]) -> dict[str, Any]:
     primary_causes = [tag.replace("_", " ") for tag in incident.reasoning_tags[:3]]
     if not primary_causes:
@@ -211,6 +316,7 @@ def _build_fallback_payload(incident, recommendations: list[Any], samples: list[
         "primary_causes": primary_causes,
         "recommended_actions": recommended_actions,
         "evidence_citations": evidence_citations,
+        "role_views": _build_fallback_role_views(incident, primary_causes, recommended_actions, samples),
     }
 
 
@@ -222,6 +328,7 @@ def _normalize_summary_payload(payload: dict[str, Any], fallback: dict[str, Any]
         "primary_causes": _to_string_list(payload.get("primary_causes"), limit=6) or fallback["primary_causes"],
         "recommended_actions": _to_string_list(payload.get("recommended_actions"), limit=10) or fallback["recommended_actions"],
         "evidence_citations": _to_string_list(payload.get("evidence_citations"), limit=10) or fallback["evidence_citations"],
+        "role_views": _normalize_role_views(payload, fallback["role_views"]),
     }
 
 
@@ -304,7 +411,8 @@ async def generate_incident_ai_summary(
                 "你是运维分析助手。"
                 "请严格输出 JSON 对象，字段固定为："
                 "summary(string), risk_level(high|medium|low), confidence(0-1),"
-                "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[])。"
+                "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[]),"
+                "role_views(object: traffic/resource/risk，每项包含 headline/key_findings/actions)。"
                 "不要输出 markdown，不要输出额外字段。"
             ),
         },
@@ -328,7 +436,8 @@ async def generate_incident_ai_summary(
         assistant_role="运维分析助手",
         required_fields=(
             "summary(string), risk_level(high|medium|low), confidence(0-1), "
-            "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[])"
+            "primary_causes(string[]), recommended_actions(string[]), evidence_citations(string[]), "
+            "role_views(object: traffic/resource/risk -> headline/key_findings/actions)"
         ),
         context_lines=[str(messages[1].get("content") or "-")],
         schema_model=IncidentSummarySchema,

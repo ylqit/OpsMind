@@ -5,6 +5,7 @@ import {
   aiApi,
   incidentsApi,
   recommendationsApi,
+  type AISummaryRoleView,
   type IncidentEvidenceRef,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
@@ -56,6 +57,12 @@ const signalStrengthMeta: Record<string, { label: string; color: string }> = {
   medium: { label: '中优先', color: 'gold' },
   low: { label: '低优先', color: 'default' },
 }
+
+const aiRoleViewMeta: Array<{ key: 'traffic' | 'resource' | 'risk'; title: string; color: string }> = [
+  { key: 'traffic', title: '流量视角', color: 'blue' },
+  { key: 'resource', title: '资源视角', color: 'orange' },
+  { key: 'risk', title: '风险视角', color: 'red' },
+]
 
 const formatEvidenceValue = (item: EvidenceItem) => {
   if (item.value === undefined || item.value === null || item.value === '') {
@@ -209,6 +216,25 @@ export const IncidentCenter: React.FC = () => {
     }
     return recommendationTask
   }, [recommendationTask, selectedIncident])
+
+  const aiRoleViews = useMemo(() => {
+    if (!aiSummary?.role_views) {
+      return []
+    }
+    // 固定输出三视角，避免因为字段缺失导致 UI 布局抖动。
+    return aiRoleViewMeta
+      .map((meta) => {
+        const view = aiSummary.role_views?.[meta.key] as AISummaryRoleView | undefined
+        if (!view) {
+          return null
+        }
+        return {
+          ...meta,
+          view,
+        }
+      })
+      .filter((item): item is { key: 'traffic' | 'resource' | 'risk'; title: string; color: string; view: AISummaryRoleView } => Boolean(item))
+  }, [aiSummary])
 
   const latestRecommendation = useMemo(() => {
     if (!selectedIncident?.recommendations.length) {
@@ -615,6 +641,32 @@ export const IncidentCenter: React.FC = () => {
                       <Tag>{aiSummary.parse_mode === 'json' ? '结构化输出' : '降级输出'}</Tag>
                     </Space>
                     <Paragraph style={{ marginBottom: 12, whiteSpace: 'pre-wrap' }}>{aiSummary.summary}</Paragraph>
+                    {aiRoleViews.length ? (
+                      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                        {aiRoleViews.map((item) => (
+                          <Col xs={24} md={8} key={item.key}>
+                            <Card size="small" title={<Space><Tag color={item.color}>{item.title}</Tag></Space>}>
+                              <Paragraph style={{ marginBottom: 8 }}>{item.view.headline}</Paragraph>
+                              <Text strong style={{ display: 'block', marginBottom: 6 }}>关键发现</Text>
+                              <List
+                                size="small"
+                                dataSource={item.view.key_findings}
+                                locale={{ emptyText: '无' }}
+                                renderItem={(entry) => <List.Item>{entry}</List.Item>}
+                                style={{ marginBottom: 8 }}
+                              />
+                              <Text strong style={{ display: 'block', marginBottom: 6 }}>建议动作</Text>
+                              <List
+                                size="small"
+                                dataSource={item.view.actions}
+                                locale={{ emptyText: '无' }}
+                                renderItem={(entry) => <List.Item>{entry}</List.Item>}
+                              />
+                            </Card>
+                          </Col>
+                        ))}
+                      </Row>
+                    ) : null}
                     <Text strong style={{ display: 'block', marginBottom: 8 }}>可能原因</Text>
                     <List
                       size="small"

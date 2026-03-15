@@ -567,6 +567,18 @@ export interface IncidentDetailResponse {
   recommendation_tasks?: IncidentRecommendationTaskLink[]
 }
 
+export interface AISummaryRoleView {
+  headline: string
+  key_findings: string[]
+  actions: string[]
+}
+
+export interface AISummaryRoleViews {
+  traffic?: AISummaryRoleView
+  resource?: AISummaryRoleView
+  risk?: AISummaryRoleView
+}
+
 export interface IncidentAISummaryResponse {
   incident_id: string
   provider: string
@@ -576,6 +588,7 @@ export interface IncidentAISummaryResponse {
   primary_causes: string[]
   recommended_actions: string[]
   evidence_citations: string[]
+  role_views?: AISummaryRoleViews
   parse_mode: string
   validation_status?: string
   retry_count?: number
@@ -596,6 +609,7 @@ export interface RecommendationAIReviewResponse {
   rollback_plan: string[]
   validation_checks: string[]
   evidence_citations: string[]
+  role_views?: AISummaryRoleViews
   parse_mode: string
   validation_status?: string
   retry_count?: number

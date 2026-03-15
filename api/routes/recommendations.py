@@ -48,6 +48,7 @@ class RecommendationReviewSchema(BaseModel):
     rollback_plan: list[str] = Field(default_factory=list, max_length=8)
     validation_checks: list[str] = Field(default_factory=list, max_length=8)
     evidence_citations: list[str] = Field(default_factory=list, max_length=8)
+    role_views: dict[str, dict[str, Any]] | None = None
 
 
 class RecommendationAIReviewPayload(BaseModel):
@@ -63,6 +64,7 @@ class RecommendationAIReviewPayload(BaseModel):
     rollback_plan: list[str] = Field(default_factory=list)
     validation_checks: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
+    role_views: dict[str, dict[str, Any]] = Field(default_factory=dict)
     parse_mode: str = "fallback"
     validation_status: str = "fallback_template"
     retry_count: int = 0
@@ -810,6 +812,74 @@ def _normalize_confidence(value: Any, default: float) -> float:
     return max(0.0, min(1.0, score))
 
 
+def _build_fallback_review_role_views(
+    recommendation,
+    incident,
+    validation_checks: list[str],
+    rollback_plan: list[str],
+) -> dict[str, dict[str, Any]]:
+    incident_tags = [str(tag).replace("_", " ").strip() for tag in (incident.reasoning_tags or []) if str(tag).strip()]
+    if not incident_tags:
+        incident_tags = ["当前异常标签有限，需补充上下文"]
+
+    traffic_findings = [item for item in incident_tags if any(keyword in item for keyword in ["traffic", "流量", "错误率", "延迟"])]
+    if not traffic_findings:
+        traffic_findings = incident_tags[:2]
+
+    resource_findings = [item for item in incident_tags if any(keyword in item for keyword in ["resource", "cpu", "memory", "资源", "重启", "oom"])]
+    if not resource_findings:
+        resource_findings = incident_tags[:2]
+
+    risk_findings = [recommendation.risk_note.strip()] if str(recommendation.risk_note or "").strip() else []
+    if str(incident.severity).lower() == "critical":
+        risk_findings.append("异常严重度为 critical，建议先止血后优化")
+    if not risk_findings:
+        risk_findings = ["建议采用渐进式发布，避免一次性放大全量风险"]
+
+    return {
+        "traffic": {
+            "headline": "流量视角关注入口稳定性，先验证错误率与延迟是否回落。",
+            "key_findings": traffic_findings[:6],
+            "actions": validation_checks[:3] or ["先在灰度流量中验证关键指标"],
+        },
+        "resource": {
+            "headline": "资源视角关注容量与限额，避免新配置触发资源抖动。",
+            "key_findings": resource_findings[:6],
+            "actions": validation_checks[1:4] or validation_checks[:2] or ["核对资源限额并保留回退空间"],
+        },
+        "risk": {
+            "headline": "风险视角建议保留回滚路径，分阶段推进配置变更。",
+            "key_findings": risk_findings[:6],
+            "actions": rollback_plan[:3] or ["保留旧配置并定义回滚触发条件"],
+        },
+    }
+
+
+def _normalize_role_view(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        value = {}
+    headline = str(value.get("headline") or "").strip() or str(fallback.get("headline") or "").strip() or "暂无结论"
+    key_findings = _to_string_list(value.get("key_findings"), limit=6) or _to_string_list(fallback.get("key_findings"), limit=6)
+    actions = _to_string_list(value.get("actions"), limit=6) or _to_string_list(fallback.get("actions"), limit=6)
+    return {
+        "headline": headline,
+        "key_findings": key_findings,
+        "actions": actions,
+    }
+
+
+def _normalize_role_views(payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_views = payload.get("role_views")
+    if not isinstance(raw_views, dict):
+        raw_views = {}
+    # 统一三视角结构，降低前端分支判断复杂度。
+    return {
+        "traffic": _normalize_role_view(raw_views.get("traffic"), fallback["traffic"]),
+        "resource": _normalize_role_view(raw_views.get("resource"), fallback["resource"]),
+        "risk": _normalize_role_view(raw_views.get("risk"), fallback["risk"]),
+    }
+
+
 def _build_fallback_review_payload(recommendation, incident) -> dict[str, Any]:
     risk_level = "high" if incident.severity == "critical" else "medium" if incident.severity == "warning" else "low"
     validation_checks = [
@@ -838,6 +908,7 @@ def _build_fallback_review_payload(recommendation, incident) -> dict[str, Any]:
         "rollback_plan": rollback_plan,
         "validation_checks": validation_checks,
         "evidence_citations": evidence_citations,
+        "role_views": _build_fallback_review_role_views(recommendation, incident, validation_checks, rollback_plan),
     }
 
 
@@ -850,6 +921,7 @@ def _normalize_review_payload(payload: dict[str, Any], fallback: dict[str, Any])
         "rollback_plan": _to_string_list(payload.get("rollback_plan"), limit=8) or fallback["rollback_plan"],
         "validation_checks": _to_string_list(payload.get("validation_checks"), limit=8) or fallback["validation_checks"],
         "evidence_citations": _to_string_list(payload.get("evidence_citations"), limit=8) or fallback["evidence_citations"],
+        "role_views": _normalize_role_views(payload, fallback["role_views"]),
     }
 
 
@@ -1137,7 +1209,8 @@ async def review_recommendation_with_ai(
                 "请严格输出 JSON 对象，字段固定为："
                 "summary(string), risk_level(high|medium|low), confidence(0-1),"
                 "risk_assessment(string), rollback_plan(string[]),"
-                "validation_checks(string[]), evidence_citations(string[])。"
+                "validation_checks(string[]), evidence_citations(string[]),"
+                "role_views(object: traffic/resource/risk，每项包含 headline/key_findings/actions)。"
                 "不要输出 markdown，不要输出额外字段。"
             ),
         },
@@ -1164,7 +1237,8 @@ async def review_recommendation_with_ai(
         required_fields=(
             "summary(string), risk_level(high|medium|low), confidence(0-1), "
             "risk_assessment(string), rollback_plan(string[]), "
-            "validation_checks(string[]), evidence_citations(string[])"
+            "validation_checks(string[]), evidence_citations(string[]), "
+            "role_views(object: traffic/resource/risk -> headline/key_findings/actions)"
         ),
         context_lines=[str(messages[1].get("content") or "-")],
         schema_model=RecommendationReviewSchema,
