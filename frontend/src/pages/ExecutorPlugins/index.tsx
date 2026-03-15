@@ -16,6 +16,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import { useNavigate } from 'react-router-dom'
 import {
   executorsApi,
   type ExecutorReadonlyCommandPack,
@@ -53,6 +54,7 @@ const formatDateTime = (value?: string | null) => {
 }
 
 const ExecutorPlugins: React.FC = () => {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
@@ -61,6 +63,7 @@ const ExecutorPlugins: React.FC = () => {
   const [command, setCommand] = useState('ps aux')
   const [readonly, setReadonly] = useState(true)
   const [operator, setOperator] = useState('operator')
+  const [taskId, setTaskId] = useState('')
   const [approvalTicket, setApprovalTicket] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(20)
   const [runResult, setRunResult] = useState<ExecutorRunResponse | null>(null)
@@ -160,6 +163,7 @@ const ExecutorPlugins: React.FC = () => {
         command: command.trim(),
         readonly,
         timeout_seconds: timeoutSeconds,
+        task_id: taskId.trim() || undefined,
         operator: operator.trim() || 'operator',
         approval_ticket: approvalTicket.trim() || undefined,
       })) as ExecutorRunResponse
@@ -300,6 +304,13 @@ const ExecutorPlugins: React.FC = () => {
                 <Descriptions.Item label="操作人">
                   <Input value={operator} onChange={(event) => setOperator(event.target.value)} placeholder="operator" />
                 </Descriptions.Item>
+                <Descriptions.Item label="关联任务 ID">
+                  <Input
+                    value={taskId}
+                    onChange={(event) => setTaskId(event.target.value)}
+                    placeholder="可选，填写后会把执行记录挂到任务证据链"
+                  />
+                </Descriptions.Item>
                 <Descriptions.Item label="审批单">
                   <Input
                     value={approvalTicket}
@@ -386,6 +397,33 @@ const ExecutorPlugins: React.FC = () => {
                     <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{runResult.execution.stderr_preview || '-'}</pre>
                   </Descriptions.Item>
                 </Descriptions>
+                {runResult.task_evidence ? (
+                  // 任务挂链结果单独展示，避免用户误以为执行成功就一定写入了任务证据链。
+                  <Alert
+                    type={runResult.task_evidence.linked ? 'success' : 'info'}
+                    showIcon
+                    message={
+                      runResult.task_evidence.linked
+                        ? '执行记录已挂载到任务证据链'
+                        : `任务证据链未挂载：${runResult.task_evidence.reason || 'unknown'}`
+                    }
+                    description={
+                      runResult.task_evidence.linked
+                        ? `任务 ${runResult.task_evidence.task_id}，产物 ${runResult.task_evidence.artifact_id}`
+                        : runResult.task_evidence.message || '本次执行仅记录在插件审计日志中'
+                    }
+                    action={
+                      runResult.task_evidence.task_id ? (
+                        <Button
+                          size="small"
+                          onClick={() => navigate(`/tasks?taskId=${encodeURIComponent(runResult.task_evidence?.task_id || '')}`)}
+                        >
+                          打开任务中心
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                ) : null}
               </Space>
             )}
           </Card>

@@ -890,6 +890,14 @@ export interface ExecutorStatusResponse {
 export interface ExecutorRunResponse {
   execution: ExecutorAuditLog
   plugin: ExecutorPluginStatus
+  task_evidence?: {
+    linked: boolean
+    reason?: string
+    message?: string
+    task_id?: string
+    artifact_id?: string
+    execution_id?: string
+  }
 }
 
 export interface ExecutorReadonlyCommandPackListResponse {

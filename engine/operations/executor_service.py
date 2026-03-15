@@ -356,6 +356,39 @@ class ExecutorService:
             "created_at": item.created_at.isoformat(),
         }
 
+    def build_execution_evidence(self, run_result: dict[str, Any]) -> dict[str, Any]:
+        execution = run_result.get("execution") if isinstance(run_result.get("execution"), dict) else {}
+        plugin = run_result.get("plugin") if isinstance(run_result.get("plugin"), dict) else {}
+        # 统一证据快照结构，便于任务中心、异常中心和建议中心复用同一数据契约。
+        return {
+            "source": "executor_plugin",
+            "generated_at": datetime.utcnow().isoformat(),
+            "execution": {
+                "execution_id": str(execution.get("execution_id") or ""),
+                "task_id": str(execution.get("task_id") or ""),
+                "plugin_key": str(execution.get("plugin_key") or ""),
+                "command": str(execution.get("command") or ""),
+                "readonly": bool(execution.get("readonly", True)),
+                "status": str(execution.get("status") or ""),
+                "exit_code": execution.get("exit_code"),
+                "duration_ms": int(execution.get("duration_ms") or 0),
+                "error_code": str(execution.get("error_code") or ""),
+                "error_message": str(execution.get("error_message") or ""),
+                "stdout_preview": str(execution.get("stdout_preview") or ""),
+                "stderr_preview": str(execution.get("stderr_preview") or ""),
+                "operator": str(execution.get("operator") or ""),
+                "approval_ticket": str(execution.get("approval_ticket") or ""),
+                "created_at": str(execution.get("created_at") or ""),
+            },
+            "plugin": {
+                "plugin_key": str(plugin.get("plugin_key") or ""),
+                "display_name": str(plugin.get("display_name") or ""),
+                "health_status": str(plugin.get("health_status") or ""),
+                "readonly_only": bool(plugin.get("readonly_only", True)),
+                "write_enabled": bool(plugin.get("write_enabled", False)),
+            },
+        }
+
     def get_status(self, recent_limit: int = 30) -> dict[str, Any]:
         plugins = [self._serialize_plugin(item) for item in self.plugin_repository.list()]
         recent_logs = [self._serialize_audit(item) for item in self.audit_repository.list(limit=recent_limit)]
