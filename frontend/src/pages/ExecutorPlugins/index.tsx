@@ -5,7 +5,6 @@ import {
   Card,
   Col,
   Descriptions,
-  Empty,
   Input,
   InputNumber,
   Row,
@@ -23,6 +22,7 @@ import {
   type ExecutorRunResponse,
   type ExecutorStatusResponse,
 } from '@/api/client'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -53,6 +53,7 @@ const formatDateTime = (value?: string | null) => {
 
 const ExecutorPlugins: React.FC = () => {
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
   const [statusData, setStatusData] = useState<ExecutorStatusResponse | null>(null)
   const [selectedPluginKey, setSelectedPluginKey] = useState('linux')
@@ -75,14 +76,15 @@ const ExecutorPlugins: React.FC = () => {
 
   const loadStatus = async () => {
     setLoading(true)
+    setError('')
     try {
       const response = (await executorsApi.getStatus({ limit: 30 })) as ExecutorStatusResponse
       setStatusData(response)
       if (response.plugins.length > 0 && !response.plugins.some((item) => item.plugin_key === selectedPluginKey)) {
         setSelectedPluginKey(response.plugins[0].plugin_key)
       }
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '执行插件状态加载失败')
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '执行插件状态加载失败')
     } finally {
       setLoading(false)
     }
@@ -111,8 +113,8 @@ const ExecutorPlugins: React.FC = () => {
       })
       message.success('插件配置已更新')
       await loadStatus()
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '插件配置更新失败')
+    } catch (patchError) {
+      message.error(patchError instanceof Error ? patchError.message : '插件配置更新失败')
     }
   }
 
@@ -150,8 +152,8 @@ const ExecutorPlugins: React.FC = () => {
         message.error('命令执行失败，请查看审计记录')
       }
       await loadStatus()
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '命令执行失败')
+    } catch (runError) {
+      message.error(runError instanceof Error ? runError.message : '命令执行失败')
     } finally {
       setRunning(false)
     }
@@ -171,11 +173,21 @@ const ExecutorPlugins: React.FC = () => {
         </Space>
       </div>
 
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="执行插件状态加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadStatus()}
+        />
+      ) : null}
+
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card title="插件状态" loading={loading} className="ops-surface-card">
             {!statusData || statusData.plugins.length === 0 ? (
-              <Empty description="暂无插件数据" />
+              <CardEmptyState title="暂无插件数据" description="当前还没有可展示的执行插件状态" />
             ) : (
               <Table
                 size="small"
@@ -286,14 +298,16 @@ const ExecutorPlugins: React.FC = () => {
                   type={selectedPlugin.enabled ? 'info' : 'warning'}
                   showIcon
                   message={`${selectedPlugin.display_name}：${selectedPlugin.description}`}
-                  description={
+                  description={(
                     <Space direction="vertical" size={4}>
                       <Text type="secondary">只读示例：{selectedPlugin.readonly_examples.join(' | ') || '-'}</Text>
                       <Text type="secondary">写入示例：{selectedPlugin.write_examples.join(' | ') || '-'}</Text>
                     </Space>
-                  }
+                  )}
                 />
-              ) : null}
+              ) : (
+                <CardEmptyState title="请先选择插件" description="选择一个执行插件后再输入命令" />
+              )}
             </Space>
           </Card>
         </Col>
@@ -303,7 +317,7 @@ const ExecutorPlugins: React.FC = () => {
         <Col xs={24} lg={12}>
           <Card title="最近执行结果" className="ops-surface-card">
             {!runResult ? (
-              <Empty description="尚未执行命令" />
+              <CardEmptyState title="尚未执行命令" description="执行一次命令后会在这里展示结果摘要" />
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
                 <Space wrap>
@@ -331,13 +345,14 @@ const ExecutorPlugins: React.FC = () => {
         <Col xs={24} lg={12}>
           <Card title="审计日志" loading={loading} className="ops-surface-card">
             {!statusData ? (
-              <Empty description="暂无日志" />
+              <CardEmptyState title="暂无日志" />
             ) : (
               <Table
                 size="small"
                 rowKey="execution_id"
                 pagination={false}
                 dataSource={statusData.recent_logs}
+                locale={{ emptyText: <CardEmptyState title="暂无审计日志" /> }}
                 columns={[
                   {
                     title: '时间',

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd'
+import { AutoComplete, Button, Card, Col, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { Line } from '@ant-design/plots'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -8,6 +8,7 @@ import {
   type AIUsageMetricsResponse,
   type RecommendationMetricsResponse,
 } from '@/api/client'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph } = Typography
@@ -60,6 +61,7 @@ const QualityMetrics: React.FC = () => {
   const resetQualityFilters = useWorkspaceFilterStore((state) => state.resetQualityFilters)
 
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationMetricsResponse | null>(null)
   const [aiUsageMetrics, setAiUsageMetrics] = useState<AIUsageMetricsResponse | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
@@ -109,6 +111,7 @@ const QualityMetrics: React.FC = () => {
     const { startDate, endDate } = resolveDateRange(activeWindow)
 
     setLoading(true)
+    setError('')
     try {
       const [recommendationResponse, aiUsageResponse] = await Promise.all([
         metricsApi.getRecommendation({
@@ -128,8 +131,8 @@ const QualityMetrics: React.FC = () => {
       setRecommendationMetrics(recommendationResponse)
       setAiUsageMetrics(aiUsageResponse)
       setServiceKeys((prev) => mergeServiceKeys(prev, recommendationResponse.service_breakdown.map((item) => item.service_key)))
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '质量看板数据加载失败')
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '质量看板数据加载失败')
     } finally {
       setLoading(false)
     }
@@ -210,6 +213,16 @@ const QualityMetrics: React.FC = () => {
         </Space>
       </div>
 
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="质量看板加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadMetrics()}
+        />
+      ) : null}
+
       <Space wrap style={{ marginBottom: 4 }}>
         <Tag color="blue">时间窗：{windowSize}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
@@ -271,12 +284,12 @@ const QualityMetrics: React.FC = () => {
                 xField="date"
                 yField="value"
                 seriesField="type"
-                color={["#16a34a", "#ef4444", "#2563eb"]}
+                color={['#16a34a', '#ef4444', '#2563eb']}
                 height={300}
                 smooth
               />
             ) : (
-              <Empty description="暂无 recommendation 指标数据" />
+              <CardEmptyState title="暂无 recommendation 指标数据" description="当前筛选条件下还没有建议质量样本" />
             )}
           </Card>
         </Col>
@@ -288,12 +301,12 @@ const QualityMetrics: React.FC = () => {
                 xField="date"
                 yField="value"
                 seriesField="type"
-                color={["#0ea5e9", "#f97316"]}
+                color={['#0ea5e9', '#f97316']}
                 height={300}
                 smooth
               />
             ) : (
-              <Empty description="暂无 AI 调用数据" />
+              <CardEmptyState title="暂无 AI 调用数据" description="当前筛选条件下还没有调用趋势样本" />
             )}
           </Card>
         </Col>
@@ -307,6 +320,7 @@ const QualityMetrics: React.FC = () => {
               rowKey="service_key"
               pagination={false}
               dataSource={recommendationMetrics?.service_breakdown || []}
+              locale={{ emptyText: <CardEmptyState title="暂无服务质量数据" /> }}
               columns={[
                 {
                   title: '服务',
@@ -343,6 +357,7 @@ const QualityMetrics: React.FC = () => {
               rowKey={(record) => `${record.provider_name || '-'}-${record.model || '-'}`}
               pagination={false}
               dataSource={aiUsageMetrics?.provider_breakdown || []}
+              locale={{ emptyText: <CardEmptyState title="暂无模型调用数据" /> }}
               columns={[
                 {
                   title: 'Provider',

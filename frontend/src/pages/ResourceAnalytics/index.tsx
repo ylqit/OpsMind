@@ -9,6 +9,7 @@ import {
   type ResourceRiskSummary,
   type ResourceSummary,
 } from '@/api/client'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph, Text } = Typography
@@ -131,6 +132,7 @@ const ResourceAnalytics: React.FC = () => {
   const deferredServiceKey = useDeferredValue(serviceKey)
 
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [summary, setSummary] = useState<ResourceSummary | null>(null)
   const [assets, setAssets] = useState<AssetListResponse>({ items: [], total: 0, synced: 0 })
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
@@ -156,6 +158,7 @@ const ResourceAnalytics: React.FC = () => {
     } else {
       setLoading(true)
     }
+    setError('')
     try {
       const [resourceResponse, assetResponse] = await Promise.all([
         resourcesApi.getSummary({ time_range: activeTimeRange, service_key: activeServiceKey || undefined }) as Promise<ResourceSummary>,
@@ -167,6 +170,8 @@ const ResourceAnalytics: React.FC = () => {
         .map((item) => item.service_key)
         .filter((item): item is string => typeof item === 'string' && item.length > 0)
       setServiceKeys((prev) => mergeServiceKeys(prev, keys))
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '资源分析加载失败')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -231,6 +236,16 @@ const ResourceAnalytics: React.FC = () => {
           <Button type="link" loading={refreshing} onClick={() => void loadData({ serviceKey })}>刷新</Button>
         </Space>
       </div>
+
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="资源分析加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadData()}
+        />
+      ) : null}
 
       <Space wrap style={{ marginBottom: 12 }}>
         <Tag color="blue">时间窗：{timeRangeLabelMap[timeRange] || timeRange}</Tag>
@@ -321,7 +336,7 @@ const ResourceAnalytics: React.FC = () => {
             <Card loading={bootLoading} title={layerItem.title} className="ops-surface-card">
               <List
                 dataSource={hotspotLayers[layerItem.key]}
-                locale={{ emptyText: `当前没有${layerItem.title}` }}
+                locale={{ emptyText: <CardEmptyState title={`当前没有${layerItem.title}`} /> }}
                 renderItem={(item) => (
                   <List.Item>
                     <div style={{ width: '100%' }}>
@@ -384,7 +399,7 @@ const ResourceAnalytics: React.FC = () => {
                   ellipsis: true,
                 },
               ]}
-              locale={{ emptyText: '当前时间窗暂无 OOM/重启风险' }}
+              locale={{ emptyText: <CardEmptyState title="当前时间窗暂无 OOM/重启风险" /> }}
             />
           </Card>
         </Col>
@@ -397,6 +412,7 @@ const ResourceAnalytics: React.FC = () => {
               rowKey={(record) => String(record.asset_id)}
               pagination={false}
               dataSource={summary?.containers?.items || []}
+              locale={{ emptyText: <CardEmptyState title="暂无容器摘要" /> }}
               columns={[
                 { title: '容器', dataIndex: 'name' },
                 { title: '服务键', dataIndex: 'service_key' },
@@ -411,7 +427,7 @@ const ResourceAnalytics: React.FC = () => {
           <Card loading={bootLoading} title="资产目录" className="ops-surface-card">
             <List
               dataSource={assets.items}
-              locale={{ emptyText: '暂无资产' }}
+              locale={{ emptyText: <CardEmptyState title="暂无资产" /> }}
               renderItem={(item) => (
                 <List.Item>
                   <div style={{ width: '100%' }}>

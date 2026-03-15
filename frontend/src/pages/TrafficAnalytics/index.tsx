@@ -1,8 +1,9 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Badge, Button, Card, Col, Empty, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { AutoComplete, Badge, Button, Card, Col, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { Column, Line, Pie } from '@ant-design/plots'
 import { useSearchParams } from 'react-router-dom'
 import { resourcesApi, trafficApi, type TrafficErrorSample, type TrafficSummary } from '@/api/client'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
 const { Title, Paragraph, Text } = Typography
@@ -61,6 +62,7 @@ const TrafficAnalytics: React.FC = () => {
   const deferredServiceKey = useDeferredValue(serviceKey)
 
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [summary, setSummary] = useState<TrafficSummary | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
@@ -93,6 +95,7 @@ const TrafficAnalytics: React.FC = () => {
     } else {
       setLoading(true)
     }
+    setError('')
     try {
       const response = (await trafficApi.getSummary({
         time_range: activeTimeRange,
@@ -101,6 +104,8 @@ const TrafficAnalytics: React.FC = () => {
       setSummary(response)
       const keysFromRecords = extractServiceKeysFromRecords(response.records_sample)
       setServiceKeys((prev) => mergeServiceKeys(prev, keysFromRecords))
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '流量分析加载失败')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -177,6 +182,16 @@ const TrafficAnalytics: React.FC = () => {
         </Space>
       </div>
 
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="流量分析加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadSummary()}
+        />
+      ) : null}
+
       <Space wrap style={{ marginBottom: 12 }}>
         <Tag color="blue">时间窗：{timeRangeLabelMap[timeRange] || timeRange}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
@@ -208,11 +223,11 @@ const TrafficAnalytics: React.FC = () => {
                 yField="value"
                 seriesField="type"
                 height={280}
-                color={["#2563eb", "#ef4444"]}
+                color={['#2563eb', '#ef4444']}
                 point={{ size: 3 }}
                 smooth
               />
-            ) : <Empty description="暂无趋势数据" />}
+            ) : <CardEmptyState title="暂无趋势数据" description="当前时间窗还没有请求趋势样本" />}
           </Card>
         </Col>
         <Col xs={24} lg={10}>
@@ -224,7 +239,7 @@ const TrafficAnalytics: React.FC = () => {
                 colorField="type"
                 height={280}
               />
-            ) : <Empty description="暂无状态码数据" />}
+            ) : <CardEmptyState title="暂无状态码数据" />}
           </Card>
         </Col>
       </Row>
@@ -236,7 +251,7 @@ const TrafficAnalytics: React.FC = () => {
               rowKey="path"
               pagination={false}
               dataSource={summary?.hot_paths || []}
-              locale={{ emptyText: <Empty description="暂无热点路径数据" /> }}
+              locale={{ emptyText: <CardEmptyState title="暂无热点路径数据" /> }}
               columns={[
                 {
                   title: '路径',
@@ -257,7 +272,7 @@ const TrafficAnalytics: React.FC = () => {
               rowKey="ip"
               pagination={false}
               dataSource={summary?.hot_ips || []}
-              locale={{ emptyText: <Empty description="暂无异常来源 IP" /> }}
+              locale={{ emptyText: <CardEmptyState title="暂无异常来源 IP" /> }}
               columns={[
                 { title: 'IP', dataIndex: 'ip', width: 148 },
                 { title: '请求数', dataIndex: 'count', width: 84 },
@@ -282,14 +297,14 @@ const TrafficAnalytics: React.FC = () => {
                   </Tag>
                 ))}
               </div>
-            ) : <Empty description="暂无路径分布" />}
+            ) : <CardEmptyState title="暂无路径分布" />}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title="终端分布" loading={bootLoading} className="ops-surface-card">
             {summary?.ua_distribution?.length ? (
               <Column data={summary.ua_distribution} xField="name" yField="count" color="#0f766e" height={240} />
-            ) : <Empty description="暂无终端分布" />}
+            ) : <CardEmptyState title="暂无终端分布" />}
           </Card>
         </Col>
       </Row>
@@ -301,7 +316,7 @@ const TrafficAnalytics: React.FC = () => {
               rowKey={(record: TrafficErrorSample, index?: number) => `${record.timestamp}-${record.path}-${index || 0}`}
               pagination={false}
               dataSource={summary?.error_samples || []}
-              locale={{ emptyText: <Empty description="当前时间窗没有高风险请求样本" /> }}
+              locale={{ emptyText: <CardEmptyState title="当前时间窗没有高风险请求样本" /> }}
               columns={[
                 {
                   title: '状态',

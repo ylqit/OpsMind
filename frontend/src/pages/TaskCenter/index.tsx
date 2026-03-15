@@ -4,7 +4,6 @@ import {
   Card,
   Col,
   Descriptions,
-  Empty,
   Input,
   List,
   Modal,
@@ -28,6 +27,7 @@ import {
   type TaskRecord,
 } from '@/api/client'
 import { useTaskEventStream } from '@/hooks/useTaskEventStream'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 
 const { Paragraph, Text, Title } = Typography
 const { TextArea } = Input
@@ -121,6 +121,7 @@ const getGuardrailMeta = (summary: TaskGuardrailSummary | null) => {
 export const TaskCenter: React.FC = () => {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskDetailResponse | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -171,9 +172,15 @@ export const TaskCenter: React.FC = () => {
   )
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
-    const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
-    setSelectedTask(detail)
-    return detail
+    try {
+      const detail = (await tasksApi.get(taskId)) as TaskDetailResponse
+      setSelectedTask(detail)
+      setError('')
+      return detail
+    } catch (detailError) {
+      setError(detailError instanceof Error ? detailError.message : '任务详情加载失败')
+      throw detailError
+    }
   }, [])
 
   // 任务详情与产物检索分离加载，保证筛选变更时无需重拉整页详情。
@@ -195,6 +202,7 @@ export const TaskCenter: React.FC = () => {
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
+    setError('')
     try {
       const response = (await tasksApi.list()) as TaskListResponse
       setTasks(response.items)
@@ -206,6 +214,8 @@ export const TaskCenter: React.FC = () => {
       } else {
         setSelectedTask(null)
       }
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '任务列表加载失败')
     } finally {
       setLoading(false)
     }
@@ -364,6 +374,16 @@ export const TaskCenter: React.FC = () => {
         </div>
       </div>
 
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="任务中心加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadTasks()}
+        />
+      ) : null}
+
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={10}>
           <Card title="任务列表" loading={loading} className="ops-surface-card">
@@ -414,7 +434,7 @@ export const TaskCenter: React.FC = () => {
             }
           >
             {!selectedTask ? (
-              <Empty description="请选择一个任务" />
+              <CardEmptyState title="请选择一个任务" description="左侧列表支持直接切换任务详情" />
             ) : (
               <div>
                 <Descriptions column={2} size="small" style={{ marginBottom: 16 }}>
@@ -559,7 +579,7 @@ export const TaskCenter: React.FC = () => {
                   </Space>
 
                   {groupedArtifacts.length === 0 || (groupedArtifacts.length === 1 && groupedArtifacts[0].items.length === 0) ? (
-                    <Empty description="暂无匹配产物" />
+                    <CardEmptyState title="暂无匹配产物" description="可以调整筛选条件后重新检索" />
                   ) : (
                     <Space direction="vertical" style={{ width: '100%' }} size={12}>
                       {groupedArtifacts.map((group) => (

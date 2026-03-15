@@ -1,5 +1,6 @@
 import React from 'react'
 import { Layout, Menu } from 'antd'
+import type { MenuProps } from 'antd'
 import {
   AlertOutlined,
   AppstoreOutlined,
@@ -27,7 +28,7 @@ import { RouteErrorBoundary, LoadingFallback } from './components/ErrorBoundary'
 
 const { Header, Content, Sider } = Layout
 
-const menuItems = [
+const primaryMenuItems: NonNullable<MenuProps['items']>[number][] = [
   { key: '/', icon: <AppstoreOutlined />, label: '总览' },
   { key: '/traffic', icon: <AreaChartOutlined />, label: '流量分析' },
   { key: '/resources', icon: <DeploymentUnitOutlined />, label: '资源分析' },
@@ -36,9 +37,18 @@ const menuItems = [
   { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务中心' },
   { key: '/quality', icon: <BarChartOutlined />, label: '质量看板' },
   { key: '/executors', icon: <ToolOutlined />, label: '执行插件' },
+]
+
+const supportMenuItems: NonNullable<MenuProps['items']>[number][] = [
   { key: '/workbench', icon: <ToolOutlined />, label: '能力调试' },
   { key: '/llm-settings', icon: <ThunderboltOutlined />, label: 'LLM 配置' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+]
+
+const menuItems: MenuProps['items'] = [
+  { type: 'group', label: '主控台', children: primaryMenuItems },
+  { type: 'divider' },
+  { type: 'group', label: '调试与设置', children: supportMenuItems },
 ]
 
 const AppLayout: React.FC = () => {

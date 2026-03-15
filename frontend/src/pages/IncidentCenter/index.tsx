@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Input, List, Row, Space, Tag, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   aiApi,
@@ -14,6 +14,7 @@ import {
   type TaskArtifact,
   type TaskRecord,
 } from '@/api/client'
+import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useTaskEventStream, type TaskEventMessage } from '@/hooks/useTaskEventStream'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
@@ -228,10 +229,16 @@ export const IncidentCenter: React.FC = () => {
   }
 
   const loadIncidentDetail = useCallback(async (incidentId: string) => {
-    const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
-    setSelectedIncident(response)
-    setAiSummary(null)
-    return response
+    try {
+      const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
+      setSelectedIncident(response)
+      setAiSummary(null)
+      setError('')
+      return response
+    } catch (detailError) {
+      setError(detailError instanceof Error ? detailError.message : '异常详情加载失败')
+      throw detailError
+    }
   }, [])
 
   const refreshAIProviderAvailability = useCallback(async () => {
@@ -410,7 +417,15 @@ export const IncidentCenter: React.FC = () => {
         </Space>
       </div>
 
-      {error ? <Alert type="error" showIcon message="异常中心加载失败" description={error} style={{ marginBottom: 16 }} /> : null}
+      {error ? (
+        <PageStatusBanner
+          type="error"
+          title="异常中心加载失败"
+          description={error}
+          actionText="重新加载"
+          onAction={() => void loadIncidents()}
+        />
+      ) : null}
       {aiProviderReady === false ? (
         <Alert
           type="warning"
@@ -473,7 +488,7 @@ export const IncidentCenter: React.FC = () => {
             }
           >
             {!selectedIncident ? (
-              <Empty description="请选择一个异常或先发起分析" />
+              <CardEmptyState title="请选择一个异常" description="也可以先发起分析任务生成新的异常记录" />
             ) : (
               <div>
                 <Space style={{ marginBottom: 12, flexWrap: 'wrap' }}>
@@ -543,7 +558,7 @@ export const IncidentCenter: React.FC = () => {
                             </Space>
                             <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || '-')}</Paragraph>
                           </div>
-                        )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无高优先证据" />}
+                        )) : <CardEmptyState title="暂无高优先证据" />}
                       </div>
                     </div>
                   </Card>
