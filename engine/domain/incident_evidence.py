@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any, Dict, Iterable, List
 
 
@@ -15,6 +16,12 @@ LAYER_ORDER = {
     "alert": 3,
     "task": 4,
     "other": 5,
+}
+
+SIGNAL_STRENGTH_ORDER = {
+    "high": 0,
+    "medium": 1,
+    "low": 2,
 }
 
 
@@ -70,9 +77,34 @@ def sort_incident_evidence(evidence_refs: List[Dict[str, Any]]) -> List[Dict[str
         key=lambda item: (
             LAYER_ORDER.get(str(item.get("layer") or "other"), 99),
             -int(item.get("priority") or 0),
+            SIGNAL_STRENGTH_ORDER.get(str(item.get("signal_strength") or "low"), 99),
+            -_normalize_timestamp_order(item),
             str(item.get("title") or item.get("metric") or ""),
         ),
     )
+
+
+def summarize_incident_evidence(evidence_refs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    sorted_refs = sort_incident_evidence(evidence_refs)
+    layer_counts: Dict[str, int] = {}
+    for item in sorted_refs:
+        layer = str(item.get("layer") or "other")
+        layer_counts[layer] = layer_counts.get(layer, 0) + 1
+
+    diagnosis_item = next((item for item in sorted_refs if item.get("layer") == "diagnosis"), None)
+    highlights = [item for item in sorted_refs if item.get("layer") != "diagnosis"][:3]
+    primary_layer = _pick_primary_layer(layer_counts)
+
+    return {
+        "total": len(sorted_refs),
+        "layers": layer_counts,
+        "primary_layer": primary_layer,
+        "headline": str(diagnosis_item.get("summary") or "") if diagnosis_item else "",
+        "next_step": str(diagnosis_item.get("next_step") or "") if diagnosis_item else "",
+        "reasoning_tags": list(diagnosis_item.get("reasoning_tags") or []) if diagnosis_item else [],
+        "highlights": highlights,
+        "summary_lines": [_build_summary_line(item) for item in highlights],
+    }
 
 
 def build_log_sample_evidence(
@@ -356,3 +388,50 @@ def _coerce_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _normalize_timestamp_order(item: Dict[str, Any]) -> float:
+    source_ref = item.get("source_ref")
+    candidate = None
+    if isinstance(source_ref, dict):
+        candidate = source_ref.get("timestamp")
+    if not candidate:
+        candidate = item.get("timestamp")
+    if not candidate:
+        return 0.0
+    text = str(candidate).strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _pick_primary_layer(layer_counts: Dict[str, int]) -> str:
+    ranked_layers = [
+        layer
+        for layer in ("traffic", "resource", "alert", "task", "diagnosis", "other")
+        if layer_counts.get(layer)
+    ]
+    return ranked_layers[0] if ranked_layers else "other"
+
+
+def _build_summary_line(item: Dict[str, Any]) -> str:
+    layer = str(item.get("layer") or "other")
+    layer_label = {
+        "diagnosis": "判断",
+        "traffic": "流量",
+        "resource": "资源",
+        "alert": "告警",
+        "task": "任务",
+        "other": "其他",
+    }.get(layer, "其他")
+    title = str(item.get("title") or item.get("metric") or item.get("type") or "证据")
+    value = item.get("value")
+    unit = str(item.get("unit") or "").strip()
+    summary = str(item.get("summary") or "").strip()
+    if value in (None, ""):
+        return f"{layer_label}: {title} - {summary or '已记录'}"
+    suffix = f"{value}{f' {unit}' if unit else ''}"
+    return f"{layer_label}: {title} - {suffix}"

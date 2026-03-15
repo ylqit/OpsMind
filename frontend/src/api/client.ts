@@ -108,6 +108,17 @@ export interface IncidentEvidenceRef {
   [key: string]: unknown
 }
 
+export interface IncidentEvidenceSummary {
+  total: number
+  layers: Record<string, number>
+  primary_layer: string
+  headline: string
+  next_step: string
+  reasoning_tags: string[]
+  highlights: IncidentEvidenceRef[]
+  summary_lines: string[]
+}
+
 export interface TaskArtifact {
   artifact_id: string
   task_id: string
@@ -456,6 +467,7 @@ export interface IncidentDetailResponse {
   incident: IncidentRecord
   recommendations: RecommendationRecord[]
   log_samples: LogSampleRecord[]
+  evidence_summary: IncidentEvidenceSummary
 }
 
 export interface IncidentAISummaryResponse {

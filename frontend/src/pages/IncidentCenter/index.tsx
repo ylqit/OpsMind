@@ -175,13 +175,19 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return null
     }
+    const evidenceSummary = selectedIncident.evidence_summary
     const evidenceItems = (selectedIncident.incident.evidence_refs || []) as EvidenceItem[]
     const diagnosisItem = evidenceItems.find((item) => item.layer === 'diagnosis')
-    const topEvidence = sortEvidenceItems(evidenceItems.filter((item) => item.layer !== 'diagnosis')).slice(0, 3)
+    const topEvidence = evidenceSummary?.highlights?.length
+      ? evidenceSummary.highlights
+      : sortEvidenceItems(evidenceItems.filter((item) => item.layer !== 'diagnosis')).slice(0, 3)
     return {
-      conclusion: selectedIncident.incident.summary,
-      nextStep: String(diagnosisItem?.next_step || selectedIncident.incident.recommended_actions[0] || '继续观察关键指标变化'),
+      conclusion: evidenceSummary?.headline || selectedIncident.incident.summary,
+      nextStep: String(evidenceSummary?.next_step || diagnosisItem?.next_step || selectedIncident.incident.recommended_actions[0] || '继续观察关键指标变化'),
       highlights: topEvidence,
+      summaryLines: evidenceSummary?.summary_lines || [],
+      primaryLayer: evidenceSummary?.primary_layer || 'other',
+      layerCounts: evidenceSummary?.layers || {},
     }
   }, [selectedIncident])
 
@@ -540,6 +546,25 @@ export const IncidentCenter: React.FC = () => {
                         <Text strong>建议先做：</Text>
                         <Text>{diagnosisSummary.nextStep}</Text>
                       </div>
+                      <Space wrap style={{ marginBottom: 12 }}>
+                        <Tag color={layerMeta[diagnosisSummary.primaryLayer]?.color || layerMeta.other.color}>
+                          主要证据层：{layerMeta[diagnosisSummary.primaryLayer]?.title || layerMeta.other.title}
+                        </Tag>
+                        {Object.entries(diagnosisSummary.layerCounts).map(([layer, count]) => (
+                          <Tag key={layer}>
+                            {layerMeta[layer]?.title || layerMeta.other.title} {count}
+                          </Tag>
+                        ))}
+                      </Space>
+                      {diagnosisSummary.summaryLines.length ? (
+                        <List
+                          size="small"
+                          dataSource={diagnosisSummary.summaryLines}
+                          split={false}
+                          style={{ marginBottom: 12 }}
+                          renderItem={(item) => <List.Item style={{ paddingBlock: 4 }}>{item}</List.Item>}
+                        />
+                      ) : null}
                       <div className="ops-incident-brief__highlights">
                         {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
                           <div key={`${item.layer}-${item.metric}-${item.title}`} className="ops-incident-brief__highlight">

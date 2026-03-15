@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence
+from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence, summarize_incident_evidence
 from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
 
@@ -86,6 +86,13 @@ def _serialize_incident(incident) -> dict[str, Any]:
         ]
     )
     return payload
+
+
+def _build_evidence_summary(incident_payload: dict[str, Any]) -> dict[str, Any]:
+    evidence_refs = incident_payload.get("evidence_refs")
+    if not isinstance(evidence_refs, list):
+        evidence_refs = []
+    return summarize_incident_evidence([item for item in evidence_refs if isinstance(item, dict)])
 
 
 @router.get("")
@@ -195,10 +202,12 @@ async def get_incident_detail(
         )
         log_samples = samples
 
+    incident_payload = _serialize_incident(incident)
     return {
-        "incident": _serialize_incident(incident),
+        "incident": incident_payload,
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
+        "evidence_summary": _build_evidence_summary(incident_payload),
     }
 
 
@@ -345,6 +354,7 @@ async def analyze_incident(
             },
         )
         incident_payload = _serialize_incident(incident)
+        evidence_summary = _build_evidence_summary(incident_payload)
         await task_manager.append_trace(
             task.task_id,
             "analyze",
@@ -360,6 +370,7 @@ async def analyze_incident(
             content=json.dumps(
                 {
                     "incident": incident_payload,
+                    "evidence_summary": evidence_summary,
                     "traffic_summary": traffic_summary,
                     "resource_summary": resource_summary,
                 },
@@ -373,10 +384,15 @@ async def analyze_incident(
             {
                 "type": "incident_updated",
                 "incident": incident_payload,
+                "evidence_summary": evidence_summary,
                 "task_id": task.task_id,
             }
         )
-        return {"incident": incident_payload, "artifact": artifact.model_dump(mode="json")}
+        return {
+            "incident": incident_payload,
+            "evidence_summary": evidence_summary,
+            "artifact": artifact.model_dump(mode="json"),
+        }
 
     task = await task_manager.create_task(
         task_type=TaskType.INCIDENT_ANALYSIS,
