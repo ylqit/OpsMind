@@ -9,6 +9,8 @@ import ipaddress
 from typing import Dict
 from urllib.parse import urlparse
 
+from engine.domain.service_key_resolver import resolve_log_service_key
+
 
 class LogEnricher:
     """对结构化日志做轻量富化。"""
@@ -21,6 +23,7 @@ class LogEnricher:
         host = host_hint or self._extract_host(str(enriched.get("referer") or ""))
         geo = self._build_geo(remote_addr)
         ua = self._parse_user_agent(user_agent)
+        alignment = resolve_log_service_key(host=str(host), path=path, host_hint=host_hint)
 
         enriched["ip_scope"] = self._detect_ip_scope(remote_addr)
         enriched["geo"] = geo
@@ -31,7 +34,9 @@ class LogEnricher:
         enriched["device"] = ua["device"]
         enriched["client_ip"] = remote_addr or "-"
         enriched["is_page_view"] = self._is_page_view(path)
-        enriched["service_key"] = self._build_service_key(host, path)
+        enriched["service_key"] = alignment["service_key"]
+        enriched["unmapped"] = alignment["unmapped"]
+        enriched["alignment"] = alignment
         return enriched
 
     def fallback_enrich(self, record: Dict[str, object], host_hint: str = "") -> Dict[str, object]:
@@ -43,6 +48,7 @@ class LogEnricher:
         host = host_hint or "unknown-host"
         geo = self._build_geo(remote_addr)
         ua = self._parse_user_agent(user_agent)
+        alignment = resolve_log_service_key(host="", path=path, host_hint=host_hint)
 
         enriched["ip_scope"] = self._detect_ip_scope(remote_addr)
         enriched["geo"] = geo
@@ -53,7 +59,9 @@ class LogEnricher:
         enriched["device"] = ua["device"]
         enriched["client_ip"] = remote_addr or "-"
         enriched["is_page_view"] = self._is_page_view(path)
-        enriched["service_key"] = self._build_service_key(host, path)
+        enriched["service_key"] = alignment["service_key"]
+        enriched["unmapped"] = True
+        enriched["alignment"] = alignment
         enriched["enrich_fallback"] = True
         return enriched
 
@@ -121,11 +129,6 @@ class LogEnricher:
     def _is_page_view(self, path: str) -> bool:
         static_suffixes = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".map")
         return not path.lower().endswith(static_suffixes)
-
-    def _build_service_key(self, host: str, path: str) -> str:
-        clean_host = host or "unknown-host"
-        prefix = path.split("/", 2)[1] if path.startswith("/") and len(path.split("/")) > 1 else "root"
-        return f"{clean_host}/{prefix or 'root'}"
 
     def _extract_host(self, referer: str) -> str:
         if not referer:

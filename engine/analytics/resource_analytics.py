@@ -9,6 +9,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 from engine.capabilities.host_monitor import HostMonitor
+from engine.domain.service_key_resolver import resolve_docker_service_key
 from engine.integrations.data_sources.docker_adapter import DockerAdapter
 from engine.integrations.data_sources.prometheus_adapter import PrometheusAdapter
 
@@ -67,8 +68,8 @@ class ResourceAnalyticsEngine:
             info = await self.docker_adapter.get_container(container["name"])
             labels = (info or {}).get("labels", {}) if isinstance(info, dict) else {}
             state = (info or {}).get("state", {}) if isinstance(info, dict) else {}
-            service_name = labels.get("com.docker.compose.service") or container["name"]
-            current_service_key = f"docker/{service_name}"
+            alignment = resolve_docker_service_key(container["name"], labels)
+            current_service_key = alignment["service_key"]
             if service_key and current_service_key != service_key:
                 continue
             items.append(
@@ -76,6 +77,8 @@ class ResourceAnalyticsEngine:
                     "asset_id": f"container::{container['id']}",
                     "name": container["name"],
                     "service_key": current_service_key,
+                    "alignment": alignment,
+                    "unmapped": alignment["unmapped"],
                     "status": container["status"],
                     "state": container["state"],
                     "restarts": state.get("RestartCount", 0),

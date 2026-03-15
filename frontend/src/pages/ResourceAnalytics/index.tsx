@@ -29,6 +29,10 @@ interface AssetItem {
   asset_type?: string
   name?: string
   service_key?: string
+  unmapped?: boolean
+  unmapped_reason?: string
+  service_key_source?: string
+  alignment_confidence?: string
 }
 
 interface AssetListResponse {
@@ -508,7 +512,16 @@ const ResourceAnalytics: React.FC = () => {
                       <Text strong>{String(item.name || '-')}</Text>
                       <Tag>{String(item.asset_type || '-')}</Tag>
                     </div>
-                    <Text type="secondary">{String(item.service_key || '-')}</Text>
+                    <Space wrap>
+                      <Text type="secondary">{String(item.service_key || '-')}</Text>
+                      {item.service_key_source ? <Tag>{item.service_key_source}</Tag> : null}
+                      {item.unmapped ? <Tag color="orange">未完全对齐</Tag> : <Tag color="green">已对齐</Tag>}
+                    </Space>
+                    {item.unmapped_reason ? (
+                      <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+                        对齐原因：{item.unmapped_reason}
+                      </Paragraph>
+                    ) : null}
                   </div>
                 </List.Item>
               )}

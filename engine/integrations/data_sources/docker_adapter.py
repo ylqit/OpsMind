@@ -116,6 +116,7 @@ class DockerAdapter(DataSourceAdapter):
                 "image": container.image.tags[0] if container.image.tags else "",
                 "status": container.status,
                 "state": container.attrs["State"],
+                "labels": container.labels or {},
                 "network": container.attrs["NetworkSettings"],
                 "mounts": container.attrs["Mounts"],
                 "created": container.attrs["Created"]

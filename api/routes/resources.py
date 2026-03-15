@@ -8,6 +8,17 @@ from .deps import get_asset_service, get_resource_engine
 router = APIRouter(tags=["resources"])
 
 
+def _serialize_asset(asset):
+    payload = asset.model_dump(mode="json")
+    source_refs = payload.get("source_refs", {}) if isinstance(payload, dict) else {}
+    alignment = source_refs.get("alignment", {}) if isinstance(source_refs, dict) else {}
+    payload["service_key_source"] = alignment.get("source", "")
+    payload["service_key_candidates"] = alignment.get("candidates", [])
+    payload["unmapped_reason"] = alignment.get("reason", "") if payload.get("unmapped") else ""
+    payload["alignment_confidence"] = alignment.get("confidence", "")
+    return payload
+
+
 @router.get("/resources/summary")
 async def get_resource_summary(
     time_range: str = "1h",
@@ -29,7 +40,7 @@ async def list_assets(
     assets = await asset_service.sync_assets(service_key=service_key)
     filtered_assets = asset_service.list_assets(asset_type=asset_type, service_key=service_key, health_status=health_status)
     return {
-        "items": [asset.model_dump(mode="json") for asset in filtered_assets],
+        "items": [_serialize_asset(asset) for asset in filtered_assets],
         "total": len(filtered_assets),
         "synced": len(assets),
     }
