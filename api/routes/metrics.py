@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -108,6 +109,59 @@ def _is_timeout_error(log) -> bool:
     return "TIMEOUT" in error_code or "TIMEOUT" in error_message
 
 
+def _resolve_model_version(model_name: str) -> str:
+    normalized = str(model_name or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    for sep in ("@", ":"):
+        if sep in normalized:
+            candidate = normalized.split(sep)[-1].strip()
+            if candidate:
+                return candidate
+    matched = re.search(r"(\d+(?:\.\d+)*(?:-[a-z0-9]+)?)", normalized)
+    if matched:
+        return matched.group(1)
+    return normalized
+
+
+def _build_task_llm_context_map(logs: list[Any]) -> dict[str, dict[str, str]]:
+    latest_map: dict[str, tuple[datetime, dict[str, str]]] = {}
+    for item in logs:
+        task_id = str(getattr(item, "task_id", "") or "").strip()
+        if not task_id:
+            continue
+        provider_name = str(getattr(item, "provider_name", "") or "unknown").strip() or "unknown"
+        model_name = str(getattr(item, "model", "") or "unknown").strip() or "unknown"
+        version_name = _resolve_model_version(model_name)
+        created_at = getattr(item, "created_at", None) or datetime.min
+        candidate = {
+            "provider_name": provider_name,
+            "model": model_name,
+            "version": version_name,
+        }
+        current = latest_map.get(task_id)
+        if not current or created_at >= current[0]:
+            latest_map[task_id] = (created_at, candidate)
+    return {key: value[1] for key, value in latest_map.items()}
+
+
+def _matches_llm_filters(
+    context: dict[str, str] | None,
+    *,
+    provider_name: str | None,
+    model: str | None,
+    version: str | None,
+) -> bool:
+    current = context or {"provider_name": "unknown", "model": "unknown", "version": "unknown"}
+    if provider_name and current.get("provider_name") != provider_name:
+        return False
+    if model and current.get("model") != model:
+        return False
+    if version and current.get("version") != version:
+        return False
+    return True
+
+
 def _resolve_service_from_task(task, incident_service_map: dict[str, str]) -> str:
     payload = task.payload if isinstance(task.payload, dict) else {}
     service_key = str(payload.get("service_key") or "").strip()
@@ -149,9 +203,13 @@ async def get_recommendation_metrics(
     start_date: str | None = Query(default=None, description="起始日期，格式 YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式 YYYY-MM-DD"),
     service_key: str | None = Query(default=None, description="按服务键过滤"),
+    provider_name: str | None = Query(default=None, description="按 Provider 过滤"),
+    model: str | None = Query(default=None, description="按模型过滤"),
+    version: str | None = Query(default=None, description="按模型版本过滤"),
     task_manager=Depends(get_task_manager),
     incident_service=Depends(get_incident_service),
     feedback_repository=Depends(get_recommendation_feedback_repository_dep),
+    ai_call_log_repository=Depends(get_ai_call_log_repository_dep),
 ):
     if not task_manager or not feedback_repository:
         raise HTTPException(status_code=409, detail="指标依赖尚未初始化")
@@ -160,6 +218,8 @@ async def get_recommendation_metrics(
 
     feedback_items = feedback_repository.list_by_created_range(start_dt, end_dt_exclusive)
     feedback_incident_ids = [item.incident_id for item in feedback_items if item.incident_id]
+    ai_logs = ai_call_log_repository.list_by_created_range(start_dt, end_dt_exclusive) if ai_call_log_repository else []
+    task_llm_context_map = _build_task_llm_context_map(ai_logs)
 
     task_items = task_manager.task_repository.list_by_created_range(start_dt, end_dt_exclusive)
     task_incident_ids = []
@@ -207,11 +267,70 @@ async def get_recommendation_metrics(
             "task_duration_count": 0,
         }
     )
+    provider_metrics: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "feedback_total": 0,
+            "adopt": 0,
+            "reject": 0,
+            "rewrite": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
+            "task_total": 0,
+            "task_success": 0,
+            "task_failed": 0,
+            "task_approved": 0,
+            "task_duration_sum_ms": 0,
+            "task_duration_count": 0,
+        }
+    )
+    model_metrics: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "feedback_total": 0,
+            "adopt": 0,
+            "reject": 0,
+            "rewrite": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
+            "task_total": 0,
+            "task_success": 0,
+            "task_failed": 0,
+            "task_approved": 0,
+            "task_duration_sum_ms": 0,
+            "task_duration_count": 0,
+        }
+    )
+    version_metrics: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "feedback_total": 0,
+            "adopt": 0,
+            "reject": 0,
+            "rewrite": 0,
+            "feedback_bound_task": 0,
+            "feedback_unbound_task": 0,
+            "task_total": 0,
+            "task_success": 0,
+            "task_failed": 0,
+            "task_approved": 0,
+            "task_duration_sum_ms": 0,
+            "task_duration_count": 0,
+        }
+    )
 
     for item in feedback_items:
         current_service = incident_service_map.get(item.incident_id, "unknown")
         if service_key and current_service != service_key:
             continue
+        context = task_llm_context_map.get(str(item.task_id or "").strip())
+        if not _matches_llm_filters(
+            context,
+            provider_name=provider_name,
+            model=model,
+            version=version,
+        ):
+            continue
+        current_provider = (context or {}).get("provider_name", "unknown")
+        current_model = (context or {}).get("model", "unknown")
+        current_version = (context or {}).get("version", "unknown")
 
         day_key = item.created_at.date().isoformat()
         action = item.action.value if hasattr(item.action, "value") else str(item.action)
@@ -223,37 +342,73 @@ async def get_recommendation_metrics(
         service_metrics[current_service]["feedback_total"] += 1
         if action in {"adopt", "reject", "rewrite"}:
             service_metrics[current_service][action] += 1
+        provider_metrics[current_provider]["feedback_total"] += 1
+        model_metrics[current_model]["feedback_total"] += 1
+        version_metrics[current_version]["feedback_total"] += 1
+        if action in {"adopt", "reject", "rewrite"}:
+            provider_metrics[current_provider][action] += 1
+            model_metrics[current_model][action] += 1
+            version_metrics[current_version][action] += 1
 
         # 反馈与任务是否绑定，决定闭环链路是否完整可追踪。
         has_bound_task = bool(item.task_id and task_manager.task_repository.get(str(item.task_id)))
         if has_bound_task:
             day_metrics[day_key]["feedback_bound_task"] += 1
             service_metrics[current_service]["feedback_bound_task"] += 1
+            provider_metrics[current_provider]["feedback_bound_task"] += 1
+            model_metrics[current_model]["feedback_bound_task"] += 1
+            version_metrics[current_version]["feedback_bound_task"] += 1
         else:
             day_metrics[day_key]["feedback_unbound_task"] += 1
             service_metrics[current_service]["feedback_unbound_task"] += 1
+            provider_metrics[current_provider]["feedback_unbound_task"] += 1
+            model_metrics[current_model]["feedback_unbound_task"] += 1
+            version_metrics[current_version]["feedback_unbound_task"] += 1
 
     for task in task_items:
         current_service = _resolve_service_from_task(task, incident_service_map)
         if service_key and current_service != service_key:
             continue
+        context = task_llm_context_map.get(str(task.task_id or "").strip())
+        if not _matches_llm_filters(
+            context,
+            provider_name=provider_name,
+            model=model,
+            version=version,
+        ):
+            continue
+        current_provider = (context or {}).get("provider_name", "unknown")
+        current_model = (context or {}).get("model", "unknown")
+        current_version = (context or {}).get("version", "unknown")
 
         day_key = task.created_at.date().isoformat()
         status = _status_value(task.status)
 
         day_metrics[day_key]["task_total"] += 1
         service_metrics[current_service]["task_total"] += 1
+        provider_metrics[current_provider]["task_total"] += 1
+        model_metrics[current_model]["task_total"] += 1
+        version_metrics[current_version]["task_total"] += 1
 
         if status == "COMPLETED":
             day_metrics[day_key]["task_success"] += 1
             service_metrics[current_service]["task_success"] += 1
+            provider_metrics[current_provider]["task_success"] += 1
+            model_metrics[current_model]["task_success"] += 1
+            version_metrics[current_version]["task_success"] += 1
         if status in {"FAILED", "CANCELLED"}:
             day_metrics[day_key]["task_failed"] += 1
             service_metrics[current_service]["task_failed"] += 1
+            provider_metrics[current_provider]["task_failed"] += 1
+            model_metrics[current_model]["task_failed"] += 1
+            version_metrics[current_version]["task_failed"] += 1
         # recommendation 任务审批通过后，纳入质量看板统计。
         if task.approval:
             day_metrics[day_key]["task_approved"] += 1
             service_metrics[current_service]["task_approved"] += 1
+            provider_metrics[current_provider]["task_approved"] += 1
+            model_metrics[current_model]["task_approved"] += 1
+            version_metrics[current_version]["task_approved"] += 1
 
         if task.completed_at:
             duration_ms = max(0, int((task.completed_at - task.created_at).total_seconds() * 1000))
@@ -261,6 +416,12 @@ async def get_recommendation_metrics(
             day_metrics[day_key]["task_duration_count"] += 1
             service_metrics[current_service]["task_duration_sum_ms"] += duration_ms
             service_metrics[current_service]["task_duration_count"] += 1
+            provider_metrics[current_provider]["task_duration_sum_ms"] += duration_ms
+            provider_metrics[current_provider]["task_duration_count"] += 1
+            model_metrics[current_model]["task_duration_sum_ms"] += duration_ms
+            model_metrics[current_model]["task_duration_count"] += 1
+            version_metrics[current_version]["task_duration_sum_ms"] += duration_ms
+            version_metrics[current_version]["task_duration_count"] += 1
 
     trend = []
     summary = {
@@ -355,51 +516,65 @@ async def get_recommendation_metrics(
     summary["task_approval_rate"] = _safe_rate(summary["task_approved"], summary["task_total"])
     summary["avg_task_duration_ms"] = round(total_duration / total_duration_count, 2) if total_duration_count > 0 else 0.0
 
-    service_breakdown = []
-    for key in sorted(service_metrics.keys()):
-        row = service_metrics[key]
-        feedback_total = int(row["feedback_total"])
-        feedback_bound_task = int(row["feedback_bound_task"])
-        task_total = int(row["task_total"])
-        task_approved = int(row["task_approved"])
-        duration_count = int(row["task_duration_count"])
-        service_breakdown.append(
-            {
-                "service_key": key,
-                "feedback_total": feedback_total,
-                "adopt": int(row["adopt"]),
-                "reject": int(row["reject"]),
-                "rewrite": int(row["rewrite"]),
-                "adopt_rate": _safe_rate(int(row["adopt"]), feedback_total),
-                "feedback_bound_task": feedback_bound_task,
-                "feedback_unbound_task": int(row["feedback_unbound_task"]),
-                "feedback_bound_rate": _safe_rate(feedback_bound_task, feedback_total),
-                "task_total": task_total,
-                "task_success": int(row["task_success"]),
-                "task_failed": int(row["task_failed"]),
-                "task_approved": task_approved,
-                "task_approval_rate": _safe_rate(task_approved, task_total),
-                "task_success_rate": _safe_rate(int(row["task_success"]), task_total),
-                "avg_task_duration_ms": (
-                    round(float(row["task_duration_sum_ms"]) / duration_count, 2)
-                    if duration_count > 0
-                    else 0.0
-                ),
-            }
+    def _build_recommendation_breakdown(data_map: dict[str, dict[str, Any]], key_field: str) -> list[dict[str, Any]]:
+        items = []
+        for key in sorted(data_map.keys()):
+            row = data_map[key]
+            feedback_total = int(row["feedback_total"])
+            feedback_bound_task = int(row["feedback_bound_task"])
+            task_total = int(row["task_total"])
+            task_approved = int(row["task_approved"])
+            duration_count = int(row["task_duration_count"])
+            items.append(
+                {
+                    key_field: key,
+                    "feedback_total": feedback_total,
+                    "adopt": int(row["adopt"]),
+                    "reject": int(row["reject"]),
+                    "rewrite": int(row["rewrite"]),
+                    "adopt_rate": _safe_rate(int(row["adopt"]), feedback_total),
+                    "reject_rate": _safe_rate(int(row["reject"]), feedback_total),
+                    "rewrite_rate": _safe_rate(int(row["rewrite"]), feedback_total),
+                    "feedback_bound_task": feedback_bound_task,
+                    "feedback_unbound_task": int(row["feedback_unbound_task"]),
+                    "feedback_bound_rate": _safe_rate(feedback_bound_task, feedback_total),
+                    "task_total": task_total,
+                    "task_success": int(row["task_success"]),
+                    "task_failed": int(row["task_failed"]),
+                    "task_approved": task_approved,
+                    "task_approval_rate": _safe_rate(task_approved, task_total),
+                    "task_success_rate": _safe_rate(int(row["task_success"]), task_total),
+                    "avg_task_duration_ms": (
+                        round(float(row["task_duration_sum_ms"]) / duration_count, 2)
+                        if duration_count > 0
+                        else 0.0
+                    ),
+                }
+            )
+        items.sort(
+            key=lambda item: (item["feedback_total"] + item["task_total"], str(item[key_field])),
+            reverse=True,
         )
+        return items
 
-    service_breakdown.sort(
-        key=lambda item: (item["feedback_total"] + item["task_total"], item["service_key"]),
-        reverse=True,
-    )
+    service_breakdown = _build_recommendation_breakdown(service_metrics, "service_key")
+    provider_breakdown = _build_recommendation_breakdown(provider_metrics, "provider_name")
+    model_breakdown = _build_recommendation_breakdown(model_metrics, "model")
+    version_breakdown = _build_recommendation_breakdown(version_metrics, "version")
 
     return {
         "start_date": start_day.isoformat(),
         "end_date": end_day.isoformat(),
         "service_key": service_key or "",
+        "provider_name": provider_name or "",
+        "model": model or "",
+        "version": version or "",
         "summary": summary,
         "trend": trend,
         "service_breakdown": service_breakdown,
+        "provider_breakdown": provider_breakdown,
+        "model_breakdown": model_breakdown,
+        "version_breakdown": version_breakdown,
     }
 
 
@@ -408,7 +583,9 @@ async def get_ai_usage_metrics(
     start_date: str | None = Query(default=None, description="起始日期，格式 YYYY-MM-DD"),
     end_date: str | None = Query(default=None, description="结束日期，格式 YYYY-MM-DD"),
     service_key: str | None = Query(default=None, description="按服务键过滤"),
+    provider_name: str | None = Query(default=None, description="按 Provider 过滤"),
     model: str | None = Query(default=None, description="按模型过滤"),
+    version: str | None = Query(default=None, description="按模型版本过滤"),
     sync_daily: bool = Query(default=True, description="是否先同步 usage_metrics_daily"),
     task_manager=Depends(get_task_manager),
     incident_service=Depends(get_incident_service),
@@ -458,8 +635,13 @@ async def get_ai_usage_metrics(
             model_name = (log.model or "unknown").strip() or "unknown"
             if model and model_name != model:
                 continue
+            version_name = _resolve_model_version(model_name)
+            if version and version_name != version:
+                continue
 
-            provider_name = (log.provider_name or "unknown").strip() or "unknown"
+            provider_label = (log.provider_name or "unknown").strip() or "unknown"
+            if provider_name and provider_label != provider_name:
+                continue
             day_key = log.created_at.date().isoformat()
 
             current_service = "all"
@@ -469,7 +651,7 @@ async def get_ai_usage_metrics(
             if service_key and current_service != service_key:
                 continue
 
-            key = (day_key, current_service, model_name, provider_name)
+            key = (day_key, current_service, model_name, provider_label)
             if log.task_id:
                 task_group_key_map[str(log.task_id)] = key
             grouped[key]["ai_call_total"] += 1
@@ -499,7 +681,7 @@ async def get_ai_usage_metrics(
             grouped[key]["guardrail_retried_count"] += counters["guardrail_retried_count"]
             grouped[key]["guardrail_schema_error_count"] += counters["guardrail_schema_error_count"]
 
-        for (metric_date, current_service, model_name, provider_name), data in grouped.items():
+        for (metric_date, current_service, model_name, provider_label), data in grouped.items():
             call_total = int(data["ai_call_total"])
             avg_latency = round(float(data["latency_sum"]) / call_total, 2) if call_total > 0 else 0.0
             usage_metrics_daily_repository.upsert(
@@ -507,7 +689,7 @@ async def get_ai_usage_metrics(
                     metric_date=metric_date,
                     service_key=current_service,
                     model=model_name,
-                    provider_name=provider_name,
+                    provider_name=provider_label,
                     ai_call_total=call_total,
                     ai_error_count=int(data["ai_error_count"]),
                     ai_success_count=int(data["ai_success_count"]),
@@ -527,6 +709,15 @@ async def get_ai_usage_metrics(
         service_key=service_key,
         model=model,
     )
+    if provider_name or version:
+        filtered_records = []
+        for item in records:
+            if provider_name and item.provider_name != provider_name:
+                continue
+            if version and _resolve_model_version(item.model) != version:
+                continue
+            filtered_records.append(item)
+        records = filtered_records
 
     trend_map: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -584,6 +775,20 @@ async def get_ai_usage_metrics(
             "cost_sum": 0.0,
         }
     )
+    version_map: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "ai_call_total": 0,
+            "ai_error_count": 0,
+            "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
+            "latency_sum": 0.0,
+            "token_sum": 0,
+            "cost_sum": 0.0,
+        }
+    )
 
     summary = {
         "ai_call_total": 0,
@@ -605,6 +810,7 @@ async def get_ai_usage_metrics(
     total_latency_weighted = 0.0
 
     for item in records:
+        version_name = _resolve_model_version(item.model)
         key_date = item.metric_date
         trend_map[key_date]["ai_call_total"] += item.ai_call_total
         trend_map[key_date]["ai_error_count"] += item.ai_error_count
@@ -649,6 +855,17 @@ async def get_ai_usage_metrics(
         provider_map[item.provider_name]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
         provider_map[item.provider_name]["token_sum"] += item.ai_total_tokens
         provider_map[item.provider_name]["cost_sum"] += item.ai_total_cost
+
+        version_map[version_name]["ai_call_total"] += item.ai_call_total
+        version_map[version_name]["ai_error_count"] += item.ai_error_count
+        version_map[version_name]["ai_success_count"] += item.ai_success_count
+        version_map[version_name]["ai_timeout_count"] += item.ai_timeout_count
+        version_map[version_name]["guardrail_fallback_count"] += item.guardrail_fallback_count
+        version_map[version_name]["guardrail_retried_count"] += item.guardrail_retried_count
+        version_map[version_name]["guardrail_schema_error_count"] += item.guardrail_schema_error_count
+        version_map[version_name]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
+        version_map[version_name]["token_sum"] += item.ai_total_tokens
+        version_map[version_name]["cost_sum"] += item.ai_total_cost
 
         summary["ai_call_total"] += item.ai_call_total
         summary["ai_error_count"] += item.ai_error_count
@@ -737,11 +954,14 @@ async def get_ai_usage_metrics(
         "start_date": start_day.isoformat(),
         "end_date": end_day.isoformat(),
         "service_key": service_key or "",
+        "provider_name": provider_name or "",
         "model": model or "",
+        "version": version or "",
         "summary": summary,
         "trend": trend,
         "service_breakdown": _normalize_group(service_map, "service_key"),
         "model_breakdown": _normalize_group(model_map, "model"),
         "provider_breakdown": _normalize_group(provider_map, "provider_name"),
+        "version_breakdown": _normalize_group(version_map, "version"),
         "records_count": len(records),
     }

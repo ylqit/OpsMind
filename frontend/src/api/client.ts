@@ -643,10 +643,36 @@ export interface RecommendationMetricsServiceItem {
   avg_task_duration_ms: number
 }
 
+export interface RecommendationMetricsDimensionItem {
+  provider_name?: string
+  model?: string
+  version?: string
+  feedback_total: number
+  adopt: number
+  reject: number
+  rewrite: number
+  adopt_rate: number
+  reject_rate: number
+  rewrite_rate: number
+  feedback_bound_task: number
+  feedback_unbound_task: number
+  feedback_bound_rate: number
+  task_total: number
+  task_success: number
+  task_failed: number
+  task_approved: number
+  task_approval_rate: number
+  task_success_rate: number
+  avg_task_duration_ms: number
+}
+
 export interface RecommendationMetricsResponse {
   start_date: string
   end_date: string
   service_key: string
+  provider_name: string
+  model: string
+  version: string
   summary: {
     feedback_total: number
     adopt: number
@@ -668,6 +694,9 @@ export interface RecommendationMetricsResponse {
   }
   trend: RecommendationMetricsTrendItem[]
   service_breakdown: RecommendationMetricsServiceItem[]
+  provider_breakdown: RecommendationMetricsDimensionItem[]
+  model_breakdown: RecommendationMetricsDimensionItem[]
+  version_breakdown: RecommendationMetricsDimensionItem[]
 }
 
 export interface AIUsageMetricsTrendItem {
@@ -692,6 +721,7 @@ export interface AIUsageMetricsGroupItem {
   service_key?: string
   model?: string
   provider_name?: string
+  version?: string
   ai_call_total: number
   ai_error_count: number
   ai_success_count: number
@@ -712,7 +742,9 @@ export interface AIUsageMetricsResponse {
   start_date: string
   end_date: string
   service_key: string
+  provider_name: string
   model: string
+  version: string
   summary: {
     ai_call_total: number
     ai_error_count: number
@@ -734,6 +766,7 @@ export interface AIUsageMetricsResponse {
   service_breakdown: AIUsageMetricsGroupItem[]
   model_breakdown: AIUsageMetricsGroupItem[]
   provider_breakdown: AIUsageMetricsGroupItem[]
+  version_breakdown: AIUsageMetricsGroupItem[]
   records_count: number
 }
 
@@ -984,9 +1017,24 @@ export const tasksApi = {
 }
 
 export const metricsApi = {
-  getRecommendation: (params?: { start_date?: string; end_date?: string; service_key?: string }) =>
+  getRecommendation: (params?: {
+    start_date?: string
+    end_date?: string
+    service_key?: string
+    provider_name?: string
+    model?: string
+    version?: string
+  }) =>
     apiClient.get('/metrics/recommendation', { params }),
-  getAiUsage: (params?: { start_date?: string; end_date?: string; service_key?: string; model?: string; sync_daily?: boolean }) =>
+  getAiUsage: (params?: {
+    start_date?: string
+    end_date?: string
+    service_key?: string
+    provider_name?: string
+    model?: string
+    version?: string
+    sync_daily?: boolean
+  }) =>
     apiClient.get('/metrics/ai-usage', { params }),
 }
 

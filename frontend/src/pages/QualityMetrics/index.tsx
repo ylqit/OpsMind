@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { AutoComplete, Button, Card, Col, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { AutoComplete, Button, Card, Col, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { Line } from '@ant-design/plots'
 import { useSearchParams } from 'react-router-dom'
 import {
   metricsApi,
   resourcesApi,
   type AIUsageMetricsResponse,
+  type RecommendationMetricsDimensionItem,
   type RecommendationMetricsResponse,
 } from '@/api/client'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
@@ -20,6 +21,10 @@ interface AssetLite {
 interface AssetListResponse {
   items: AssetLite[]
 }
+
+type RecommendationBreakdownDimension = 'provider' | 'model' | 'version'
+type AIUsageBreakdownDimension = 'provider' | 'model' | 'version'
+type AIUsageDimensionItem = AIUsageMetricsResponse['provider_breakdown'][number]
 
 const windowOptions = [
   { label: '最近 7 天', value: '7d' },
@@ -49,14 +54,74 @@ const mergeServiceKeys = (base: string[], incoming: string[]) => {
   return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-CN'))
 }
 
+const mergeStringValues = (base: string[], incoming: string[]) => {
+  const set = new Set(base)
+  incoming.filter(Boolean).forEach((item) => set.add(item))
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+const toOptions = (values: string[]) => values.map((item) => ({ label: item, value: item }))
+
+const getRecommendationDimensionKey = (dimension: RecommendationBreakdownDimension, row: RecommendationMetricsDimensionItem) => {
+  if (dimension === 'provider') {
+    return row.provider_name || 'unknown'
+  }
+  if (dimension === 'model') {
+    return row.model || 'unknown'
+  }
+  return row.version || 'unknown'
+}
+
+const getRecommendationDimensionTitle = (dimension: RecommendationBreakdownDimension) => {
+  if (dimension === 'provider') {
+    return 'Provider'
+  }
+  if (dimension === 'model') {
+    return '模型'
+  }
+  return '版本'
+}
+
+const getAIUsageDimensionKey = (dimension: AIUsageBreakdownDimension, row: AIUsageDimensionItem) => {
+  if (dimension === 'provider') {
+    return row.provider_name || 'unknown'
+  }
+  if (dimension === 'model') {
+    return row.model || 'unknown'
+  }
+  return row.version || 'unknown'
+}
+
+const getAIUsageDimensionTitle = (dimension: AIUsageBreakdownDimension) => {
+  if (dimension === 'provider') {
+    return 'Provider'
+  }
+  if (dimension === 'model') {
+    return '模型'
+  }
+  return '版本'
+}
+
+interface MetricsOverrideFilters {
+  windowSize?: string
+  serviceKey?: string
+  providerName?: string
+  model?: string
+  version?: string
+}
+
 const QualityMetrics: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const windowSize = useWorkspaceFilterStore((state) => state.qualityWindow)
   const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
+  const providerName = useWorkspaceFilterStore((state) => state.providerName)
   const model = useWorkspaceFilterStore((state) => state.model)
+  const version = useWorkspaceFilterStore((state) => state.version)
   const setWindowSize = useWorkspaceFilterStore((state) => state.setQualityWindow)
   const setServiceKey = useWorkspaceFilterStore((state) => state.setServiceKey)
+  const setProviderName = useWorkspaceFilterStore((state) => state.setProviderName)
   const setModel = useWorkspaceFilterStore((state) => state.setModel)
+  const setVersion = useWorkspaceFilterStore((state) => state.setVersion)
   const syncQualityFilters = useWorkspaceFilterStore((state) => state.syncQualityFilters)
   const resetQualityFilters = useWorkspaceFilterStore((state) => state.resetQualityFilters)
 
@@ -65,13 +130,62 @@ const QualityMetrics: React.FC = () => {
   const [recommendationMetrics, setRecommendationMetrics] = useState<RecommendationMetricsResponse | null>(null)
   const [aiUsageMetrics, setAiUsageMetrics] = useState<AIUsageMetricsResponse | null>(null)
   const [serviceKeys, setServiceKeys] = useState<string[]>([])
+  const [recommendationDimension, setRecommendationDimension] = useState<RecommendationBreakdownDimension>('provider')
+  const [aiUsageDimension, setAIUsageDimension] = useState<AIUsageBreakdownDimension>('provider')
   const [filtersReady, setFiltersReady] = useState(false)
 
-  const serviceOptions = useMemo(() => serviceKeys.map((item) => ({ label: item, value: item })), [serviceKeys])
-  const modelOptions = useMemo(
-    () => (aiUsageMetrics?.model_breakdown || []).map((item) => ({ label: item.model || '-', value: item.model || '' })).filter((item) => item.value),
-    [aiUsageMetrics],
-  )
+  const serviceOptions = useMemo(() => toOptions(serviceKeys), [serviceKeys])
+
+  const providerValues = useMemo(() => {
+    return mergeStringValues(
+      recommendationMetrics?.provider_breakdown.map((item) => item.provider_name || '') || [],
+      aiUsageMetrics?.provider_breakdown.map((item) => item.provider_name || '') || [],
+    )
+  }, [recommendationMetrics, aiUsageMetrics])
+
+  const modelValues = useMemo(() => {
+    return mergeStringValues(
+      recommendationMetrics?.model_breakdown.map((item) => item.model || '') || [],
+      aiUsageMetrics?.model_breakdown.map((item) => item.model || '') || [],
+    )
+  }, [recommendationMetrics, aiUsageMetrics])
+
+  const versionValues = useMemo(() => {
+    return mergeStringValues(
+      recommendationMetrics?.version_breakdown.map((item) => item.version || '') || [],
+      aiUsageMetrics?.version_breakdown.map((item) => item.version || '') || [],
+    )
+  }, [recommendationMetrics, aiUsageMetrics])
+
+  const providerOptions = useMemo(() => toOptions(providerValues), [providerValues])
+  const modelOptions = useMemo(() => toOptions(modelValues), [modelValues])
+  const versionOptions = useMemo(() => toOptions(versionValues), [versionValues])
+
+  const recommendationDimensionRows = useMemo(() => {
+    if (!recommendationMetrics) {
+      return []
+    }
+    if (recommendationDimension === 'provider') {
+      return recommendationMetrics.provider_breakdown
+    }
+    if (recommendationDimension === 'model') {
+      return recommendationMetrics.model_breakdown
+    }
+    return recommendationMetrics.version_breakdown
+  }, [recommendationMetrics, recommendationDimension])
+
+  const aiUsageDimensionRows = useMemo(() => {
+    if (!aiUsageMetrics) {
+      return []
+    }
+    if (aiUsageDimension === 'provider') {
+      return aiUsageMetrics.provider_breakdown
+    }
+    if (aiUsageDimension === 'model') {
+      return aiUsageMetrics.model_breakdown
+    }
+    return aiUsageMetrics.version_breakdown
+  }, [aiUsageMetrics, aiUsageDimension])
 
   const recommendationTrendData = useMemo(() => {
     return (
@@ -102,30 +216,38 @@ const QualityMetrics: React.FC = () => {
         .filter((item): item is string => typeof item === 'string' && item.length > 0)
       setServiceKeys((prev) => mergeServiceKeys(prev, keys))
     } catch {
-      // 资产列表不是主链路，不影响质量看板主流程。
+      // 资产列表不是主链路依赖，不阻塞质量看板加载。
     }
   }
 
-  const loadMetrics = async (override?: { windowSize?: string; serviceKey?: string; model?: string }) => {
+  const loadMetrics = async (override?: MetricsOverrideFilters) => {
     const activeWindow = override?.windowSize ?? windowSize
     const activeService = override?.serviceKey ?? serviceKey
+    const activeProvider = override?.providerName ?? providerName
     const activeModel = override?.model ?? model
+    const activeVersion = override?.version ?? version
     const { startDate, endDate } = resolveDateRange(activeWindow)
 
     setLoading(true)
     setError('')
     try {
+      // 两个指标接口共享同一批筛选条件，保证不同卡片口径一致。
       const [recommendationResponse, aiUsageResponse] = await Promise.all([
         metricsApi.getRecommendation({
           start_date: startDate,
           end_date: endDate,
           service_key: activeService || undefined,
+          provider_name: activeProvider || undefined,
+          model: activeModel || undefined,
+          version: activeVersion || undefined,
         }) as Promise<RecommendationMetricsResponse>,
         metricsApi.getAiUsage({
           start_date: startDate,
           end_date: endDate,
           service_key: activeService || undefined,
+          provider_name: activeProvider || undefined,
           model: activeModel || undefined,
+          version: activeVersion || undefined,
           sync_daily: true,
         }) as Promise<AIUsageMetricsResponse>,
       ])
@@ -149,13 +271,15 @@ const QualityMetrics: React.FC = () => {
       return
     }
     void loadMetrics()
-  }, [filtersReady, windowSize, serviceKey, model])
+  }, [filtersReady, windowSize, serviceKey, providerName, model, version])
 
   useEffect(() => {
     syncQualityFilters({
       window: searchParams.get('window'),
       serviceKey: searchParams.get('service_key'),
+      providerName: searchParams.get('provider_name'),
       model: searchParams.get('model'),
+      version: searchParams.get('version'),
     })
     setFiltersReady(true)
   }, [searchParams, syncQualityFilters])
@@ -169,19 +293,31 @@ const QualityMetrics: React.FC = () => {
       } else {
         next.delete('service_key')
       }
+      if (providerName) {
+        next.set('provider_name', providerName)
+      } else {
+        next.delete('provider_name')
+      }
       if (model) {
         next.set('model', model)
       } else {
         next.delete('model')
+      }
+      if (version) {
+        next.set('version', version)
+      } else {
+        next.delete('version')
       }
       if (next.toString() === previous.toString()) {
         return previous
       }
       return next
     }, { replace: true, preventScrollReset: true })
-  }, [windowSize, serviceKey, model, setSearchParams])
+  }, [windowSize, serviceKey, providerName, model, version, setSearchParams])
 
-  const resetFilters = () => resetQualityFilters()
+  const resetFilters = () => {
+    resetQualityFilters()
+  }
 
   return (
     <div className="ops-page">
@@ -189,7 +325,7 @@ const QualityMetrics: React.FC = () => {
         <div>
           <Title level={2} style={{ marginBottom: 8 }}>质量看板</Title>
           <Paragraph style={{ marginBottom: 0, color: 'rgba(15, 23, 42, 0.72)' }}>
-            按时间窗与服务维度观察建议采纳质量、任务执行稳定性和 AI 调用成本，支持版本回归与效果对比。
+            统一观察建议采纳、任务执行稳定性与 AI 调用成本，支持按服务、Provider、模型与版本做下钻回看。
           </Paragraph>
         </div>
         <Space wrap>
@@ -204,11 +340,27 @@ const QualityMetrics: React.FC = () => {
           />
           <Select
             allowClear
+            value={providerName || undefined}
+            options={providerOptions}
+            style={{ width: 180 }}
+            placeholder="全部 Provider"
+            onChange={(value) => setProviderName(value || '')}
+          />
+          <Select
+            allowClear
             value={model || undefined}
             options={modelOptions}
-            style={{ width: 200 }}
+            style={{ width: 220 }}
             placeholder="全部模型"
             onChange={(value) => setModel(value || '')}
+          />
+          <Select
+            allowClear
+            value={version || undefined}
+            options={versionOptions}
+            style={{ width: 160 }}
+            placeholder="全部版本"
+            onChange={(value) => setVersion(value || '')}
           />
           <Button onClick={resetFilters}>重置</Button>
           <Button type="link" onClick={() => void loadMetrics()}>刷新</Button>
@@ -228,7 +380,9 @@ const QualityMetrics: React.FC = () => {
       <Space wrap style={{ marginBottom: 4 }}>
         <Tag color="blue">时间窗：{windowSize}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
+        <Tag color={providerName ? 'cyan' : 'default'}>Provider：{providerName || '全部'}</Tag>
         <Tag color={model ? 'purple' : 'default'}>模型：{model || '全部'}</Tag>
+        <Tag color={version ? 'gold' : 'default'}>版本：{version || '全部'}</Tag>
       </Space>
 
       <Row gutter={[16, 16]}>
@@ -314,7 +468,7 @@ const QualityMetrics: React.FC = () => {
                 smooth
               />
             ) : (
-              <CardEmptyState title="暂无 recommendation 指标数据" description="当前筛选条件下还没有建议质量样本" />
+              <CardEmptyState title="暂无 recommendation 指标数据" description="当前筛选条件下还没有建议质量样本。" />
             )}
           </Card>
         </Col>
@@ -331,7 +485,7 @@ const QualityMetrics: React.FC = () => {
                 smooth
               />
             ) : (
-              <CardEmptyState title="暂无 AI 调用数据" description="当前筛选条件下还没有调用趋势样本" />
+              <CardEmptyState title="暂无 AI 调用数据" description="当前筛选条件下还没有调用趋势样本。" />
             )}
           </Card>
         </Col>
@@ -376,18 +530,90 @@ const QualityMetrics: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="模型与 Provider 下钻" loading={loading} className="ops-surface-card">
+          <Card
+            title="建议质量分维下钻"
+            loading={loading}
+            className="ops-surface-card"
+            extra={(
+              <Segmented<RecommendationBreakdownDimension>
+                value={recommendationDimension}
+                options={[
+                  { label: 'Provider', value: 'provider' },
+                  { label: '模型', value: 'model' },
+                  { label: '版本', value: 'version' },
+                ]}
+                onChange={(value) => setRecommendationDimension(value)}
+              />
+            )}
+          >
             <Table
               size="small"
-              rowKey={(record) => `${record.provider_name || '-'}-${record.model || '-'}`}
+              rowKey={(row) => getRecommendationDimensionKey(recommendationDimension, row)}
               pagination={false}
-              dataSource={aiUsageMetrics?.provider_breakdown || []}
-              locale={{ emptyText: <CardEmptyState title="暂无模型调用数据" /> }}
+              dataSource={recommendationDimensionRows}
+              locale={{ emptyText: <CardEmptyState title="暂无建议分维数据" /> }}
               columns={[
                 {
-                  title: 'Provider',
-                  dataIndex: 'provider_name',
-                  render: (value: string) => <Tag color="blue">{value || '-'}</Tag>,
+                  title: getRecommendationDimensionTitle(recommendationDimension),
+                  render: (_: unknown, row: RecommendationMetricsDimensionItem) => (
+                    <Tag color="blue">{getRecommendationDimensionKey(recommendationDimension, row)}</Tag>
+                  ),
+                },
+                {
+                  title: '反馈总数',
+                  dataIndex: 'feedback_total',
+                },
+                {
+                  title: '采纳率',
+                  dataIndex: 'adopt_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '任务成功率',
+                  dataIndex: 'task_success_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '任务审批率',
+                  dataIndex: 'task_approval_rate',
+                  render: (value: number) => `${value.toFixed(2)}%`,
+                },
+              ]}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24}>
+          <Card
+            title="AI 调用分维下钻"
+            loading={loading}
+            className="ops-surface-card"
+            extra={(
+              <Segmented<AIUsageBreakdownDimension>
+                value={aiUsageDimension}
+                options={[
+                  { label: 'Provider', value: 'provider' },
+                  { label: '模型', value: 'model' },
+                  { label: '版本', value: 'version' },
+                ]}
+                onChange={(value) => setAIUsageDimension(value)}
+              />
+            )}
+          >
+            <Table
+              size="small"
+              rowKey={(row) => `${aiUsageDimension}-${getAIUsageDimensionKey(aiUsageDimension, row)}`}
+              pagination={false}
+              dataSource={aiUsageDimensionRows}
+              locale={{ emptyText: <CardEmptyState title="暂无 AI 分维数据" /> }}
+              columns={[
+                {
+                  title: getAIUsageDimensionTitle(aiUsageDimension),
+                  render: (_: unknown, row: AIUsageDimensionItem) => (
+                    <Tag color="cyan">{getAIUsageDimensionKey(aiUsageDimension, row)}</Tag>
+                  ),
                 },
                 {
                   title: '调用次数',

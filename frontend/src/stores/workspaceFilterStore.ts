@@ -30,13 +30,23 @@ interface WorkspaceFilterState {
   timeRange: OpsTimeRange
   serviceKey: string
   qualityWindow: QualityWindow
+  providerName: string
   model: string
+  version: string
   setTimeRange: (value: OpsTimeRange) => void
   setServiceKey: (value: string) => void
   setQualityWindow: (value: QualityWindow) => void
+  setProviderName: (value: string) => void
   setModel: (value: string) => void
+  setVersion: (value: string) => void
   syncOpsFilters: (payload: { timeRange?: string | null; serviceKey?: string | null }) => void
-  syncQualityFilters: (payload: { window?: string | null; serviceKey?: string | null; model?: string | null }) => void
+  syncQualityFilters: (payload: {
+    window?: string | null
+    serviceKey?: string | null
+    providerName?: string | null
+    model?: string | null
+    version?: string | null
+  }) => void
   resetOpsFilters: () => void
   resetQualityFilters: () => void
 }
@@ -46,11 +56,15 @@ export const useWorkspaceFilterStore = create<WorkspaceFilterState>((set) => ({
   timeRange: DEFAULT_TIME_RANGE,
   serviceKey: '',
   qualityWindow: DEFAULT_QUALITY_WINDOW,
+  providerName: '',
   model: '',
+  version: '',
   setTimeRange: (value) => set({ timeRange: normalizeOpsTimeRange(value) }),
   setServiceKey: (value) => set({ serviceKey: value.trim() }),
   setQualityWindow: (value) => set({ qualityWindow: normalizeQualityWindow(value) }),
+  setProviderName: (value) => set({ providerName: value.trim() }),
   setModel: (value) => set({ model: value.trim() }),
+  setVersion: (value) => set({ version: value.trim() }),
   syncOpsFilters: ({ timeRange, serviceKey }) => set((state) => {
     const nextTimeRange = timeRange == null ? state.timeRange : normalizeOpsTimeRange(timeRange)
     const nextServiceKey = serviceKey == null ? state.serviceKey : serviceKey.trim()
@@ -62,23 +76,35 @@ export const useWorkspaceFilterStore = create<WorkspaceFilterState>((set) => ({
       serviceKey: nextServiceKey,
     }
   }),
-  syncQualityFilters: ({ window, serviceKey, model }) => set((state) => {
+  syncQualityFilters: ({ window, serviceKey, providerName, model, version }) => set((state) => {
     const nextWindow = window == null ? state.qualityWindow : normalizeQualityWindow(window)
     const nextServiceKey = serviceKey == null ? state.serviceKey : serviceKey.trim()
+    const nextProviderName = providerName == null ? state.providerName : providerName.trim()
     const nextModel = model == null ? state.model : model.trim()
+    const nextVersion = version == null ? state.version : version.trim()
     if (
       state.qualityWindow === nextWindow
       && state.serviceKey === nextServiceKey
+      && state.providerName === nextProviderName
       && state.model === nextModel
+      && state.version === nextVersion
     ) {
       return state
     }
     return {
       qualityWindow: nextWindow,
       serviceKey: nextServiceKey,
+      providerName: nextProviderName,
       model: nextModel,
+      version: nextVersion,
     }
   }),
   resetOpsFilters: () => set({ timeRange: DEFAULT_TIME_RANGE, serviceKey: '' }),
-  resetQualityFilters: () => set({ qualityWindow: DEFAULT_QUALITY_WINDOW, serviceKey: '', model: '' }),
+  resetQualityFilters: () => set({
+    qualityWindow: DEFAULT_QUALITY_WINDOW,
+    serviceKey: '',
+    providerName: '',
+    model: '',
+    version: '',
+  }),
 }))
