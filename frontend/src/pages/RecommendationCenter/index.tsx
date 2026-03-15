@@ -156,7 +156,7 @@ const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_ty
   if (sourceType === 'metric_snapshot') {
     return '指标快照'
   }
-  return '现场证据'
+  return '异常上下文'
 }
 
 const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
@@ -1444,6 +1444,9 @@ export const RecommendationCenter: React.FC = () => {
               </Tag>
               <Tag color="blue">有效置信度：{Math.round(activeRecommendationDetail.confidence_effective * 100)}%</Tag>
               <Tag>证据总数：{activeRecommendationDetail.evidence_summary.total}</Tag>
+              {activeRecommendationDetail.evidence_summary.incident_evidence ? (
+                <Tag color="gold">上下文证据：{activeRecommendationDetail.evidence_summary.incident_evidence}</Tag>
+              ) : null}
             </Space>
             <Paragraph style={{ marginBottom: 0 }}>
               <Text strong>建议结论：</Text>

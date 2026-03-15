@@ -172,6 +172,7 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
     artifact: number
     log_snippet: number
     metric_snapshot: number
+    incident_evidence?: number
   }
 }
 

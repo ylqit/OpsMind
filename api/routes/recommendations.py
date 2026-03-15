@@ -293,6 +293,33 @@ def _deduplicate_evidence(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(deduplicated, key=lambda item: int(item.get("priority") or 0), reverse=True)
 
 
+def _build_evidence_summary(refs: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total": len(refs),
+        "artifact": len([item for item in refs if item.get("source_type") == "artifact"]),
+        "log_snippet": len([item for item in refs if item.get("source_type") == "log_snippet"]),
+        "metric_snapshot": len([item for item in refs if item.get("source_type") == "metric_snapshot"]),
+        "incident_evidence": len([item for item in refs if item.get("source_type") == "incident_evidence"]),
+    }
+
+
+def _build_insufficient_evidence_ref(recommendation, incident) -> dict[str, Any]:
+    incident_summary = str(getattr(incident, "summary", "") or "").strip()
+    recommendation_summary = str(getattr(recommendation, "recommendation", "") or "").strip()
+    return {
+        "evidence_id": f"incident_context_{recommendation.recommendation_id}",
+        "source_type": "incident_evidence",
+        "title": "证据不足说明",
+        "summary": incident_summary or "当前建议缺少可追溯的现场证据，仅保留 incident 上下文作为提示。",
+        "quote": recommendation_summary or "建议暂不具备执行条件",
+        "metric": "",
+        "priority": 95,
+        "signal_strength": "low",
+        "artifact_ref": None,
+        "jump": {"kind": "none"},
+    }
+
+
 def _build_recommendation_evidence_payload(recommendation, incident, log_samples: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     refs: list[dict[str, Any]] = []
     refs.extend(_build_incident_metric_evidence(incident))
@@ -308,28 +335,23 @@ def _build_recommendation_evidence_payload(recommendation, incident, log_samples
     insufficient = actionable_count == 0
 
     if insufficient:
+        fallback_refs = [_build_insufficient_evidence_ref(recommendation, incident)]
         return {
-            "evidence_refs": [],
+            "evidence_refs": fallback_refs,
             "evidence_status": "insufficient",
             "evidence_message": "证据不足：当前缺少可追溯的任务产物、日志片段或指标快照，暂不建议执行强变更。",
             "confidence_effective": min(float(recommendation.confidence), 0.35),
             "recommendation_effective": "证据不足：建议先补充日志与指标证据，再进行变更决策。",
-            "evidence_summary": {"total": 0, "artifact": 0, "log_snippet": 0, "metric_snapshot": 0},
+            "evidence_summary": _build_evidence_summary(fallback_refs),
         }
 
-    summary = {
-        "total": len(evidence_refs),
-        "artifact": len([item for item in evidence_refs if item.get("source_type") == "artifact"]),
-        "log_snippet": len([item for item in evidence_refs if item.get("source_type") == "log_snippet"]),
-        "metric_snapshot": len([item for item in evidence_refs if item.get("source_type") == "metric_snapshot"]),
-    }
     return {
         "evidence_refs": evidence_refs,
         "evidence_status": "sufficient",
         "evidence_message": "已提取现场证据，可追溯到任务产物与指标快照。",
         "confidence_effective": float(recommendation.confidence),
         "recommendation_effective": recommendation.recommendation,
-        "evidence_summary": summary,
+        "evidence_summary": _build_evidence_summary(evidence_refs),
     }
 
 
