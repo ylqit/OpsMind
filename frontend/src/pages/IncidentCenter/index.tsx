@@ -9,6 +9,7 @@ import {
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
   type IncidentLogSample,
+  type IncidentRecommendationTaskLink,
   type IncidentRecord,
   type LLMProviderRecord,
   type RecommendationRecord,
@@ -100,8 +101,13 @@ const isProviderUnavailableError = (error: unknown) => {
   return error.message.includes('LLM Provider') || error.message.includes('未启用可用的 LLM Provider')
 }
 
-// 把后端任务对象压成异常页可直接消费的轻量状态，避免页面处处判断原始字段。
-const buildRecommendationTaskState = (task: TaskRecord, incidentId: string): RecommendationTaskState => ({
+const buildRecommendationTaskState = (
+  task: Pick<TaskRecord, 'task_id' | 'task_type' | 'status' | 'current_stage' | 'progress' | 'progress_message' | 'updated_at' | 'error'>,
+  incidentId: string,
+  options?: {
+    artifactReady?: boolean
+  },
+): RecommendationTaskState => ({
   taskId: task.task_id,
   incidentId,
   taskType: task.task_type,
@@ -111,8 +117,11 @@ const buildRecommendationTaskState = (task: TaskRecord, incidentId: string): Rec
   progressMessage: task.progress_message,
   updatedAt: task.updated_at,
   errorMessage: task.error?.error_message,
-  artifactReady: false,
+  artifactReady: options?.artifactReady ?? false,
 })
+
+const buildRecommendationTaskStateFromLink = (task: IncidentRecommendationTaskLink, incidentId: string): RecommendationTaskState =>
+  buildRecommendationTaskState(task, incidentId, { artifactReady: task.artifact_ready })
 
 const getTaskAlertMeta = (task: RecommendationTaskState) => {
   if (task.status === 'FAILED') {
@@ -230,6 +239,11 @@ export const IncidentCenter: React.FC = () => {
     try {
       const response = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
       setSelectedIncident(response)
+      setRecommendationTask(
+        response.recommendation_task
+          ? buildRecommendationTaskStateFromLink(response.recommendation_task, response.incident.incident_id)
+          : null,
+      )
       setAiSummary(null)
       setError('')
       return response
@@ -292,6 +306,13 @@ export const IncidentCenter: React.FC = () => {
     }
   }
 
+  const openRecommendationTaskCenter = () => {
+    if (!visibleRecommendationTask) {
+      return
+    }
+    navigate(`/tasks?taskId=${encodeURIComponent(visibleRecommendationTask.taskId)}`)
+  }
+
   const openTrafficForIncident = () => {
     if (!selectedIncident) {
       return
@@ -320,7 +341,7 @@ export const IncidentCenter: React.FC = () => {
     setGeneratingRecommendation(true)
     try {
       const task = (await recommendationsApi.generate({ incident_id: selectedIncident.incident.incident_id })) as TaskRecord
-      setRecommendationTask(buildRecommendationTaskState(task, selectedIncident.incident.incident_id))
+      setRecommendationTask(buildRecommendationTaskState(task, selectedIncident.incident.incident_id, { artifactReady: false }))
       message.success('建议生成任务已提交，详情会在当前页面持续更新')
     } finally {
       setGeneratingRecommendation(false)
@@ -529,6 +550,9 @@ export const IncidentCenter: React.FC = () => {
                     }
                     action={
                       <Space direction="vertical" size={8}>
+                        <Button size="small" onClick={openRecommendationTaskCenter}>
+                          打开任务中心
+                        </Button>
                         <Button size="small" onClick={openLatestRecommendationDraft} disabled={!latestRecommendation}>
                           打开最新草稿
                         </Button>

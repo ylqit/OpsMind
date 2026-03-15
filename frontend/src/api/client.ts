@@ -235,6 +235,13 @@ export interface TaskRecord {
   completed_at?: string | null
 }
 
+export interface IncidentRecommendationTaskLink extends TaskRecord {
+  artifact_ready: boolean
+  artifact_count: number
+  recommendation_count: number
+  recommendation_ids: string[]
+}
+
 export interface DashboardOverview {
   cards: OverviewCard[]
   traffic_trend: TimeSeriesPoint[]
@@ -468,6 +475,8 @@ export interface IncidentDetailResponse {
   recommendations: RecommendationRecord[]
   log_samples: LogSampleRecord[]
   evidence_summary: IncidentEvidenceSummary
+  recommendation_task?: IncidentRecommendationTaskLink | null
+  recommendation_tasks?: IncidentRecommendationTaskLink[]
 }
 
 export interface IncidentAISummaryResponse {

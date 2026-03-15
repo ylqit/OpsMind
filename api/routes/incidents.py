@@ -95,6 +95,53 @@ def _build_evidence_summary(incident_payload: dict[str, Any]) -> dict[str, Any]:
     return summarize_incident_evidence([item for item in evidence_refs if isinstance(item, dict)])
 
 
+def _extract_recommendation_items(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    recommendations = task_payload.get("recommendations")
+    if not isinstance(recommendations, list):
+        return []
+    return [item for item in recommendations if isinstance(item, dict)]
+
+
+def _task_matches_incident(task, incident_id: str) -> bool:
+    payload_incident_id = str(task.payload.get("incident_id") or "").strip()
+    if payload_incident_id == incident_id:
+        return True
+    result_ref = task.result_ref if isinstance(task.result_ref, dict) else {}
+    result_incident_id = str(result_ref.get("incident_id") or "").strip()
+    return result_incident_id == incident_id
+
+
+def _serialize_linked_recommendation_task(task, task_manager) -> dict[str, Any]:
+    payload = task.model_dump(mode="json")
+    artifacts = task_manager.list_artifacts(task.task_id)
+    artifact_count = len(artifacts)
+    recommendation_items = _extract_recommendation_items(payload.get("result_ref") or {})
+    recommendation_ids = [
+        str(item.get("recommendation_id") or "").strip()
+        for item in recommendation_items
+        if str(item.get("recommendation_id") or "").strip()
+    ]
+    payload.update(
+        {
+            "artifact_ready": artifact_count > 0 or len(recommendation_items) > 0,
+            "artifact_count": artifact_count,
+            "recommendation_count": len(recommendation_items),
+            "recommendation_ids": recommendation_ids,
+        }
+    )
+    return payload
+
+
+def _build_recommendation_task_links(incident_id: str, task_manager) -> list[dict[str, Any]]:
+    linked_tasks = []
+    tasks = task_manager.list_tasks(task_type=TaskType.RECOMMENDATION_GENERATION.value)
+    for task in tasks:
+        if not _task_matches_incident(task, incident_id):
+            continue
+        linked_tasks.append(_serialize_linked_recommendation_task(task, task_manager))
+    return linked_tasks
+
+
 @router.get("")
 async def list_incidents(
     status: str | None = None,
@@ -184,6 +231,7 @@ async def get_incident_detail(
     incident_service=Depends(get_incident_service),
     recommendation_service=Depends(get_recommendation_service),
     traffic_engine=Depends(get_traffic_engine),
+    task_manager=Depends(get_task_manager),
 ):
     incident = incident_service.get_incident(incident_id)
     if not incident:
@@ -203,11 +251,14 @@ async def get_incident_detail(
         log_samples = samples
 
     incident_payload = _serialize_incident(incident)
+    recommendation_tasks = _build_recommendation_task_links(incident_id, task_manager)
     return {
         "incident": incident_payload,
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
         "evidence_summary": _build_evidence_summary(incident_payload),
+        "recommendation_task": recommendation_tasks[0] if recommendation_tasks else None,
+        "recommendation_tasks": recommendation_tasks,
     }
 
 

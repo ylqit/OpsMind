@@ -15,7 +15,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   tasksApi,
   type ArtifactContentResponse,
@@ -120,6 +120,7 @@ const getGuardrailMeta = (summary: TaskGuardrailSummary | null) => {
 
 export const TaskCenter: React.FC = () => {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tasks, setTasks] = useState<TaskRecord[]>([])
@@ -142,6 +143,7 @@ export const TaskCenter: React.FC = () => {
   const previousTaskIdRef = useRef<string | undefined>(undefined)
 
   const selectedTaskId = selectedTask?.task.task_id
+  const taskIdFromQuery = searchParams.get('taskId') || ''
   const failureDiagnosis = selectedTask?.failure_diagnosis || null
   const recommendationArtifact = useMemo(
     () => selectedTask?.artifacts.find((artifact) => artifact.kind === 'diff') || selectedTask?.artifacts.find((artifact) => artifact.kind === 'manifest') || null,
@@ -206,9 +208,11 @@ export const TaskCenter: React.FC = () => {
     try {
       const response = (await tasksApi.list()) as TaskListResponse
       setTasks(response.items)
-      const preferredTaskId = selectedTaskId && response.items.some((item) => item.task_id === selectedTaskId)
-        ? selectedTaskId
-        : response.items[0]?.task_id
+      const preferredTaskId = taskIdFromQuery && response.items.some((item) => item.task_id === taskIdFromQuery)
+        ? taskIdFromQuery
+        : selectedTaskId && response.items.some((item) => item.task_id === selectedTaskId)
+          ? selectedTaskId
+          : response.items[0]?.task_id
       if (preferredTaskId) {
         await loadTaskDetail(preferredTaskId)
       } else {
@@ -219,7 +223,7 @@ export const TaskCenter: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [loadTaskDetail, selectedTaskId])
+  }, [loadTaskDetail, selectedTaskId, taskIdFromQuery])
 
   useTaskEventStream({
     enabled: true,
@@ -233,6 +237,31 @@ export const TaskCenter: React.FC = () => {
   useEffect(() => {
     void loadTasks()
   }, [loadTasks])
+
+  useEffect(() => {
+    if (!taskIdFromQuery || taskIdFromQuery === selectedTaskId) {
+      return
+    }
+    if (!tasks.some((item) => item.task_id === taskIdFromQuery)) {
+      return
+    }
+    void loadTaskDetail(taskIdFromQuery)
+  }, [loadTaskDetail, selectedTaskId, taskIdFromQuery, tasks])
+
+  useEffect(() => {
+    if (!selectedTaskId && taskIdFromQuery) {
+      return
+    }
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      if (selectedTaskId) {
+        next.set('taskId', selectedTaskId)
+      } else {
+        next.delete('taskId')
+      }
+      return next
+    }, { replace: true })
+  }, [selectedTaskId, setSearchParams, taskIdFromQuery])
 
   useEffect(() => {
     const taskChanged = previousTaskIdRef.current !== selectedTaskId
