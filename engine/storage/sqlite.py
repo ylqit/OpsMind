@@ -170,6 +170,10 @@ class SQLiteDatabase:
                 ai_avg_latency_ms REAL NOT NULL,
                 ai_total_tokens INTEGER NOT NULL,
                 ai_total_cost REAL NOT NULL,
+                ai_timeout_count INTEGER NOT NULL DEFAULT 0,
+                guardrail_fallback_count INTEGER NOT NULL DEFAULT 0,
+                guardrail_retried_count INTEGER NOT NULL DEFAULT 0,
+                guardrail_schema_error_count INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (metric_date, service_key, model, provider_name)
             );
@@ -223,6 +227,10 @@ class SQLiteDatabase:
         self._ensure_column('tasks', 'approval_json', 'TEXT')
         self._ensure_column('ai_call_logs', 'error_code', 'TEXT')
         self._ensure_column('ai_provider_configs', 'is_default', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column('usage_metrics_daily', 'ai_timeout_count', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column('usage_metrics_daily', 'guardrail_fallback_count', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column('usage_metrics_daily', 'guardrail_retried_count', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column('usage_metrics_daily', 'guardrail_schema_error_count', 'INTEGER NOT NULL DEFAULT 0')
         self.connection.commit()
 
     def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:

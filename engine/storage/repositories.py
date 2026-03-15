@@ -656,8 +656,10 @@ class UsageMetricsDailyRepository:
             INSERT OR REPLACE INTO usage_metrics_daily (
                 metric_date, service_key, model, provider_name,
                 ai_call_total, ai_error_count, ai_success_count,
-                ai_avg_latency_ms, ai_total_tokens, ai_total_cost, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ai_avg_latency_ms, ai_total_tokens, ai_total_cost,
+                ai_timeout_count, guardrail_fallback_count, guardrail_retried_count, guardrail_schema_error_count,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.metric_date,
@@ -670,6 +672,10 @@ class UsageMetricsDailyRepository:
                 record.ai_avg_latency_ms,
                 record.ai_total_tokens,
                 record.ai_total_cost,
+                record.ai_timeout_count,
+                record.guardrail_fallback_count,
+                record.guardrail_retried_count,
+                record.guardrail_schema_error_count,
                 record.updated_at.isoformat(),
             ),
         )
@@ -712,6 +718,10 @@ class UsageMetricsDailyRepository:
                 ai_avg_latency_ms=float(row["ai_avg_latency_ms"]),
                 ai_total_tokens=int(row["ai_total_tokens"]),
                 ai_total_cost=float(row["ai_total_cost"]),
+                ai_timeout_count=int(row["ai_timeout_count"] or 0),
+                guardrail_fallback_count=int(row["guardrail_fallback_count"] or 0),
+                guardrail_retried_count=int(row["guardrail_retried_count"] or 0),
+                guardrail_schema_error_count=int(row["guardrail_schema_error_count"] or 0),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
             )
             for row in rows

@@ -675,7 +675,14 @@ export interface AIUsageMetricsTrendItem {
   ai_call_total: number
   ai_error_count: number
   ai_success_count: number
+  ai_timeout_count: number
   ai_error_rate: number
+  ai_timeout_rate: number
+  guardrail_fallback_count: number
+  guardrail_retried_count: number
+  guardrail_schema_error_count: number
+  guardrail_fallback_rate: number
+  guardrail_schema_error_rate: number
   ai_avg_latency_ms: number
   ai_total_tokens: number
   ai_total_cost: number
@@ -688,7 +695,14 @@ export interface AIUsageMetricsGroupItem {
   ai_call_total: number
   ai_error_count: number
   ai_success_count: number
+  ai_timeout_count: number
   ai_error_rate: number
+  ai_timeout_rate: number
+  guardrail_fallback_count: number
+  guardrail_retried_count: number
+  guardrail_schema_error_count: number
+  guardrail_fallback_rate: number
+  guardrail_schema_error_rate: number
   ai_avg_latency_ms: number
   ai_total_tokens: number
   ai_total_cost: number
@@ -703,7 +717,14 @@ export interface AIUsageMetricsResponse {
     ai_call_total: number
     ai_error_count: number
     ai_success_count: number
+    ai_timeout_count: number
     ai_error_rate: number
+    ai_timeout_rate: number
+    guardrail_fallback_count: number
+    guardrail_retried_count: number
+    guardrail_schema_error_count: number
+    guardrail_fallback_rate: number
+    guardrail_schema_error_rate: number
     ai_avg_latency_ms: number
     ai_total_tokens: number
     ai_total_cost: number

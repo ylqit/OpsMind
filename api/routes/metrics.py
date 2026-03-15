@@ -82,6 +82,32 @@ def _cost_per_1k_tokens(model: str) -> float:
     return DEFAULT_COST_PER_1K_TOKENS
 
 
+def _normalize_counter(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, parsed)
+
+
+def _extract_guardrail_counters(task) -> dict[str, int]:
+    result_ref = task.result_ref if isinstance(task.result_ref, dict) else {}
+    guardrail_summary = result_ref.get("guardrail_summary") if isinstance(result_ref, dict) else {}
+    if not isinstance(guardrail_summary, dict):
+        guardrail_summary = {}
+    return {
+        "guardrail_fallback_count": _normalize_counter(guardrail_summary.get("fallback_count")),
+        "guardrail_retried_count": _normalize_counter(guardrail_summary.get("retried_count")),
+        "guardrail_schema_error_count": _normalize_counter(guardrail_summary.get("schema_error_count")),
+    }
+
+
+def _is_timeout_error(log) -> bool:
+    error_code = str(log.error_code or "").strip().upper()
+    error_message = str(log.error_message or "").strip().upper()
+    return "TIMEOUT" in error_code or "TIMEOUT" in error_message
+
+
 def _resolve_service_from_task(task, incident_service_map: dict[str, str]) -> str:
     payload = task.payload if isinstance(task.payload, dict) else {}
     service_key = str(payload.get("service_key") or "").strip()
@@ -417,11 +443,16 @@ async def get_ai_usage_metrics(
                 "ai_call_total": 0,
                 "ai_error_count": 0,
                 "ai_success_count": 0,
+                "ai_timeout_count": 0,
+                "guardrail_fallback_count": 0,
+                "guardrail_retried_count": 0,
+                "guardrail_schema_error_count": 0,
                 "latency_sum": 0.0,
                 "token_sum": 0,
                 "cost_sum": 0.0,
             }
         )
+        task_group_key_map: dict[str, tuple[str, str, str, str]] = {}
 
         for log in logs:
             model_name = (log.model or "unknown").strip() or "unknown"
@@ -439,11 +470,15 @@ async def get_ai_usage_metrics(
                 continue
 
             key = (day_key, current_service, model_name, provider_name)
+            if log.task_id:
+                task_group_key_map[str(log.task_id)] = key
             grouped[key]["ai_call_total"] += 1
 
             status = _status_value(log.status).lower()
             if status == "error":
                 grouped[key]["ai_error_count"] += 1
+                if _is_timeout_error(log):
+                    grouped[key]["ai_timeout_count"] += 1
             else:
                 grouped[key]["ai_success_count"] += 1
 
@@ -453,6 +488,16 @@ async def get_ai_usage_metrics(
             token_count = int(log.request_tokens or 0) + int(log.response_tokens or 0)
             grouped[key]["token_sum"] += token_count
             grouped[key]["cost_sum"] += (token_count / 1000.0) * _cost_per_1k_tokens(model_name)
+
+        # 护栏统计来自任务结果，按 task->最后一次模型分组归并，进入同一质量口径。
+        for task_id, key in task_group_key_map.items():
+            task = task_map.get(task_id)
+            if not task:
+                continue
+            counters = _extract_guardrail_counters(task)
+            grouped[key]["guardrail_fallback_count"] += counters["guardrail_fallback_count"]
+            grouped[key]["guardrail_retried_count"] += counters["guardrail_retried_count"]
+            grouped[key]["guardrail_schema_error_count"] += counters["guardrail_schema_error_count"]
 
         for (metric_date, current_service, model_name, provider_name), data in grouped.items():
             call_total = int(data["ai_call_total"])
@@ -469,6 +514,10 @@ async def get_ai_usage_metrics(
                     ai_avg_latency_ms=avg_latency,
                     ai_total_tokens=int(data["token_sum"]),
                     ai_total_cost=round(float(data["cost_sum"]), 6),
+                    ai_timeout_count=int(data["ai_timeout_count"]),
+                    guardrail_fallback_count=int(data["guardrail_fallback_count"]),
+                    guardrail_retried_count=int(data["guardrail_retried_count"]),
+                    guardrail_schema_error_count=int(data["guardrail_schema_error_count"]),
                 )
             )
 
@@ -484,6 +533,10 @@ async def get_ai_usage_metrics(
             "ai_call_total": 0,
             "ai_error_count": 0,
             "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
             "latency_sum": 0.0,
             "token_sum": 0,
             "cost_sum": 0.0,
@@ -494,6 +547,10 @@ async def get_ai_usage_metrics(
             "ai_call_total": 0,
             "ai_error_count": 0,
             "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
             "latency_sum": 0.0,
             "token_sum": 0,
             "cost_sum": 0.0,
@@ -504,6 +561,10 @@ async def get_ai_usage_metrics(
             "ai_call_total": 0,
             "ai_error_count": 0,
             "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
             "latency_sum": 0.0,
             "token_sum": 0,
             "cost_sum": 0.0,
@@ -514,6 +575,10 @@ async def get_ai_usage_metrics(
             "ai_call_total": 0,
             "ai_error_count": 0,
             "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
             "latency_sum": 0.0,
             "token_sum": 0,
             "cost_sum": 0.0,
@@ -524,7 +589,14 @@ async def get_ai_usage_metrics(
         "ai_call_total": 0,
         "ai_error_count": 0,
         "ai_success_count": 0,
+        "ai_timeout_count": 0,
         "ai_error_rate": 0.0,
+        "ai_timeout_rate": 0.0,
+        "guardrail_fallback_count": 0,
+        "guardrail_retried_count": 0,
+        "guardrail_schema_error_count": 0,
+        "guardrail_fallback_rate": 0.0,
+        "guardrail_schema_error_rate": 0.0,
         "ai_avg_latency_ms": 0.0,
         "ai_total_tokens": 0,
         "ai_total_cost": 0.0,
@@ -537,6 +609,10 @@ async def get_ai_usage_metrics(
         trend_map[key_date]["ai_call_total"] += item.ai_call_total
         trend_map[key_date]["ai_error_count"] += item.ai_error_count
         trend_map[key_date]["ai_success_count"] += item.ai_success_count
+        trend_map[key_date]["ai_timeout_count"] += item.ai_timeout_count
+        trend_map[key_date]["guardrail_fallback_count"] += item.guardrail_fallback_count
+        trend_map[key_date]["guardrail_retried_count"] += item.guardrail_retried_count
+        trend_map[key_date]["guardrail_schema_error_count"] += item.guardrail_schema_error_count
         trend_map[key_date]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
         trend_map[key_date]["token_sum"] += item.ai_total_tokens
         trend_map[key_date]["cost_sum"] += item.ai_total_cost
@@ -544,6 +620,10 @@ async def get_ai_usage_metrics(
         service_map[item.service_key]["ai_call_total"] += item.ai_call_total
         service_map[item.service_key]["ai_error_count"] += item.ai_error_count
         service_map[item.service_key]["ai_success_count"] += item.ai_success_count
+        service_map[item.service_key]["ai_timeout_count"] += item.ai_timeout_count
+        service_map[item.service_key]["guardrail_fallback_count"] += item.guardrail_fallback_count
+        service_map[item.service_key]["guardrail_retried_count"] += item.guardrail_retried_count
+        service_map[item.service_key]["guardrail_schema_error_count"] += item.guardrail_schema_error_count
         service_map[item.service_key]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
         service_map[item.service_key]["token_sum"] += item.ai_total_tokens
         service_map[item.service_key]["cost_sum"] += item.ai_total_cost
@@ -551,6 +631,10 @@ async def get_ai_usage_metrics(
         model_map[item.model]["ai_call_total"] += item.ai_call_total
         model_map[item.model]["ai_error_count"] += item.ai_error_count
         model_map[item.model]["ai_success_count"] += item.ai_success_count
+        model_map[item.model]["ai_timeout_count"] += item.ai_timeout_count
+        model_map[item.model]["guardrail_fallback_count"] += item.guardrail_fallback_count
+        model_map[item.model]["guardrail_retried_count"] += item.guardrail_retried_count
+        model_map[item.model]["guardrail_schema_error_count"] += item.guardrail_schema_error_count
         model_map[item.model]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
         model_map[item.model]["token_sum"] += item.ai_total_tokens
         model_map[item.model]["cost_sum"] += item.ai_total_cost
@@ -558,6 +642,10 @@ async def get_ai_usage_metrics(
         provider_map[item.provider_name]["ai_call_total"] += item.ai_call_total
         provider_map[item.provider_name]["ai_error_count"] += item.ai_error_count
         provider_map[item.provider_name]["ai_success_count"] += item.ai_success_count
+        provider_map[item.provider_name]["ai_timeout_count"] += item.ai_timeout_count
+        provider_map[item.provider_name]["guardrail_fallback_count"] += item.guardrail_fallback_count
+        provider_map[item.provider_name]["guardrail_retried_count"] += item.guardrail_retried_count
+        provider_map[item.provider_name]["guardrail_schema_error_count"] += item.guardrail_schema_error_count
         provider_map[item.provider_name]["latency_sum"] += item.ai_avg_latency_ms * item.ai_call_total
         provider_map[item.provider_name]["token_sum"] += item.ai_total_tokens
         provider_map[item.provider_name]["cost_sum"] += item.ai_total_cost
@@ -565,12 +653,19 @@ async def get_ai_usage_metrics(
         summary["ai_call_total"] += item.ai_call_total
         summary["ai_error_count"] += item.ai_error_count
         summary["ai_success_count"] += item.ai_success_count
+        summary["ai_timeout_count"] += item.ai_timeout_count
+        summary["guardrail_fallback_count"] += item.guardrail_fallback_count
+        summary["guardrail_retried_count"] += item.guardrail_retried_count
+        summary["guardrail_schema_error_count"] += item.guardrail_schema_error_count
         summary["ai_total_tokens"] += item.ai_total_tokens
         summary["ai_total_cost"] += item.ai_total_cost
         total_latency_weighted += item.ai_avg_latency_ms * item.ai_call_total
 
     if summary["ai_call_total"] > 0:
         summary["ai_error_rate"] = _safe_rate(summary["ai_error_count"], summary["ai_call_total"])
+        summary["ai_timeout_rate"] = _safe_rate(summary["ai_timeout_count"], summary["ai_call_total"])
+        summary["guardrail_fallback_rate"] = _safe_rate(summary["guardrail_fallback_count"], summary["ai_call_total"])
+        summary["guardrail_schema_error_rate"] = _safe_rate(summary["guardrail_schema_error_count"], summary["ai_call_total"])
         summary["ai_avg_latency_ms"] = round(total_latency_weighted / summary["ai_call_total"], 2)
         summary["ai_cost_per_call"] = round(summary["ai_total_cost"] / summary["ai_call_total"], 6)
     summary["ai_total_cost"] = round(summary["ai_total_cost"], 6)
@@ -586,7 +681,14 @@ async def get_ai_usage_metrics(
                     "ai_call_total": total,
                     "ai_error_count": int(data["ai_error_count"]),
                     "ai_success_count": int(data["ai_success_count"]),
+                    "ai_timeout_count": int(data["ai_timeout_count"]),
                     "ai_error_rate": _safe_rate(int(data["ai_error_count"]), total),
+                    "ai_timeout_rate": _safe_rate(int(data["ai_timeout_count"]), total),
+                    "guardrail_fallback_count": int(data["guardrail_fallback_count"]),
+                    "guardrail_retried_count": int(data["guardrail_retried_count"]),
+                    "guardrail_schema_error_count": int(data["guardrail_schema_error_count"]),
+                    "guardrail_fallback_rate": _safe_rate(int(data["guardrail_fallback_count"]), total),
+                    "guardrail_schema_error_rate": _safe_rate(int(data["guardrail_schema_error_count"]), total),
                     "ai_avg_latency_ms": avg_latency,
                     "ai_total_tokens": int(data["token_sum"]),
                     "ai_total_cost": round(float(data["cost_sum"]), 6),
@@ -601,6 +703,10 @@ async def get_ai_usage_metrics(
             "ai_call_total": 0,
             "ai_error_count": 0,
             "ai_success_count": 0,
+            "ai_timeout_count": 0,
+            "guardrail_fallback_count": 0,
+            "guardrail_retried_count": 0,
+            "guardrail_schema_error_count": 0,
             "latency_sum": 0.0,
             "token_sum": 0,
             "cost_sum": 0.0,
@@ -613,7 +719,14 @@ async def get_ai_usage_metrics(
                 "ai_call_total": call_total,
                 "ai_error_count": int(data["ai_error_count"]),
                 "ai_success_count": int(data["ai_success_count"]),
+                "ai_timeout_count": int(data["ai_timeout_count"]),
                 "ai_error_rate": _safe_rate(int(data["ai_error_count"]), call_total),
+                "ai_timeout_rate": _safe_rate(int(data["ai_timeout_count"]), call_total),
+                "guardrail_fallback_count": int(data["guardrail_fallback_count"]),
+                "guardrail_retried_count": int(data["guardrail_retried_count"]),
+                "guardrail_schema_error_count": int(data["guardrail_schema_error_count"]),
+                "guardrail_fallback_rate": _safe_rate(int(data["guardrail_fallback_count"]), call_total),
+                "guardrail_schema_error_rate": _safe_rate(int(data["guardrail_schema_error_count"]), call_total),
                 "ai_avg_latency_ms": avg_latency,
                 "ai_total_tokens": int(data["token_sum"]),
                 "ai_total_cost": round(float(data["cost_sum"]), 6),

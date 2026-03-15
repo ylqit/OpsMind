@@ -88,6 +88,8 @@ const QualityMetrics: React.FC = () => {
       aiUsageMetrics?.trend.flatMap((item) => [
         { date: item.date, value: item.ai_call_total, type: '调用次数' },
         { date: item.date, value: item.ai_error_count, type: '错误次数' },
+        { date: item.date, value: item.ai_timeout_count, type: '超时次数' },
+        { date: item.date, value: item.guardrail_fallback_count, type: '护栏降级次数' },
       ]) || []
     )
   }, [aiUsageMetrics])
@@ -265,6 +267,29 @@ const QualityMetrics: React.FC = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card loading={loading} className="ops-surface-card">
+            <Statistic title="超时次数" value={aiUsageMetrics?.summary.ai_timeout_count || 0} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="护栏降级次数" value={aiUsageMetrics?.summary.guardrail_fallback_count || 0} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="Schema 校验失败" value={aiUsageMetrics?.summary.guardrail_schema_error_count || 0} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
+            <Statistic title="护栏重试次数" value={aiUsageMetrics?.summary.guardrail_retried_count || 0} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card loading={loading} className="ops-surface-card">
             <Statistic title="平均调用延迟" value={aiUsageMetrics?.summary.ai_avg_latency_ms || 0} precision={0} suffix="ms" />
           </Card>
         </Col>
@@ -301,7 +326,7 @@ const QualityMetrics: React.FC = () => {
                 xField="date"
                 yField="value"
                 seriesField="type"
-                color={['#0ea5e9', '#f97316']}
+                color={['#0ea5e9', '#f97316', '#dc2626', '#7c3aed']}
                 height={300}
                 smooth
               />
@@ -372,6 +397,14 @@ const QualityMetrics: React.FC = () => {
                   title: '错误率',
                   dataIndex: 'ai_error_rate',
                   render: (value: number) => `${value.toFixed(2)}%`,
+                },
+                {
+                  title: '超时次数',
+                  dataIndex: 'ai_timeout_count',
+                },
+                {
+                  title: '护栏降级',
+                  dataIndex: 'guardrail_fallback_count',
                 },
                 {
                   title: '总 Token',

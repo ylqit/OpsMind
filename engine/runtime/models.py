@@ -182,6 +182,10 @@ class UsageMetricsDailyRecord(BaseModel):
     ai_avg_latency_ms: float = 0.0
     ai_total_tokens: int = 0
     ai_total_cost: float = 0.0
+    ai_timeout_count: int = 0
+    guardrail_fallback_count: int = 0
+    guardrail_retried_count: int = 0
+    guardrail_schema_error_count: int = 0
     updated_at: datetime = Field(default_factory=utc_now)
 
 
