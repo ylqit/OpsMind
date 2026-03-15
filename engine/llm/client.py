@@ -6,7 +6,12 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 import httpx
 
-from .config import LLMProviderConfig, LLMProviderType
+from .config import (
+    LLMProviderConfig,
+    LLMProviderType,
+    is_openai_compatible_provider_type,
+    resolve_provider_base_url,
+)
 from .providers import AnthropicProvider, OpenAICompatibleProvider, ProviderResponse, QwenProvider
 
 
@@ -26,7 +31,21 @@ class LLMClient:
         if self.config.provider_type == LLMProviderType.ANTHROPIC:
             return AnthropicProvider(api_key=self.api_key, model=self.model, timeout=self.timeout)
         if self.config.provider_type == LLMProviderType.QWEN:
-            return QwenProvider(base_url=self.base_url, api_key=self.api_key, model=self.model, timeout=self.timeout)
+            # Qwen 使用专用 Provider，保留其官方兼容网关默认值逻辑。
+            return QwenProvider(
+                base_url=resolve_provider_base_url(self.config.provider_type, self.base_url),
+                api_key=self.api_key,
+                model=self.model,
+                timeout=self.timeout,
+            )
+        if is_openai_compatible_provider_type(self.config.provider_type):
+            # 所有 OpenAI 兼容协议统一走该分支。
+            return OpenAICompatibleProvider(
+                base_url=resolve_provider_base_url(self.config.provider_type, self.base_url),
+                api_key=self.api_key,
+                model=self.model,
+                timeout=self.timeout,
+            )
         return OpenAICompatibleProvider(base_url=self.base_url, api_key=self.api_key, model=self.model, timeout=self.timeout)
 
     async def chat_with_meta(self, messages: List[Dict[str, str]], **kwargs: Any) -> ProviderResponse:

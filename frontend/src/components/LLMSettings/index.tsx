@@ -1,13 +1,13 @@
 /**
  * LLM 配置管理组件
  *
- * 提供多 LLM Provider 配置管理界面，支持：
- * - 查看已配置的 Provider 列表
- * - 添加/编辑/删除 Provider
- * - 测试连接
+ * 提供多 Provider 的统一管理能力，支持：
+ * - 查看与维护 Provider 配置
+ * - 测试 Provider 连通性
  * - 设置默认 Provider
+ * - 查看最近 AI 调用日志
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Card,
@@ -52,6 +52,85 @@ interface LLMProviderFormValues {
   max_retries: number
 }
 
+interface ProviderTypeOption {
+  value: string
+  label: string
+  color: string
+  apiKeyRequired: boolean
+  defaultBaseUrl?: string
+  defaultModel?: string
+}
+
+// 统一维护 Provider 类型元数据，避免类型扩展时页面多处散落修改。
+const PROVIDER_TYPE_OPTIONS: ProviderTypeOption[] = [
+  {
+    value: 'openai',
+    label: 'OpenAI',
+    color: 'green',
+    apiKeyRequired: true,
+    defaultBaseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4o',
+  },
+  {
+    value: 'anthropic',
+    label: 'Anthropic',
+    color: 'orange',
+    apiKeyRequired: true,
+    defaultModel: 'claude-sonnet-4-5-20251001',
+  },
+  {
+    value: 'qwen',
+    label: 'Qwen',
+    color: 'cyan',
+    apiKeyRequired: true,
+    defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    defaultModel: 'qwen3.5-plus',
+  },
+  {
+    value: 'custom',
+    label: '自定义兼容',
+    color: 'blue',
+    apiKeyRequired: true,
+  },
+  {
+    value: 'openai_compatible',
+    label: 'OpenAI Compatible',
+    color: 'geekblue',
+    apiKeyRequired: false,
+    defaultBaseUrl: 'http://127.0.0.1:8000/v1',
+    defaultModel: 'custom-model',
+  },
+  {
+    value: 'ollama',
+    label: 'Ollama',
+    color: 'purple',
+    apiKeyRequired: false,
+    defaultBaseUrl: 'http://127.0.0.1:11434/v1',
+    defaultModel: 'qwen2.5:7b',
+  },
+  {
+    value: 'vllm',
+    label: 'vLLM',
+    color: 'magenta',
+    apiKeyRequired: false,
+    defaultBaseUrl: 'http://127.0.0.1:8000/v1',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+  },
+  {
+    value: 'local_8998',
+    label: '本地兼容-8998',
+    color: 'volcano',
+    apiKeyRequired: false,
+    defaultBaseUrl: 'http://127.0.0.1:8998/v1',
+    defaultModel: 'local-model',
+  },
+]
+
+const getProviderTypeOption = (type?: string): ProviderTypeOption | undefined =>
+  PROVIDER_TYPE_OPTIONS.find((item) => item.value === type)
+
+const isApiKeyRequired = (type?: string): boolean => Boolean(getProviderTypeOption(type)?.apiKeyRequired)
+
 const LLMSettings: React.FC = () => {
   const [providers, setProviders] = useState<LLMProvider[]>([])
   const [defaultProviderId, setDefaultProviderId] = useState<string>('')
@@ -62,6 +141,18 @@ const LLMSettings: React.FC = () => {
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [callLogs, setCallLogs] = useState<LLMCallLogRecord[]>([])
   const [callLogsLoading, setCallLogsLoading] = useState(false)
+
+  const selectedProviderType = Form.useWatch('type', form)
+  const selectedTypeOption = getProviderTypeOption(selectedProviderType)
+  const isEditing = Boolean(editingProviderId)
+  const apiKeyRequiredForForm = !isEditing && isApiKeyRequired(selectedProviderType)
+
+  const apiKeyExtraText = useMemo(() => {
+    if (selectedTypeOption?.apiKeyRequired) {
+      return '该类型建议配置 API Key。编辑时留空表示保持原值。'
+    }
+    return '本地兼容服务可不填 API Key。编辑时留空表示保持原值。'
+  }, [selectedTypeOption])
 
   const loadProviders = async () => {
     setLoading(true)
@@ -93,6 +184,32 @@ const LLMSettings: React.FC = () => {
     void loadCallLogs()
   }, [])
 
+  const canTestProvider = (provider: LLMProvider): boolean => {
+    if (!provider.enabled) {
+      return false
+    }
+    if (isApiKeyRequired(provider.type) && !provider.api_key_configured) {
+      return false
+    }
+    return true
+  }
+
+  const handleProviderTypeChange = (nextType: string) => {
+    const option = getProviderTypeOption(nextType)
+    if (!option) {
+      return
+    }
+    const currentBaseUrl = String(form.getFieldValue('base_url') || '').trim()
+    const currentModel = String(form.getFieldValue('model') || '').trim()
+    if (!currentBaseUrl && option.defaultBaseUrl) {
+      form.setFieldValue('base_url', option.defaultBaseUrl)
+    }
+    if (!currentModel && option.defaultModel) {
+      form.setFieldValue('model', option.defaultModel)
+    }
+    void form.validateFields(['api_key'])
+  }
+
   const handleOpenModal = (provider?: LLMProvider) => {
     if (provider) {
       setEditingProviderId(provider.provider_id)
@@ -110,10 +227,13 @@ const LLMSettings: React.FC = () => {
       return
     }
 
+    const defaultOption = getProviderTypeOption('openai')
     setEditingProviderId(null)
     form.resetFields()
     form.setFieldsValue({
       type: 'openai',
+      model: defaultOption?.defaultModel || '',
+      base_url: defaultOption?.defaultBaseUrl,
       enabled: true,
       timeout: 30,
       max_retries: 2,
@@ -130,7 +250,6 @@ const LLMSettings: React.FC = () => {
         const data = await aiApi.createProvider(values)
         message.success(data.message || 'Provider 创建成功')
       }
-
       setModalVisible(false)
       await loadProviders()
     } catch (error) {
@@ -200,14 +319,8 @@ const LLMSettings: React.FC = () => {
       dataIndex: 'type',
       key: 'type',
       render: (type: string) => {
-        const typeMap: Record<string, { color: string; text: string }> = {
-          openai: { color: 'green', text: 'OpenAI' },
-          anthropic: { color: 'orange', text: 'Anthropic' },
-          qwen: { color: 'cyan', text: 'Qwen' },
-          custom: { color: 'blue', text: '自定义' },
-        }
-        const target = typeMap[type] || { color: 'default', text: type }
-        return <Tag color={target.color}>{target.text}</Tag>
+        const option = getProviderTypeOption(type)
+        return <Tag color={option?.color || 'default'}>{option?.label || type}</Tag>
       },
     },
     {
@@ -227,17 +340,31 @@ const LLMSettings: React.FC = () => {
       render: (_, record) => (
         <Space>
           <Tag color={record.enabled ? 'green' : 'red'}>{record.enabled ? '启用' : '禁用'}</Tag>
-          <Tag color={record.api_key_configured ? 'green' : 'red'}>
-            {record.api_key_configured ? (
-              <>
-                <CheckCircleOutlined /> API Key 已配置
-              </>
-            ) : (
-              <>
-                <CloseCircleOutlined /> API Key 未配置
-              </>
-            )}
-          </Tag>
+          {isApiKeyRequired(record.type) ? (
+            <Tag color={record.api_key_configured ? 'green' : 'red'}>
+              {record.api_key_configured ? (
+                <>
+                  <CheckCircleOutlined /> API Key 已配置
+                </>
+              ) : (
+                <>
+                  <CloseCircleOutlined /> API Key 未配置
+                </>
+              )}
+            </Tag>
+          ) : (
+            <Tag color={record.api_key_configured ? 'green' : 'gold'}>
+              {record.api_key_configured ? (
+                <>
+                  <CheckCircleOutlined /> API Key 已配置
+                </>
+              ) : (
+                <>
+                  <CheckCircleOutlined /> API Key 可选
+                </>
+              )}
+            </Tag>
+          )}
         </Space>
       ),
     },
@@ -251,7 +378,7 @@ const LLMSettings: React.FC = () => {
             icon={<ThunderboltOutlined />}
             loading={testingProviderId === record.provider_id}
             onClick={() => void handleTestConnection(record)}
-            disabled={!record.api_key_configured}
+            disabled={!canTestProvider(record)}
           >
             测试
           </Button>
@@ -300,13 +427,13 @@ const LLMSettings: React.FC = () => {
       title: '模型',
       dataIndex: 'model',
       key: 'model',
-      width: 160,
+      width: 180,
     },
     {
       title: '端点',
       dataIndex: 'endpoint',
       key: 'endpoint',
-      width: 120,
+      width: 140,
     },
     {
       title: '状态',
@@ -328,7 +455,7 @@ const LLMSettings: React.FC = () => {
       title: '错误码',
       dataIndex: 'error_code',
       key: 'error_code',
-      width: 140,
+      width: 160,
       render: (value?: string) => value || '-',
     },
     {
@@ -355,9 +482,7 @@ const LLMSettings: React.FC = () => {
             {
               key: 'providers',
               label: 'Provider 列表',
-              children: (
-                <Table columns={columns} dataSource={providers} loading={loading} rowKey="provider_id" pagination={false} />
-              ),
+              children: <Table columns={columns} dataSource={providers} loading={loading} rowKey="provider_id" pagination={false} />,
             },
             {
               key: 'call_logs',
@@ -370,7 +495,7 @@ const LLMSettings: React.FC = () => {
                   rowKey="call_id"
                   pagination={{ pageSize: 10 }}
                   size="small"
-                  locale={{ emptyText: '暂无调用日志，可先执行连接测试' }}
+                  locale={{ emptyText: '暂无调用日志，可先执行连接测试。' }}
                 />
               ),
             },
@@ -383,7 +508,7 @@ const LLMSettings: React.FC = () => {
         open={modalVisible}
         onOk={() => form.submit()}
         onCancel={() => setModalVisible(false)}
-        width={600}
+        width={640}
       >
         <Form form={form} layout="vertical" onFinish={(values) => void handleSaveProvider(values)}>
           <Form.Item
@@ -391,37 +516,42 @@ const LLMSettings: React.FC = () => {
             label="Provider 名称"
             rules={[
               { required: true, message: '请输入 Provider 名称' },
-              { pattern: /^[a-z0-9_]+$/, message: '只能包含小写字母、数字和下划线' },
+              { pattern: /^[a-z0-9_]+$/, message: '仅支持小写字母、数字和下划线' },
             ]}
-            extra="例如：openai, qwen_main"
+            extra="例如：openai_main、qwen_prod、ollama_local"
           >
-            <Input disabled={!!editingProviderId} />
+            <Input disabled={isEditing} />
           </Form.Item>
 
           <Form.Item name="type" label="Provider 类型" rules={[{ required: true, message: '请选择 Provider 类型' }]}>
-            <Select>
-              <Select.Option value="openai">OpenAI（兼容 OpenAI API）</Select.Option>
-              <Select.Option value="anthropic">Anthropic（Claude API）</Select.Option>
-              <Select.Option value="qwen">Qwen（阿里云兼容模式）</Select.Option>
-              <Select.Option value="custom">自定义（其他 OpenAI 兼容 API）</Select.Option>
+            <Select onChange={handleProviderTypeChange}>
+              {PROVIDER_TYPE_OPTIONS.map((item) => (
+                <Select.Option key={item.value} value={item.value}>
+                  {item.label}
+                </Select.Option>
+              ))}
             </Select>
           </Form.Item>
 
           <Form.Item
             name="api_key"
             label="API Key"
-            rules={[{ required: !editingProviderId, message: '请输入 API Key' }]}
-            extra="编辑时留空表示保持原有 API Key"
+            rules={[{ required: apiKeyRequiredForForm, message: '该类型需要 API Key' }]}
+            extra={apiKeyExtraText}
           >
-            <Input.Password placeholder="请输入 API Key" />
+            <Input.Password placeholder="请输入 API Key（可选类型可留空）" />
           </Form.Item>
 
           <Form.Item name="model" label="模型名称" rules={[{ required: true, message: '请输入模型名称' }]}>
-            <Input placeholder="例如：qwen3.5-plus" />
+            <Input placeholder={selectedTypeOption?.defaultModel || '例如：qwen3.5-plus'} />
           </Form.Item>
 
-          <Form.Item name="base_url" label="API 基础 URL" extra="OpenAI/Anthropic 可不填，自定义类型建议填写">
-            <Input placeholder="例如：https://dashscope.aliyuncs.com/compatible-mode/v1" />
+          <Form.Item
+            name="base_url"
+            label="API 基础 URL"
+            extra="不填写时后端会按 Provider 类型自动补默认地址。"
+          >
+            <Input placeholder={selectedTypeOption?.defaultBaseUrl || '例如：https://api.openai.com/v1'} />
           </Form.Item>
 
           <Form.Item name="enabled" label="启用状态" valuePropName="checked">
@@ -429,11 +559,11 @@ const LLMSettings: React.FC = () => {
           </Form.Item>
 
           <Form.Item name="timeout" label="请求超时（秒）">
-            <InputNumber min={5} max={300} />
+            <InputNumber min={5} max={300} style={{ width: '100%' }} />
           </Form.Item>
 
           <Form.Item name="max_retries" label="最大重试次数">
-            <InputNumber min={0} max={5} />
+            <InputNumber min={0} max={5} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>

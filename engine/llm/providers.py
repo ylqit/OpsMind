@@ -47,10 +47,12 @@ class OpenAICompatibleProvider(AIProvider):
             "temperature": kwargs.get("temperature", 0.7),
             "max_tokens": kwargs.get("max_tokens", 2000),
         }
-        headers = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
         }
+        # 本地 OpenAI 兼容服务通常不需要鉴权，只有配置了 key 才附带 Authorization。
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
@@ -59,7 +61,11 @@ class OpenAICompatibleProvider(AIProvider):
 
         usage = data.get("usage") or {}
         message = ((data.get("choices") or [{}])[0].get("message") or {})
-        content = str(message.get("content") or "")
+        content_payload = message.get("content")
+        if isinstance(content_payload, list):
+            content = "".join(str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content_payload)
+        else:
+            content = str(content_payload or "")
         return ProviderResponse(
             content=content,
             request_tokens=usage.get("prompt_tokens"),

@@ -12,6 +12,8 @@ from engine.llm.config import (
     LLMProviderConfig,
     LLMProviderType,
     ensure_default_provider_record,
+    resolve_provider_type,
+    resolve_provider_base_url,
     serialize_provider_record,
 )
 from engine.runtime.models import AIProviderConfigRecord
@@ -99,7 +101,7 @@ def _normalize_error_code(error: Exception) -> str:
 def _build_client_from_record(record: AIProviderConfigRecord) -> LLMClient:
     provider_config = LLMProviderConfig(
         name=record.name,
-        provider_type=LLMProviderType(record.provider_type),
+        provider_type=resolve_provider_type(record.provider_type),
         api_key=record.api_key,
         base_url=record.base_url,
         model=record.model,
@@ -230,7 +232,8 @@ async def create_ai_provider(
         name=normalized_name,
         provider_type=payload.provider_type.value,
         model=normalized_model,
-        base_url=(payload.base_url or "").strip() or None,
+        # 统一按 provider 类型回填默认地址，避免本地兼容服务新建后无可用入口。
+        base_url=resolve_provider_base_url(payload.provider_type, payload.base_url),
         api_key=(payload.api_key or "").strip(),
         enabled=payload.enabled,
         is_default=should_default,
@@ -359,6 +362,9 @@ async def patch_ai_provider(
             raise HTTPException(status_code=409, detail="Provider 名称已存在")
         updates["name"] = new_name
 
+    current_provider_type = resolve_provider_type(current.provider_type)
+    target_provider_type = payload.provider_type or current_provider_type
+
     if payload.provider_type is not None:
         updates["provider_type"] = payload.provider_type.value
     if payload.model is not None:
@@ -366,8 +372,17 @@ async def patch_ai_provider(
         if not new_model:
             raise HTTPException(status_code=400, detail="模型名称不能为空")
         updates["model"] = new_model
+    current_base_url = (current.base_url or "").strip() or None
     if payload.base_url is not None:
-        updates["base_url"] = payload.base_url.strip() or None
+        candidate_base_url = payload.base_url.strip() or None
+        updates["base_url"] = resolve_provider_base_url(target_provider_type, candidate_base_url)
+    elif payload.provider_type is not None:
+        # 仅切换类型未传 base_url 时，优先将旧类型默认地址替换为新类型默认地址。
+        old_default_base_url = resolve_provider_base_url(current_provider_type, None)
+        if not current_base_url or current_base_url == old_default_base_url:
+            updates["base_url"] = resolve_provider_base_url(target_provider_type, None)
+        else:
+            updates["base_url"] = resolve_provider_base_url(target_provider_type, current_base_url)
     if payload.enabled is not None:
         updates["enabled"] = payload.enabled
     if payload.timeout is not None:

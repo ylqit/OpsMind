@@ -38,9 +38,9 @@ from engine.domain.signal_service import SignalService
 from engine.llm.client import LLMClient, LLMRouter
 from engine.llm.config import (
     LLMProviderConfig,
-    LLMProviderType,
     ensure_default_provider_record,
     get_llm_config_manager,
+    resolve_provider_type,
 )
 from engine.operations.executor_service import ExecutorService
 from engine.operations.incident_reporter import IncidentReporter
@@ -169,7 +169,7 @@ def _build_llm_router_from_provider_configs(provider_repository: AIProviderConfi
 
     for record in provider_records:
         try:
-            provider_type = LLMProviderType(record.provider_type)
+            provider_type = resolve_provider_type(record.provider_type)
         except ValueError:
             logger.warning("忽略未知 Provider 类型: %s", record.provider_type)
             continue
