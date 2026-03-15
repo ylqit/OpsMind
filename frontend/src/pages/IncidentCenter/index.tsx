@@ -5,6 +5,7 @@ import {
   aiApi,
   incidentsApi,
   recommendationsApi,
+  type IncidentEvidenceRef,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
   type IncidentLogSample,
@@ -25,22 +26,7 @@ interface IncidentListResponse {
   total: number
 }
 
-interface EvidenceItem {
-  layer?: string
-  type?: string
-  title?: string
-  summary?: string
-  metric?: string
-  value?: unknown
-  unit?: string
-  reason?: string
-  name?: string
-  priority?: number
-  signal_strength?: string
-  next_step?: string
-  reasoning_tags?: string[]
-  [key: string]: unknown
-}
+type EvidenceItem = IncidentEvidenceRef
 
 interface RecommendationTaskState {
   taskId: string
@@ -59,7 +45,9 @@ const layerMeta: Record<string, { title: string; color: string; order: number }>
   diagnosis: { title: '关联判断', color: 'purple', order: 0 },
   traffic: { title: '流量证据', color: 'blue', order: 1 },
   resource: { title: '资源证据', color: 'orange', order: 2 },
-  other: { title: '其他证据', color: 'default', order: 3 },
+  alert: { title: '告警证据', color: 'red', order: 3 },
+  task: { title: '任务证据', color: 'cyan', order: 4 },
+  other: { title: '其他证据', color: 'default', order: 5 },
 }
 
 const signalStrengthMeta: Record<string, { label: string; color: string }> = {
@@ -170,6 +158,10 @@ export const IncidentCenter: React.FC = () => {
           ? 'traffic'
           : item.type === 'resource_summary' || item.type === 'hotspot'
             ? 'resource'
+            : item.type === 'alert_signal'
+              ? 'alert'
+              : item.type === 'task_trace'
+                ? 'task'
             : 'other'
       groups[layer] = groups[layer] || []
       groups[layer].push(item)

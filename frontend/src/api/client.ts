@@ -61,12 +61,51 @@ export interface IncidentRecord {
   confidence: number
   reasoning_tags: string[]
   recommended_actions: string[]
-  evidence_refs: Array<Record<string, unknown>>
+  evidence_refs: IncidentEvidenceRef[]
   related_asset_ids: string[]
   time_window_start: string
   time_window_end: string
   created_at: string
   updated_at: string
+}
+
+export interface IncidentEvidenceRef {
+  evidence_id: string
+  layer: string
+  type: string
+  source_type: string
+  title: string
+  summary: string
+  metric: string
+  value?: unknown
+  unit?: string
+  priority: number
+  signal_strength: 'high' | 'medium' | 'low'
+  source_ref: {
+    service_key?: string
+    asset_ids?: string[]
+    task_id?: string
+    trace_id?: string
+    alert_id?: string
+    timestamp?: string
+    path?: string
+    status?: string | number
+    source?: string
+    namespace?: string
+    client_ip?: string
+    geo_label?: string
+    layer?: string
+    [key: string]: unknown
+  }
+  tags: string[]
+  next_step?: string
+  reasoning_tags?: string[]
+  alignment?: Record<string, unknown>
+  service_key?: string
+  current_stage?: string
+  progress?: number
+  severity?: string
+  [key: string]: unknown
 }
 
 export interface TaskArtifact {

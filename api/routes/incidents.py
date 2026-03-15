@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence
 from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
 
@@ -71,6 +72,22 @@ class IncidentSummarySchema(BaseModel):
     evidence_citations: list[str] = Field(default_factory=list, max_length=10)
 
 
+def _serialize_incident(incident) -> dict[str, Any]:
+    payload = incident.model_dump(mode="json")
+    payload["evidence_refs"] = sort_incident_evidence(
+        [
+            normalize_incident_evidence(
+                item,
+                default_service_key=str(payload.get("service_key") or ""),
+                default_asset_ids=payload.get("related_asset_ids") or [],
+            )
+            for item in payload.get("evidence_refs") or []
+            if isinstance(item, dict)
+        ]
+    )
+    return payload
+
+
 @router.get("")
 async def list_incidents(
     status: str | None = None,
@@ -81,7 +98,7 @@ async def list_incidents(
 ):
     del time_range
     incidents = incident_service.list_incidents(status=status, severity=severity, service_key=service_key)
-    return {"items": [incident.model_dump(mode="json") for incident in incidents], "total": len(incidents)}
+    return {"items": [_serialize_incident(incident) for incident in incidents], "total": len(incidents)}
 
 
 def _to_string_list(value: Any, limit: int) -> list[str]:
@@ -179,7 +196,7 @@ async def get_incident_detail(
         log_samples = samples
 
     return {
-        "incident": incident.model_dump(mode="json"),
+        "incident": _serialize_incident(incident),
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
     }
@@ -315,7 +332,19 @@ async def analyze_incident(
             traffic_summary=traffic_summary,
             resource_summary=resource_summary,
             related_asset_ids=related_asset_ids,
+            active_alerts=active_alerts,
+            task_context={
+                "task_id": task.task_id,
+                "task_type": task.task_type.value,
+                "status": task.status.value,
+                "current_stage": TaskStatus.ANALYZING.value,
+                "progress": 70,
+                "progress_message": "正在生成异常结论",
+                "trace_id": task.trace_id,
+                "summary": "异常分析任务已完成信号聚合，正在汇总证据链",
+            },
         )
+        incident_payload = _serialize_incident(incident)
         await task_manager.append_trace(
             task.task_id,
             "analyze",
@@ -330,7 +359,7 @@ async def analyze_incident(
             kind=ArtifactKind.JSON,
             content=json.dumps(
                 {
-                    "incident": incident.model_dump(mode="json"),
+                    "incident": incident_payload,
                     "traffic_summary": traffic_summary,
                     "resource_summary": resource_summary,
                 },
@@ -343,11 +372,11 @@ async def analyze_incident(
         await task_manager.event_bus.publish(
             {
                 "type": "incident_updated",
-                "incident": incident.model_dump(mode="json"),
+                "incident": incident_payload,
                 "task_id": task.task_id,
             }
         )
-        return {"incident": incident.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")}
+        return {"incident": incident_payload, "artifact": artifact.model_dump(mode="json")}
 
     task = await task_manager.create_task(
         task_type=TaskType.INCIDENT_ANALYSIS,

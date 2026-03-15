@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
+from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence
+
 
 class CorrelationEngine:
     """访问异常与资源异常关联解释。"""
@@ -64,6 +66,8 @@ class CorrelationEngine:
                     unit="req",
                     priority=48,
                     signal_strength="medium",
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
         if error_rate:
@@ -78,6 +82,8 @@ class CorrelationEngine:
                     unit="%",
                     priority=96 if error_rate >= 5 else 72,
                     signal_strength="high" if error_rate >= 5 else "medium",
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
         if avg_latency:
@@ -92,6 +98,8 @@ class CorrelationEngine:
                     unit="s",
                     priority=88 if avg_latency >= 1 else 62,
                     signal_strength="high" if avg_latency >= 1 else "medium",
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
         if host_cpu:
@@ -106,6 +114,8 @@ class CorrelationEngine:
                     unit="%",
                     priority=92 if host_cpu >= 70 else 58,
                     signal_strength="high" if host_cpu >= 70 else "medium",
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
         if host_memory:
@@ -120,6 +130,8 @@ class CorrelationEngine:
                     unit="%",
                     priority=84 if host_memory >= 80 else 56,
                     signal_strength="high" if host_memory >= 80 else "medium",
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
         for item in hotspots[:5]:
@@ -136,6 +148,8 @@ class CorrelationEngine:
                     priority=min(max(int(hotspot_score), 52), 94),
                     signal_strength="high" if hotspot_score >= 80 else "medium",
                     extra=item,
+                    service_key=service_key,
+                    related_asset_ids=related_asset_ids,
                 )
             )
 
@@ -155,6 +169,8 @@ class CorrelationEngine:
                     "reasoning_tags": reasoning_tags,
                     "next_step": next_step,
                 },
+                service_key=service_key,
+                related_asset_ids=related_asset_ids,
             )
         )
 
@@ -186,6 +202,8 @@ class CorrelationEngine:
         priority: int = 50,
         signal_strength: str = "medium",
         extra: Dict[str, Any] | None = None,
+        service_key: str = "",
+        related_asset_ids: List[str] | None = None,
     ) -> Dict[str, Any]:
         payload = {
             "layer": layer,
@@ -197,18 +215,20 @@ class CorrelationEngine:
             "unit": unit,
             "priority": priority,
             "signal_strength": signal_strength,
+            "service_key": service_key,
+            "source_ref": {
+                "service_key": service_key,
+                "asset_ids": list(related_asset_ids or []),
+                "layer": layer,
+            },
         }
         if extra:
             payload.update(extra)
-        return payload
+        return normalize_incident_evidence(
+            payload,
+            default_service_key=service_key,
+            default_asset_ids=list(related_asset_ids or []),
+        )
 
     def _sort_evidence(self, evidence_refs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        layer_rank = {"diagnosis": 0, "traffic": 1, "resource": 2, "other": 3}
-        return sorted(
-            evidence_refs,
-            key=lambda item: (
-                layer_rank.get(str(item.get("layer") or "other"), 99),
-                -int(item.get("priority") or 0),
-                str(item.get("title") or ""),
-            ),
-        )
+        return sort_incident_evidence(evidence_refs)
