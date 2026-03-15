@@ -1,6 +1,7 @@
 """建议接口。"""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -355,6 +356,183 @@ def _build_recommendation_evidence_payload(recommendation, incident, log_samples
     }
 
 
+def _build_artifact_group(artifacts: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
+    group: dict[str, dict[str, Any] | None] = {
+        "baseline": None,
+        "recommended": None,
+        "diff": None,
+        "metadata": None,
+    }
+    for artifact in artifacts:
+        filename = _artifact_filename(artifact).lower()
+        kind = str(artifact.get("kind") or "").strip().lower()
+        if kind == "json" and "-manifest-meta" in filename and not group["metadata"]:
+            group["metadata"] = artifact
+            continue
+        if kind == "diff" and not group["diff"]:
+            group["diff"] = artifact
+            continue
+        if kind == "manifest" and "-baseline" in filename and not group["baseline"]:
+            group["baseline"] = artifact
+            continue
+        if kind == "manifest" and "-recommended" in filename and not group["recommended"]:
+            group["recommended"] = artifact
+            continue
+        if kind == "manifest" and not group["recommended"]:
+            group["recommended"] = artifact
+    if not group["baseline"] and group["recommended"]:
+        group["baseline"] = group["recommended"]
+    return group
+
+
+def _read_artifact_json(path_value: str) -> dict[str, Any] | None:
+    raw_path = str(path_value or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _summarize_diff_preview(artifact: dict[str, Any]) -> dict[str, Any]:
+    content = str(artifact.get("preview") or "").strip()
+    from_filename = ""
+    to_filename = ""
+    added_lines = 0
+    removed_lines = 0
+    hunk_count = 0
+    for line in content.splitlines():
+        if line.startswith("--- "):
+            from_filename = line.replace("--- ", "", 1).strip()
+            continue
+        if line.startswith("+++ "):
+            to_filename = line.replace("+++ ", "", 1).strip()
+            continue
+        if line.startswith("@@"):
+            hunk_count += 1
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            added_lines += 1
+            continue
+        if line.startswith("-") and not line.startswith("---"):
+            removed_lines += 1
+    return {
+        "from_filename": from_filename,
+        "to_filename": to_filename,
+        "added_lines": added_lines,
+        "removed_lines": removed_lines,
+        "hunk_count": hunk_count,
+    }
+
+
+def _build_artifact_view_entry(view_key: str, artifact: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+    filename = _artifact_filename(artifact)
+    entry = {
+        "view_key": view_key,
+        "label": "基线" if view_key == "baseline" else "建议" if view_key == "recommended" else "Diff",
+        "filename": filename,
+        "kind": str(artifact.get("kind") or ""),
+        "artifact_id": str(artifact.get("artifact_id") or ""),
+        "task_id": str(artifact.get("task_id") or ""),
+        "summary": str(artifact.get("preview") or "").strip(),
+    }
+
+    if view_key in {"baseline", "recommended"}:
+        section = metadata.get(view_key) if isinstance(metadata, dict) else None
+        if isinstance(section, dict):
+            entry.update(
+                {
+                    "line_count": int(section.get("line_count") or 0),
+                    "document_count": int(section.get("document_count") or 0),
+                    "sha256": str(section.get("sha256") or ""),
+                }
+            )
+            if entry["line_count"] or entry["document_count"]:
+                entry["summary"] = (
+                    f"{entry['label']} YAML，文档 {entry['document_count']} 个，"
+                    f"行数 {entry['line_count']}"
+                )
+        return entry
+
+    diff_section = metadata.get("diff") if isinstance(metadata, dict) else None
+    if isinstance(diff_section, dict):
+        entry.update(
+            {
+                "from_filename": str((metadata.get("baseline") or {}).get("filename") or ""),
+                "to_filename": str((metadata.get("recommended") or {}).get("filename") or ""),
+                "added_lines": int(diff_section.get("added_lines") or 0),
+                "removed_lines": int(diff_section.get("removed_lines") or 0),
+                "hunk_count": int(diff_section.get("hunk_count") or 0),
+            }
+        )
+    else:
+        entry.update(_summarize_diff_preview(artifact))
+    entry["summary"] = (
+        f"差异摘要：新增 {entry.get('added_lines', 0)} 行，"
+        f"删除 {entry.get('removed_lines', 0)} 行，"
+        f"变更块 {entry.get('hunk_count', 0)} 处"
+    )
+    return entry
+
+
+def _build_artifact_views_payload(recommendation) -> dict[str, Any]:
+    artifacts = [item for item in recommendation.artifact_refs if isinstance(item, dict)]
+    if not artifacts:
+        return {
+            "primary_view": None,
+            "available_views": [],
+            "baseline": None,
+            "recommended": None,
+            "diff": None,
+        }
+
+    group = _build_artifact_group(artifacts)
+    metadata_artifact = group.get("metadata")
+    metadata = (
+        _read_artifact_json(str(metadata_artifact.get("path") or ""))
+        if isinstance(metadata_artifact, dict)
+        else None
+    )
+
+    baseline_entry = (
+        _build_artifact_view_entry("baseline", group["baseline"], metadata)
+        if isinstance(group.get("baseline"), dict)
+        else None
+    )
+    recommended_entry = (
+        _build_artifact_view_entry("recommended", group["recommended"], metadata)
+        if isinstance(group.get("recommended"), dict)
+        else None
+    )
+    diff_entry = (
+        _build_artifact_view_entry("diff", group["diff"], metadata)
+        if isinstance(group.get("diff"), dict)
+        else None
+    )
+
+    available_views = [
+        key
+        for key, entry in (
+            ("baseline", baseline_entry),
+            ("recommended", recommended_entry),
+            ("diff", diff_entry),
+        )
+        if entry
+    ]
+    primary_view = "recommended" if recommended_entry else "diff" if diff_entry else "baseline" if baseline_entry else None
+    return {
+        "primary_view": primary_view,
+        "available_views": available_views,
+        "baseline": baseline_entry,
+        "recommended": recommended_entry,
+        "diff": diff_entry,
+    }
+
+
 def _to_string_list(value: Any, limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -462,10 +640,12 @@ async def get_recommendation_detail(
             limit=5,
         )
     evidence_payload = _build_recommendation_evidence_payload(recommendation, incident, log_samples=log_samples)
+    artifact_views = _build_artifact_views_payload(recommendation)
 
     detail = recommendation.model_dump(mode="json")
     detail.update(evidence_payload)
     detail["log_samples"] = log_samples
+    detail["artifact_views"] = artifact_views
     return detail
 
 

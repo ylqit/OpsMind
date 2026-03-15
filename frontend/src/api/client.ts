@@ -160,6 +160,34 @@ export interface RecommendationEvidenceRef {
   }
 }
 
+export type RecommendationArtifactViewKey = 'baseline' | 'recommended' | 'diff'
+
+export interface RecommendationArtifactView {
+  view_key: RecommendationArtifactViewKey
+  label: string
+  filename: string
+  kind: string
+  artifact_id: string
+  task_id: string
+  summary: string
+  line_count?: number
+  document_count?: number
+  sha256?: string
+  from_filename?: string
+  to_filename?: string
+  added_lines?: number
+  removed_lines?: number
+  hunk_count?: number
+}
+
+export interface RecommendationArtifactViewsPayload {
+  primary_view: RecommendationArtifactViewKey | null
+  available_views: RecommendationArtifactViewKey[]
+  baseline?: RecommendationArtifactView | null
+  recommended?: RecommendationArtifactView | null
+  diff?: RecommendationArtifactView | null
+}
+
 export interface RecommendationDetailResponse extends RecommendationRecord {
   evidence_refs: RecommendationEvidenceRef[]
   log_samples: LogSampleRecord[]
@@ -174,6 +202,7 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
     metric_snapshot: number
     incident_evidence?: number
   }
+  artifact_views?: RecommendationArtifactViewsPayload
 }
 
 export type RecommendationFeedbackAction = 'adopt' | 'reject' | 'rewrite'

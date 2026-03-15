@@ -11,6 +11,9 @@ import {
   type IncidentRecord,
   type LLMProviderRecord,
   type RecommendationAIReviewResponse,
+  type RecommendationArtifactView,
+  type RecommendationArtifactViewKey,
+  type RecommendationArtifactViewsPayload,
   type RecommendationDetailResponse,
   type RecommendationEvidenceRef,
   type RecommendationFeedbackAction,
@@ -157,6 +160,16 @@ const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_ty
     return '指标快照'
   }
   return '异常上下文'
+}
+
+const getArtifactViewLabel = (viewKey: RecommendationArtifactViewKey) => {
+  if (viewKey === 'baseline') {
+    return '基线'
+  }
+  if (viewKey === 'recommended') {
+    return '建议'
+  }
+  return 'Diff'
 }
 
 const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
@@ -455,6 +468,10 @@ export const RecommendationCenter: React.FC = () => {
     () => (activeRecommendation ? detailByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, detailByRecommendationId],
   )
+  const activeArtifactViews = useMemo<RecommendationArtifactViewsPayload | null>(
+    () => activeRecommendationDetail?.artifact_views || null,
+    [activeRecommendationDetail],
+  )
   const activeManifestMeta = useMemo(
     () => (activeRecommendation ? manifestMetaByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, manifestMetaByRecommendationId],
@@ -474,6 +491,69 @@ export const RecommendationCenter: React.FC = () => {
   const isDiffPreview = preview?.artifact.kind === 'diff'
   const copyLabel = preview?.artifact.kind === 'manifest' ? '复制 YAML' : '复制内容'
   const diffSummary = useMemo(() => (isDiffPreview && preview ? buildDiffSummary(preview.content) : null), [isDiffPreview, preview])
+  const activeArtifactMeta = useMemo<RecommendationArtifactView | null>(() => {
+    if (!activeArtifactViews) {
+      return null
+    }
+    if (activeArtifactView === 'baseline') {
+      return activeArtifactViews.baseline || null
+    }
+    if (activeArtifactView === 'diff') {
+      return activeArtifactViews.diff || null
+    }
+    return activeArtifactViews.recommended || null
+  }, [activeArtifactView, activeArtifactViews])
+  const manifestMetaDisplay = useMemo(() => {
+    if (activeArtifactViews?.baseline || activeArtifactViews?.recommended || activeArtifactViews?.diff) {
+      return {
+        schemaVersion: 'artifact_views',
+        baseline: activeArtifactViews.baseline || null,
+        recommended: activeArtifactViews.recommended || null,
+        diff: activeArtifactViews.diff || null,
+        riskRules: activeManifestMeta?.risk_rules || [],
+      }
+    }
+    if (!activeManifestMeta) {
+      return null
+    }
+    return {
+      schemaVersion: activeManifestMeta.schema_version,
+      baseline: {
+        filename: activeManifestMeta.baseline.filename,
+        document_count: activeManifestMeta.baseline.document_count,
+        line_count: activeManifestMeta.baseline.line_count,
+        sha256: activeManifestMeta.baseline.sha256,
+      },
+      recommended: {
+        filename: activeManifestMeta.recommended.filename,
+        document_count: activeManifestMeta.recommended.document_count,
+        line_count: activeManifestMeta.recommended.line_count,
+        sha256: activeManifestMeta.recommended.sha256,
+      },
+      diff: {
+        added_lines: activeManifestMeta.diff.added_lines,
+        removed_lines: activeManifestMeta.diff.removed_lines,
+        hunk_count: activeManifestMeta.diff.hunk_count,
+      },
+      riskRules: activeManifestMeta.risk_rules,
+    }
+  }, [activeArtifactViews, activeManifestMeta])
+  const resolvedDiffSummary = useMemo(() => {
+    if (!isDiffPreview) {
+      return null
+    }
+    const diffView = activeArtifactViews?.diff
+    if (diffView) {
+      return {
+        fromFile: diffView.from_filename || '未识别基线文件',
+        toFile: diffView.to_filename || '未识别建议文件',
+        addedLines: diffView.added_lines || 0,
+        removedLines: diffView.removed_lines || 0,
+        hunkCount: diffView.hunk_count || 0,
+      }
+    }
+    return diffSummary
+  }, [activeArtifactViews, diffSummary, isDiffPreview])
 
   useEffect(() => {
     if (!selectedRecommendations.length) {
@@ -956,11 +1036,18 @@ export const RecommendationCenter: React.FC = () => {
     </Space>
   )
 
-  const previewViewOptions = [
-    previewArtifactGroup?.baseline ? { label: '基线', value: 'baseline' } : null,
-    previewArtifactGroup?.recommended ? { label: '建议', value: 'recommended' } : null,
-    previewArtifactGroup?.diff ? { label: 'Diff', value: 'diff' } : null,
-  ].filter(Boolean) as Array<{ label: string; value: string }>
+  const previewViewOptions = (
+    activeArtifactViews?.available_views?.length
+      ? activeArtifactViews.available_views.map((viewKey) => ({
+          label: getArtifactViewLabel(viewKey),
+          value: viewKey,
+        }))
+      : [
+          previewArtifactGroup?.baseline ? { label: '基线', value: 'baseline' } : null,
+          previewArtifactGroup?.recommended ? { label: '建议', value: 'recommended' } : null,
+          previewArtifactGroup?.diff ? { label: 'Diff', value: 'diff' } : null,
+        ].filter(Boolean)
+  ) as Array<{ label: string; value: RecommendationArtifactViewKey }>
 
   return (
     <div className="ops-page">
@@ -1214,8 +1301,11 @@ export const RecommendationCenter: React.FC = () => {
                       </Paragraph>
                     </div>
                     <div className="ops-recommendation-workspace__meta">
-                      <Text code>{preview.filename}</Text>
-                      <Text type="secondary">当前视图：{activeArtifactView === 'baseline' ? '基线' : activeArtifactView === 'diff' ? 'Diff' : '建议'}</Text>
+                      <Text code>{activeArtifactMeta?.filename || preview.filename}</Text>
+                      <Text type="secondary">
+                        当前视图：{activeArtifactMeta?.label || getArtifactViewLabel(activeArtifactView)}
+                      </Text>
+                      {activeArtifactMeta?.summary ? <Text type="secondary">{activeArtifactMeta.summary}</Text> : null}
                     </div>
                   </div>
 
@@ -1223,34 +1313,36 @@ export const RecommendationCenter: React.FC = () => {
                     <Segmented block options={previewViewOptions} value={activeArtifactView} onChange={(value) => void switchPreviewView(String(value))} />
                   ) : null}
 
-                  {activeManifestMeta ? (
+                  {manifestMetaDisplay ? (
                     <Card type="inner" title="草稿元数据" size="small">
                       <Space wrap style={{ marginBottom: 10 }}>
-                        <Tag color="geekblue">Schema：{activeManifestMeta.schema_version}</Tag>
-                        <Tag color="blue">Diff +{activeManifestMeta.diff.added_lines} / -{activeManifestMeta.diff.removed_lines}</Tag>
-                        <Tag color="purple">变更块 {activeManifestMeta.diff.hunk_count}</Tag>
+                        <Tag color="geekblue">Schema：{manifestMetaDisplay.schemaVersion}</Tag>
+                        <Tag color="blue">
+                          Diff +{manifestMetaDisplay.diff?.added_lines || 0} / -{manifestMetaDisplay.diff?.removed_lines || 0}
+                        </Tag>
+                        <Tag color="purple">变更块 {manifestMetaDisplay.diff?.hunk_count || 0}</Tag>
                       </Space>
                       <div className="ops-manifest-meta-grid">
                         <div className="ops-manifest-meta-card">
                           <Text strong>基线</Text>
-                          <Text code>{activeManifestMeta.baseline.filename || '-'}</Text>
+                          <Text code>{manifestMetaDisplay.baseline?.filename || '-'}</Text>
                           <Text type="secondary">
-                            文档 {activeManifestMeta.baseline.document_count} · 行数 {activeManifestMeta.baseline.line_count}
+                            文档 {manifestMetaDisplay.baseline?.document_count || 0} · 行数 {manifestMetaDisplay.baseline?.line_count || 0}
                           </Text>
-                          <Text type="secondary">SHA {shortHash(activeManifestMeta.baseline.sha256)}</Text>
+                          <Text type="secondary">SHA {shortHash(manifestMetaDisplay.baseline?.sha256 || '')}</Text>
                         </div>
                         <div className="ops-manifest-meta-card">
                           <Text strong>建议</Text>
-                          <Text code>{activeManifestMeta.recommended.filename || '-'}</Text>
+                          <Text code>{manifestMetaDisplay.recommended?.filename || '-'}</Text>
                           <Text type="secondary">
-                            文档 {activeManifestMeta.recommended.document_count} · 行数 {activeManifestMeta.recommended.line_count}
+                            文档 {manifestMetaDisplay.recommended?.document_count || 0} · 行数 {manifestMetaDisplay.recommended?.line_count || 0}
                           </Text>
-                          <Text type="secondary">SHA {shortHash(activeManifestMeta.recommended.sha256)}</Text>
+                          <Text type="secondary">SHA {shortHash(manifestMetaDisplay.recommended?.sha256 || '')}</Text>
                         </div>
                       </div>
-                      {activeManifestMeta.risk_rules.length > 0 ? (
+                      {manifestMetaDisplay.riskRules.length > 0 ? (
                         <Space wrap style={{ marginTop: 10 }}>
-                          {activeManifestMeta.risk_rules.map((rule) => (
+                          {manifestMetaDisplay.riskRules.map((rule) => (
                             <Tag key={rule}>{rule}</Tag>
                           ))}
                         </Space>
@@ -1325,23 +1417,23 @@ export const RecommendationCenter: React.FC = () => {
                     </Card>
                   ) : null}
 
-                  {isDiffPreview && diffSummary ? (
+                  {isDiffPreview && resolvedDiffSummary ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       <div className="ops-diff-summary">
                         <div className="ops-diff-summary__files">
                           <div className="ops-diff-summary__file-card">
                             <span className="ops-diff-summary__label">基线文件</span>
-                            <Text code>{diffSummary.fromFile}</Text>
+                            <Text code>{resolvedDiffSummary.fromFile}</Text>
                           </div>
                           <div className="ops-diff-summary__file-card">
                             <span className="ops-diff-summary__label">建议文件</span>
-                            <Text code>{diffSummary.toFile}</Text>
+                            <Text code>{resolvedDiffSummary.toFile}</Text>
                           </div>
                         </div>
                         <Space wrap>
-                          <Tag color="green">新增 {diffSummary.addedLines} 行</Tag>
-                          <Tag color="red">删除 {diffSummary.removedLines} 行</Tag>
-                          <Tag color="blue">变更块 {diffSummary.hunkCount} 处</Tag>
+                          <Tag color="green">新增 {resolvedDiffSummary.addedLines} 行</Tag>
+                          <Tag color="red">删除 {resolvedDiffSummary.removedLines} 行</Tag>
+                          <Tag color="blue">变更块 {resolvedDiffSummary.hunkCount} 处</Tag>
                         </Space>
                       </div>
                       <div className="ops-artifact-viewer ops-artifact-viewer--diff">
