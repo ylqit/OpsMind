@@ -195,7 +195,23 @@ export interface DashboardOverview {
     reason: string
     metric_value: number
   }>
-  data_sources: Record<string, unknown>
+  data_health: {
+    status: 'ready' | 'degraded' | 'unavailable'
+    title: string
+    message: string
+    degradation_reasons: string[]
+  }
+  data_sources: Record<string, DataSourceHealthItem>
+}
+
+export interface DataSourceHealthItem {
+  enabled?: boolean
+  configured?: boolean
+  available?: boolean
+  status?: 'ready' | 'empty' | 'degraded' | 'unavailable' | 'not_configured' | string
+  message?: string
+  details?: Record<string, unknown>
+  [key: string]: unknown
 }
 
 export interface LogSampleRecord {
@@ -340,6 +356,10 @@ export interface ResourceSummary {
   }
   risk_summary: ResourceRiskSummary
   risk_items: ResourceRiskItem[]
+  source_health: Record<string, DataSourceHealthItem>
+  data_status: 'ready' | 'degraded' | 'unavailable'
+  data_message: string
+  degradation_reasons: string[]
 }
 
 export interface TaskFailureDiagnosis {

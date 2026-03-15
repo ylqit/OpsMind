@@ -337,4 +337,5 @@ class DashboardOverview(BaseModel):
     traffic_trend: List[TimeSeriesPoint]
     recent_incidents: List[Incident]
     hot_services: List[ServiceHotspot]
+    data_health: Dict[str, Any] = Field(default_factory=dict)
     data_sources: Dict[str, Any]

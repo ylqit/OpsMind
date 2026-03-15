@@ -3,6 +3,7 @@ import { AutoComplete, Badge, Button, Card, Col, List, Row, Select, Space, Table
 import { useSearchParams } from 'react-router-dom'
 import {
   resourcesApi,
+  type DataSourceHealthItem,
   type ResourceHotspot,
   type ResourceHotspotLayers,
   type ResourceRiskItem,
@@ -169,6 +170,35 @@ const hotspotCategoryLabel = (category: string) => {
   return mapping[category] || category
 }
 
+const sourceStatusLabel = (status?: string) => {
+  if (status === 'ready') {
+    return '运行正常'
+  }
+  if (status === 'empty') {
+    return '当前为空'
+  }
+  if (status === 'degraded') {
+    return '部分降级'
+  }
+  if (status === 'not_configured') {
+    return '待配置'
+  }
+  return '不可用'
+}
+
+const sourceStatusColor = (status?: string) => {
+  if (status === 'ready' || status === 'empty') {
+    return 'green'
+  }
+  if (status === 'degraded') {
+    return 'orange'
+  }
+  if (status === 'not_configured') {
+    return 'gold'
+  }
+  return 'red'
+}
+
 const layerMeta: Array<{ key: keyof ResourceHotspotLayers; title: string; color: string }> = [
   { key: 'host', title: '主机热点', color: 'geekblue' },
   { key: 'container', title: '容器热点', color: 'orange' },
@@ -205,6 +235,18 @@ const ResourceAnalytics: React.FC = () => {
   const hotspotSummary = summary?.hotspot_summary || emptyHotspotSummary
   const riskSummary = summary?.risk_summary || emptyRiskSummary
   const riskItems = summary?.risk_items || []
+  const sourceHealthEntries = Object.entries(summary?.source_health || {})
+
+  const dataStatusBanner = useMemo(() => {
+    if (!summary || error || summary.data_status === 'ready') {
+      return null
+    }
+    return {
+      type: summary.data_status === 'unavailable' ? 'warning' as const : 'info' as const,
+      title: summary.data_status === 'unavailable' ? '资源数据源不可用' : '资源数据源部分降级',
+      description: [summary.data_message, ...(summary.degradation_reasons || [])].filter(Boolean).join(' '),
+    }
+  }, [summary, error])
 
   const loadData = async (override?: { timeRange?: string; serviceKey?: string }) => {
     const activeTimeRange = override?.timeRange ?? timeRange
@@ -304,11 +346,50 @@ const ResourceAnalytics: React.FC = () => {
         />
       ) : null}
 
+      {dataStatusBanner ? (
+        <PageStatusBanner
+          type={dataStatusBanner.type}
+          title={dataStatusBanner.title}
+          description={dataStatusBanner.description}
+        />
+      ) : null}
+
       <Space wrap style={{ marginBottom: 12 }}>
         <Tag color="blue">时间窗：{timeRangeLabelMap[timeRange] || timeRange}</Tag>
         <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
-        <Badge status={refreshing ? 'processing' : 'default'} text={refreshing ? '正在刷新数据' : '数据稳定'} />
+        <Badge
+          status={refreshing ? 'processing' : summary?.data_status === 'ready' ? 'default' : 'warning'}
+          text={refreshing ? '正在刷新数据' : summary?.data_status === 'ready' ? '数据稳定' : '存在降级来源'}
+        />
       </Space>
+
+      <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
+        <Col xs={24}>
+          <Card loading={bootLoading} title="数据源状态" className="ops-surface-card">
+            <List
+              dataSource={sourceHealthEntries}
+              locale={{ emptyText: <CardEmptyState title="暂无数据源状态" /> }}
+              renderItem={([name, status]) => {
+                const item = status as DataSourceHealthItem
+                return (
+                  <List.Item>
+                    <div style={{ width: '100%' }}>
+                      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text strong>{name}</Text>
+                        <Space wrap>
+                          <Tag color={item.configured ? 'green' : 'gold'}>{item.configured ? '已配置' : '待配置'}</Tag>
+                          <Tag color={sourceStatusColor(item.status)}>{sourceStatusLabel(item.status)}</Tag>
+                        </Space>
+                      </Space>
+                      {item.message ? <Text type="secondary">{item.message}</Text> : null}
+                    </div>
+                  </List.Item>
+                )
+              }}
+            />
+          </Card>
+        </Col>
+      </Row>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
         <Col xs={24} md={12}>

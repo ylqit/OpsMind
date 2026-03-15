@@ -207,24 +207,38 @@ def _build_data_sources_status(runtime_config: RuntimeConfig) -> dict[str, Any]:
         raw_logs = [item for item in runtime_config.raw_log_dir.glob("*.log") if item.is_file()]
     access_logs = runtime_config.access_log_path_list
     return {
+        "host": {
+            "enabled": True,
+            "configured": True,
+            "status": "ready",
+            "message": "",
+        },
         "docker": {
             "enabled": "docker" in runtime_config.enabled_data_sources,
             "configured": bool(runtime_config.docker_host),
+            "status": "ready" if runtime_config.docker_host else "not_configured",
+            "message": "" if runtime_config.docker_host else "未配置 Docker 主机地址",
         },
         "prometheus": {
             "enabled": "prometheus" in runtime_config.enabled_data_sources,
             "configured": bool(runtime_config.prometheus_url),
             "base_url": runtime_config.prometheus_url or "",
+            "status": "ready" if runtime_config.prometheus_url else "not_configured",
+            "message": "" if runtime_config.prometheus_url else "未配置 Prometheus 地址",
         },
         "logs": {
             "enabled": True,
             "configured": bool(access_logs or raw_logs),
             "configured_paths": access_logs,
             "discovered_files": [str(path) for path in raw_logs],
+            "status": "ready" if (access_logs or raw_logs) else "not_configured",
+            "message": "" if (access_logs or raw_logs) else "未发现可读取的访问日志文件",
         },
         "alerts": {
             "enabled": True,
             "configured": True,
+            "status": "ready",
+            "message": "",
         },
     }
 

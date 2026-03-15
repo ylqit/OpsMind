@@ -2,10 +2,39 @@ import React, { useEffect, useState } from 'react'
 import { Button, Card, Col, List, Row, Space, Statistic, Tag, Typography } from 'antd'
 import { Line } from '@ant-design/plots'
 import { useNavigate } from 'react-router-dom'
-import { dashboardApi, type DashboardOverview } from '@/api/client'
+import { dashboardApi, type DashboardOverview, type DataSourceHealthItem } from '@/api/client'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 
 const { Paragraph, Text, Title } = Typography
+
+const sourceStatusColor = (status?: string) => {
+  if (status === 'ready' || status === 'empty') {
+    return 'green'
+  }
+  if (status === 'degraded') {
+    return 'orange'
+  }
+  if (status === 'not_configured') {
+    return 'gold'
+  }
+  return 'red'
+}
+
+const sourceStatusLabel = (status?: string) => {
+  if (status === 'ready') {
+    return '运行正常'
+  }
+  if (status === 'empty') {
+    return '当前为空'
+  }
+  if (status === 'degraded') {
+    return '部分降级'
+  }
+  if (status === 'not_configured') {
+    return '待配置'
+  }
+  return '不可用'
+}
 
 export const OverviewDashboard: React.FC = () => {
   const navigate = useNavigate()
@@ -75,6 +104,21 @@ export const OverviewDashboard: React.FC = () => {
         />
       ) : null}
 
+      {!error && data?.data_health?.status && data.data_health.status !== 'ready' ? (
+        <PageStatusBanner
+          type={data.data_health.status === 'unavailable' ? 'warning' : 'info'}
+          title={data.data_health.title}
+          description={(
+            <Space direction="vertical" size={4}>
+              <Text>{data.data_health.message}</Text>
+              {data.data_health.degradation_reasons?.length ? (
+                <Text type="secondary">{data.data_health.degradation_reasons.join('；')}</Text>
+              ) : null}
+            </Space>
+          )}
+        />
+      ) : null}
+
       <Row gutter={[16, 16]}>
         {(data?.cards || []).map((card) => (
           <Col xs={24} sm={12} lg={6} key={card.key}>
@@ -108,16 +152,20 @@ export const OverviewDashboard: React.FC = () => {
               dataSource={Object.entries(data?.data_sources || {})}
               locale={{ emptyText: <CardEmptyState title="暂无数据源配置" /> }}
               renderItem={([name, status]) => {
-                const item = status as { enabled?: boolean; configured?: boolean }
+                const item = status as DataSourceHealthItem
                 return (
                   <List.Item>
-                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                      <Text strong>{name}</Text>
-                      <Space>
-                        <Tag color={item.enabled ? 'blue' : 'default'}>{item.enabled ? '已启用' : '未启用'}</Tag>
-                        <Tag color={item.configured ? 'green' : 'gold'}>{item.configured ? '已配置' : '待配置'}</Tag>
+                    <div style={{ width: '100%' }}>
+                      <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text strong>{name}</Text>
+                        <Space wrap>
+                          <Tag color={item.enabled ? 'blue' : 'default'}>{item.enabled ? '已启用' : '未启用'}</Tag>
+                          <Tag color={item.configured ? 'green' : 'gold'}>{item.configured ? '已配置' : '待配置'}</Tag>
+                          <Tag color={sourceStatusColor(item.status)}>{sourceStatusLabel(item.status)}</Tag>
+                        </Space>
                       </Space>
-                    </Space>
+                      {item.message ? <Text type="secondary">{item.message}</Text> : null}
+                    </div>
                   </List.Item>
                 )
               }}

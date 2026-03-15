@@ -46,6 +46,8 @@ class ResourceAnalyticsEngine:
         flat_hotspots = self._flatten_hotspot_layers(hotspot_layers)
         hotspot_summary = self._build_hotspot_summary(flat_hotspots, hotspot_layers)
         risk_report = self._build_risk_report(docker_summary, hotspot_layers)
+        source_health = self._build_source_health(host_result, docker_summary, prometheus_summary)
+        data_health = self._build_resource_data_health(source_health)
 
         return {
             "host": host_metrics,
@@ -57,11 +59,17 @@ class ResourceAnalyticsEngine:
             "hotspot_summary": hotspot_summary,
             "risk_summary": risk_report["summary"],
             "risk_items": risk_report["items"],
+            "source_health": source_health,
+            "data_status": data_health["status"],
+            "data_message": data_health["message"],
+            "degradation_reasons": data_health["degradation_reasons"],
         }
 
     async def _summarize_docker(self, service_key: Optional[str]) -> Dict[str, Any]:
+        if not self.docker_adapter.host:
+            return {"available": False, "configured": False, "items": [], "message": "未配置 Docker 主机地址"}
         if not await self.docker_adapter.initialize():
-            return {"available": False, "items": []}
+            return {"available": False, "configured": True, "items": [], "message": "Docker 连接不可用"}
         containers = await self.docker_adapter.list_containers(all=True)
         items = []
         for container in containers:
@@ -85,14 +93,19 @@ class ResourceAnalyticsEngine:
                     "oom_killed": state.get("OOMKilled", False),
                 }
             )
-        return {"available": True, "items": items}
+        return {
+            "available": True,
+            "configured": True,
+            "items": items,
+            "message": "未发现容器" if not items else "",
+        }
 
     async def _summarize_prometheus(self) -> Dict[str, Any]:
         if not self.prometheus_url:
-            return {"available": False, "metrics": {}}
+            return {"available": False, "configured": False, "metrics": {}, "message": "未配置 Prometheus 地址"}
         adapter = PrometheusAdapter(base_url=self.prometheus_url, api_key=self.prometheus_api_key)
         if not await adapter.initialize():
-            return {"available": False, "metrics": {}}
+            return {"available": False, "configured": True, "metrics": {}, "message": "Prometheus 连接不可用"}
         metrics: Dict[str, Any] = {}
         for name, query in self.DEFAULT_PROMQL.items():
             try:
@@ -101,7 +114,99 @@ class ResourceAnalyticsEngine:
             except Exception:
                 metrics[name] = []
         await adapter.close()
-        return {"available": True, "metrics": metrics}
+        total_series = sum(len(value) for value in metrics.values() if isinstance(value, list))
+        return {
+            "available": True,
+            "configured": True,
+            "metrics": metrics,
+            "message": "当前查询未返回指标序列" if total_series == 0 else "",
+        }
+
+    def _build_source_health(self, host_result: Any, docker_summary: Dict[str, Any], prometheus_summary: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        host_message = ""
+        if not host_result.success:
+            host_message = str(getattr(host_result, "error_message", "") or "主机监控采集失败")
+        elif not host_result.data.get("metrics"):
+            host_message = "当前未返回主机指标"
+
+        docker_configured = bool(docker_summary.get("configured", False))
+        docker_available = bool(docker_summary.get("available", False))
+        docker_items = docker_summary.get("items", []) if isinstance(docker_summary.get("items"), list) else []
+
+        prometheus_configured = bool(prometheus_summary.get("configured", False))
+        prometheus_available = bool(prometheus_summary.get("available", False))
+        prometheus_metrics = prometheus_summary.get("metrics", {}) if isinstance(prometheus_summary.get("metrics"), dict) else {}
+        prometheus_series = sum(len(value) for value in prometheus_metrics.values() if isinstance(value, list))
+
+        return {
+            "host": {
+                "enabled": True,
+                "configured": True,
+                "available": bool(host_result.success),
+                "status": "ready" if host_result.success else "unavailable",
+                "message": host_message,
+                "details": {
+                    "metric_groups": len(host_result.data.get("metrics", {}) if host_result.success else {}),
+                    "alert_count": len(host_result.data.get("alerts", []) if host_result.success else []),
+                },
+            },
+            "docker": {
+                "enabled": True,
+                "configured": docker_configured,
+                "available": docker_available,
+                "status": "not_configured" if not docker_configured else ("ready" if docker_available else "unavailable"),
+                "message": str(docker_summary.get("message") or ""),
+                "details": {
+                    "container_count": len(docker_items),
+                },
+            },
+            "prometheus": {
+                "enabled": True,
+                "configured": prometheus_configured,
+                "available": prometheus_available,
+                "status": "not_configured" if not prometheus_configured else ("ready" if prometheus_available else "unavailable"),
+                "message": str(prometheus_summary.get("message") or ""),
+                "details": {
+                    "metric_series": prometheus_series,
+                    "metric_groups": len(prometheus_metrics),
+                },
+            },
+        }
+
+    def _build_resource_data_health(self, source_health: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        active_sources = [item for item in source_health.values() if item.get("enabled")]
+        ready_sources = [item for item in active_sources if item.get("status") == "ready"]
+        problematic = []
+        reasons: List[str] = []
+
+        for name, item in source_health.items():
+            status = str(item.get("status") or "ready")
+            if status == "ready":
+                continue
+            problematic.append(name)
+            message = str(item.get("message") or "")
+            if message:
+                reasons.append(f"{name}: {message}")
+
+        if not active_sources or not ready_sources:
+            return {
+                "status": "unavailable",
+                "message": "当前资源数据源不可用，暂时无法形成完整的资源分析结果。",
+                "degradation_reasons": reasons,
+            }
+
+        if problematic:
+            return {
+                "status": "degraded",
+                "message": "部分资源数据源不可用或待配置，当前结果可能不完整。",
+                "degradation_reasons": reasons,
+            }
+
+        return {
+            "status": "ready",
+            "message": "资源数据源运行正常。",
+            "degradation_reasons": [],
+        }
 
     # 资源热点需要按对象层级拆分，前端才能在不同层做风险定位而不是混在一起看。
     def _build_hotspot_layers(
