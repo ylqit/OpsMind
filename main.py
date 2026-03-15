@@ -370,6 +370,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 旧能力接口保留给调试工作台使用；主产品页面统一走聚合路由。
 app.include_router(legacy_routes.router, prefix="/api")
 app.include_router(aggregate_router, prefix="/api")
 app.include_router(websocket.router, prefix="/api")
