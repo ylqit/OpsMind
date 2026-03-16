@@ -276,6 +276,55 @@ class SignalRepository:
         )
         return signal
 
+    def list(
+        self,
+        signal_type: Optional[str] = None,
+        service_key: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        limit: int = 200,
+    ) -> List[Signal]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if signal_type:
+            clauses.append("signal_type = ?")
+            params.append(signal_type)
+        if service_key:
+            clauses.append("service_key = ?")
+            params.append(service_key)
+        if since:
+            clauses.append("timestamp >= ?")
+            params.append(since.isoformat())
+        if until:
+            clauses.append("timestamp <= ?")
+            params.append(until.isoformat())
+
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        safe_limit = max(1, min(limit, 1000))
+        rows = self.db.fetchall(
+            f"""
+            SELECT * FROM signals
+            {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            [*params, safe_limit],
+        )
+        return [
+            Signal(
+                signal_id=row["signal_id"],
+                signal_type=row["signal_type"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                asset_id=row["asset_id"],
+                service_key=row["service_key"],
+                severity=row["severity"],
+                payload=_from_json(row["payload_json"], {}),
+                source=row["source"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
 
 class IncidentRepository:
     def __init__(self, db: SQLiteDatabase):

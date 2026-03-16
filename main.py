@@ -336,7 +336,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     incident_service = IncidentService(incident_repository, CorrelationEngine())
     recommendation_service = RecommendationService(recommendation_repository, artifact_store)
     traffic_analytics_engine = TrafficAnalyticsEngine(config.raw_log_dir or (config.data_dir or config.base_dir / "data") / "raw_logs")
-    resource_analytics_engine = ResourceAnalyticsEngine(config.docker_host, config.prometheus_url, config.prometheus_api_key)
+    resource_analytics_engine = ResourceAnalyticsEngine(
+        config.docker_host,
+        config.prometheus_url,
+        config.prometheus_api_key,
+        asset_repository=asset_repository,
+        signal_repository=signal_repository,
+    )
     summary_builder = SummaryBuilder()
     data_sources_status = _build_data_sources_status(config)
     executor_service = ExecutorService(executor_plugin_repository, executor_audit_log_repository)

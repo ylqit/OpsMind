@@ -148,6 +148,7 @@ docker compose up -d --build
 - SQLite 文件位于容器内 `/app/data/opsmind.db`，由 compose volume 持久化。
 - 首次启动会自动执行 `scripts/seed_demo_data.py`，写入演示日志、incident、recommendation、task 和 artifact。
 - 如需每次启动重置演示数据，可在 `.env` 中将 `SEED_RESET=true`。
+- 当 Docker/Prometheus 未接入时，资源分析页会自动回退到 seed 样本，保证演示环境可完整展示热点、风险和容器摘要。
 
 ### 后端启动
 

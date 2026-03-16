@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from engine.capabilities.host_monitor import HostMonitor
 from engine.domain.service_key_resolver import resolve_docker_service_key
 from engine.integrations.data_sources.docker_adapter import DockerAdapter
 from engine.integrations.data_sources.prometheus_adapter import PrometheusAdapter
+from engine.storage.repositories import AssetRepository, SignalRepository
 
 
 class ResourceAnalyticsEngine:
@@ -29,25 +31,63 @@ class ResourceAnalyticsEngine:
         "restarts": "sum(kube_pod_container_status_restarts_total) by (namespace,pod,service)",
     }
 
-    def __init__(self, docker_host: str, prometheus_url: Optional[str], prometheus_api_key: Optional[str]):
+    def __init__(
+        self,
+        docker_host: str,
+        prometheus_url: Optional[str],
+        prometheus_api_key: Optional[str],
+        asset_repository: Optional[AssetRepository] = None,
+        signal_repository: Optional[SignalRepository] = None,
+    ):
         self.host_monitor = HostMonitor()
         self.docker_adapter = DockerAdapter(host=docker_host)
         self.prometheus_url = prometheus_url
         self.prometheus_api_key = prometheus_api_key
+        self.asset_repository = asset_repository
+        self.signal_repository = signal_repository
 
     async def summarize(self, time_range: str = "1h", service_key: Optional[str] = None) -> Dict[str, Any]:
-        del time_range
         host_result = await self.host_monitor.dispatch(metrics=["cpu", "memory", "disk", "network"])
         docker_summary = await self._summarize_docker(service_key=service_key)
         prometheus_summary = await self._summarize_prometheus()
+        seed_snapshot = None
+        # 当容器与 Prometheus 都不可用时，自动启用演示样本兜底，避免页面全空白。
+        if self._should_use_seed_fallback(docker_summary, prometheus_summary):
+            seed_snapshot = self._build_seed_resource_snapshot(time_range=time_range, service_key=service_key)
 
         host_metrics = host_result.data.get("metrics", {}) if host_result.success else {}
+        if seed_snapshot:
+            host_metrics = self._merge_host_metrics(host_metrics, seed_snapshot.get("host_metrics", {}))
+            docker_summary = self._merge_docker_summary(docker_summary, seed_snapshot.get("containers", []))
+
         hotspot_layers = self._build_hotspot_layers(host_metrics, docker_summary, prometheus_summary)
+        if seed_snapshot:
+            hotspot_layers = self._merge_hotspot_layers(hotspot_layers, seed_snapshot.get("hotspot_layers", {}))
+
         flat_hotspots = self._flatten_hotspot_layers(hotspot_layers)
         hotspot_summary = self._build_hotspot_summary(flat_hotspots, hotspot_layers)
         risk_report = self._build_risk_report(docker_summary, hotspot_layers)
+        risk_items = risk_report["items"]
+        risk_summary = risk_report["summary"]
+        if seed_snapshot:
+            risk_items = self._merge_risk_items(risk_items, seed_snapshot.get("risk_items", []))
+            risk_summary = self._build_risk_summary(risk_items)
+
         source_health = self._build_source_health(host_result, docker_summary, prometheus_summary)
         data_health = self._build_resource_data_health(source_health)
+        if seed_snapshot:
+            source_health["seed"] = {
+                "enabled": True,
+                "configured": True,
+                "available": True,
+                "status": "ready",
+                "message": "已启用内置演示数据补齐资源分析结果",
+                "details": {
+                    "container_count": len(seed_snapshot.get("containers", [])),
+                    "signal_count": int(seed_snapshot.get("signal_count", 0)),
+                },
+            }
+            data_health = self._merge_data_health_with_seed(data_health)
 
         return {
             "host": host_metrics,
@@ -57,8 +97,8 @@ class ResourceAnalyticsEngine:
             "hotspots": flat_hotspots,
             "hotspot_layers": hotspot_layers,
             "hotspot_summary": hotspot_summary,
-            "risk_summary": risk_report["summary"],
-            "risk_items": risk_report["items"],
+            "risk_summary": risk_summary,
+            "risk_items": risk_items,
             "source_health": source_health,
             "data_status": data_health["status"],
             "data_message": data_health["message"],
@@ -600,6 +640,338 @@ class ResourceAnalyticsEngine:
             },
             "categories": dict(category_counter),
             "top_services": top_services[:5],
+        }
+
+    def _should_use_seed_fallback(self, docker_summary: Dict[str, Any], prometheus_summary: Dict[str, Any]) -> bool:
+        docker_available = bool(docker_summary.get("available"))
+        prometheus_available = bool(prometheus_summary.get("available"))
+        return not docker_available and not prometheus_available
+
+    def _build_seed_resource_snapshot(self, time_range: str, service_key: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not self.asset_repository or not self.signal_repository:
+            return None
+
+        since = self._resolve_since_time(time_range)
+        assets = self.asset_repository.list(service_key=service_key)
+        signals = self.signal_repository.list(service_key=service_key, since=since, limit=300)
+        if not assets and not signals:
+            return None
+
+        asset_map = {asset.asset_id: asset for asset in assets}
+        container_assets = [
+            asset for asset in assets
+            if getattr(asset.asset_type, "value", str(asset.asset_type)) == "container"
+        ]
+
+        restarts_by_asset: Dict[str, int] = {}
+        oom_by_asset: Dict[str, bool] = {}
+        layers: Dict[str, List[Dict[str, Any]]] = {
+            "host": [],
+            "container": [],
+            "pod": [],
+            "service": [],
+            "other": [],
+        }
+        risk_items: List[Dict[str, Any]] = []
+        host_metrics: Dict[str, Any] = {}
+
+        # 演示样本信号同样走热点与风险结构，保证前端展示口径与真实数据一致。
+        for signal in signals:
+            payload = signal.payload if isinstance(signal.payload, dict) else {}
+            metric_name = str(payload.get("metric") or "")
+            value = self._extract_metric_value(payload.get("value"))
+            signal_service_key = str(signal.service_key or "")
+            asset = asset_map.get(signal.asset_id or "")
+            target_name = asset.name if asset else (signal_service_key or "seed-target")
+            target_service_key = signal_service_key or (asset.service_key if asset else "")
+            severity = str(signal.severity or "medium")
+
+            if metric_name == "cpu_usage":
+                score = min(100.0, max(0.0, value))
+                layers["container"].append(
+                    self._hotspot(
+                        name=target_name,
+                        layer="container",
+                        score=score,
+                        severity=self._score_to_severity(score),
+                        category="cpu",
+                        reason=f"样本指标显示 CPU 使用率约 {value:.1f}%",
+                        explanation="当前结果来自内置演示样本，表示该服务在高峰窗口存在明显 CPU 热点。",
+                        recommended_action="建议结合真实监控确认是否需要扩容副本或优化热点路径。",
+                        metric="cpu_usage",
+                        value=round(value, 2),
+                        unit="%",
+                        source="seed",
+                        labels=["seed", "cpu"],
+                        service_key=target_service_key,
+                    )
+                )
+                if "cpu" not in host_metrics:
+                    host_metrics["cpu"] = {"usage_percent": round(value, 2)}
+
+            if metric_name == "memory_usage":
+                memory_score = min(100.0, value)
+                layers["container"].append(
+                    self._hotspot(
+                        name=target_name,
+                        layer="container",
+                        score=memory_score,
+                        severity=self._score_to_severity(memory_score),
+                        category="memory",
+                        reason=f"样本指标显示内存使用率约 {value:.1f}%",
+                        explanation="该热点来自演示样本，用于在未接入真实监控时提供资源风险定位入口。",
+                        recommended_action="建议补充 requests/limits 或结合容器日志排查内存抖动原因。",
+                        metric="memory_usage",
+                        value=round(value, 2),
+                        unit="%",
+                        source="seed",
+                        labels=["seed", "memory"],
+                        service_key=target_service_key,
+                    )
+                )
+                if "memory" not in host_metrics:
+                    host_metrics["memory"] = {"usage_percent": round(value, 2)}
+
+            if metric_name in {"restarts", "restart_count"}:
+                restart_count = int(round(value))
+                if signal.asset_id:
+                    restarts_by_asset[signal.asset_id] = max(restarts_by_asset.get(signal.asset_id, 0), restart_count)
+                layers["container"].append(
+                    self._hotspot(
+                        name=target_name,
+                        layer="container",
+                        score=min(100.0, 40 + restart_count * 10),
+                        severity=self._restart_level(restart_count),
+                        category="restart",
+                        reason=f"样本指标显示重启次数 {restart_count}",
+                        explanation="重启信号来自内置样本，说明该服务存在持续不稳定风险。",
+                        recommended_action="建议优先核查探针、依赖连接和容器资源上限配置。",
+                        metric="restarts",
+                        value=restart_count,
+                        unit="次",
+                        source="seed",
+                        labels=["seed", "restart"],
+                        service_key=target_service_key,
+                    )
+                )
+                risk_items.append(
+                    self._risk_item(
+                        risk_type="restart",
+                        level=self._restart_level(restart_count),
+                        layer="container",
+                        target=target_name,
+                        service_key=target_service_key,
+                        metric="restarts",
+                        value=restart_count,
+                        unit="次",
+                        evidence=f"样本记录显示重启次数 {restart_count}",
+                        source="seed",
+                    )
+                )
+
+            if metric_name in {"oom_killed", "oom"} or bool(payload.get("oom_killed")):
+                if signal.asset_id:
+                    oom_by_asset[signal.asset_id] = True
+                layers["container"].append(
+                    self._hotspot(
+                        name=target_name,
+                        layer="container",
+                        score=95,
+                        severity="critical",
+                        category="oom",
+                        reason="样本事件显示容器出现 OOM 风险",
+                        explanation="该信号用于演示 OOM 风险识别链路，真实环境应结合容器事件进一步确认。",
+                        recommended_action="建议优先检查内存限制和应用进程峰值，再决定是否扩容。",
+                        metric="oom_killed",
+                        value=1,
+                        unit="次",
+                        source="seed",
+                        labels=["seed", "oom"],
+                        service_key=target_service_key,
+                    )
+                )
+                risk_items.append(
+                    self._risk_item(
+                        risk_type="oom",
+                        level="critical",
+                        layer="container",
+                        target=target_name,
+                        service_key=target_service_key,
+                        metric="oom_killed",
+                        value=1,
+                        unit="次",
+                        evidence="样本事件记录了 OOM 风险",
+                        source="seed",
+                    )
+                )
+
+            status_code = int(self._extract_metric_value(payload.get("status")))
+            if status_code >= 500:
+                score = 85 if severity in {"high", "critical"} else 75
+                layers["service"].append(
+                    self._hotspot(
+                        name=target_service_key or target_name,
+                        layer="service",
+                        score=score,
+                        severity="high" if score < 90 else "critical",
+                        category="status",
+                        reason=f"样本日志显示状态码 {status_code}",
+                        explanation="该异常来自演示日志样本，用于展示入口错误定位和证据串联效果。",
+                        recommended_action="建议优先检查上游依赖和入口限流策略，确认错误率是否持续抬升。",
+                        metric="status",
+                        value=status_code,
+                        unit="code",
+                        source="seed",
+                        labels=["seed", "log"],
+                        service_key=target_service_key,
+                    )
+                )
+
+        containers = []
+        for asset in container_assets:
+            alignment = asset.source_refs.get("alignment", {}) if isinstance(asset.source_refs, dict) else {}
+            restarts = restarts_by_asset.get(asset.asset_id, 0)
+            oom_killed = bool(oom_by_asset.get(asset.asset_id, False))
+            health_status = str(asset.health_status or "unknown")
+            runtime_status = "running" if health_status in {"healthy", "warning"} else "unknown"
+            containers.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "name": asset.name,
+                    "service_key": asset.service_key,
+                    "alignment": alignment,
+                    "unmapped": bool(asset.unmapped),
+                    "status": runtime_status,
+                    "state": health_status,
+                    "restarts": restarts,
+                    "oom_killed": oom_killed,
+                }
+            )
+
+        if not host_metrics and layers["container"]:
+            top_container = max(layers["container"], key=lambda item: float(item.get("score", 0.0)))
+            host_metrics = {"cpu": {"usage_percent": round(float(top_container.get("score", 0.0)), 2)}}
+
+        for layer_name, items in layers.items():
+            items.sort(key=lambda item: (-float(item.get("score", 0.0)), str(item.get("name", ""))))
+            layers[layer_name] = items[:10]
+
+        if not containers and not any(layers.values()) and not risk_items:
+            return None
+
+        return {
+            "host_metrics": host_metrics,
+            "containers": containers,
+            "hotspot_layers": layers,
+            "risk_items": risk_items[:30],
+            "signal_count": len(signals),
+        }
+
+    def _resolve_since_time(self, time_range: str) -> datetime:
+        normalized = (time_range or "1h").strip().lower()
+        now = datetime.utcnow()
+        if normalized.endswith("m"):
+            return now - timedelta(minutes=max(1, int(normalized[:-1] or "60")))
+        if normalized.endswith("h"):
+            return now - timedelta(hours=max(1, int(normalized[:-1] or "1")))
+        if normalized.endswith("d"):
+            return now - timedelta(days=max(1, int(normalized[:-1] or "1")))
+        return now - timedelta(hours=1)
+
+    def _merge_host_metrics(self, host_metrics: Dict[str, Any], seed_host_metrics: Dict[str, Any]) -> Dict[str, Any]:
+        if not seed_host_metrics:
+            return host_metrics
+        merged = dict(host_metrics)
+        for metric_name, metric_payload in seed_host_metrics.items():
+            if metric_name not in merged:
+                merged[metric_name] = metric_payload
+        return merged
+
+    def _merge_docker_summary(self, docker_summary: Dict[str, Any], seed_containers: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not seed_containers:
+            return docker_summary
+        merged = dict(docker_summary)
+        items = list(merged.get("items", [])) if isinstance(merged.get("items"), list) else []
+        if not items:
+            merged["items"] = seed_containers
+            merged["message"] = str(merged.get("message") or "当前容器数据来自演示样本")
+        return merged
+
+    def _merge_hotspot_layers(
+        self,
+        base_layers: Dict[str, List[Dict[str, Any]]],
+        seed_layers: Dict[str, List[Dict[str, Any]]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        merged: Dict[str, List[Dict[str, Any]]] = {}
+        for layer_name in ("host", "container", "pod", "service", "other"):
+            candidates: Dict[str, Dict[str, Any]] = {}
+            for item in base_layers.get(layer_name, []) + seed_layers.get(layer_name, []):
+                dedup_key = f"{layer_name}:{item.get('name')}:{item.get('metric')}:{item.get('source')}"
+                existed = candidates.get(dedup_key)
+                if not existed or float(item.get("score", 0.0)) > float(existed.get("score", 0.0)):
+                    candidates[dedup_key] = item
+            ordered = sorted(
+                candidates.values(),
+                key=lambda item: (-float(item.get("score", 0.0)), str(item.get("name", ""))),
+            )
+            merged[layer_name] = ordered[:10]
+        return merged
+
+    def _merge_risk_items(self, base_items: List[Dict[str, Any]], seed_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not seed_items:
+            return base_items
+        dedup: Dict[str, Dict[str, Any]] = {}
+        for item in base_items + seed_items:
+            risk_id = str(item.get("risk_id") or "")
+            if not risk_id:
+                continue
+            existed = dedup.get(risk_id)
+            if not existed:
+                dedup[risk_id] = item
+                continue
+            incoming_level = self._risk_rank(str(item.get("level") or "medium"))
+            existed_level = self._risk_rank(str(existed.get("level") or "medium"))
+            if incoming_level > existed_level:
+                dedup[risk_id] = item
+        result = list(dedup.values())
+        result.sort(
+            key=lambda item: (
+                -self._risk_rank(str(item.get("level") or "medium")),
+                -self._extract_metric_value(item.get("value")),
+                str(item.get("target") or ""),
+            )
+        )
+        return result[:30]
+
+    def _build_risk_summary(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "total": len(items),
+            "levels": {"critical": 0, "high": 0, "medium": 0},
+            "oom": {"total": 0, "critical": 0, "high": 0, "medium": 0},
+            "restart": {"total": 0, "critical": 0, "high": 0, "medium": 0},
+        }
+        for item in items:
+            level = str(item.get("level") or "medium")
+            risk_type = str(item.get("risk_type") or "restart")
+            if level not in summary["levels"]:
+                continue
+            summary["levels"][level] += 1
+            if risk_type in ("oom", "restart"):
+                summary[risk_type]["total"] += 1
+                summary[risk_type][level] += 1
+        return summary
+
+    def _merge_data_health_with_seed(self, data_health: Dict[str, Any]) -> Dict[str, Any]:
+        reasons = list(data_health.get("degradation_reasons", []))
+        seed_reason = "seed: 已启用演示数据补齐资源热点"
+        if seed_reason not in reasons:
+            reasons.append(seed_reason)
+
+        # 有样本兜底时维持 degraded，更符合真实可用性表达。
+        return {
+            "status": "degraded",
+            "message": "Docker/Prometheus 不可用时已自动启用演示数据回退，页面仍可展示完整资源视图。",
+            "degradation_reasons": reasons,
         }
 
     def _score_to_severity(self, score: float) -> str:
