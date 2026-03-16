@@ -1,8 +1,4 @@
-"""
-运行时配置模块。
-
-统一管理服务启动所需的环境变量和目录设置。
-"""
+"""运行时配置模块。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -53,8 +49,11 @@ class RuntimeConfig(BaseSettings):
     docker_host: str = Field(default="unix:///var/run/docker.sock", description="Docker 守护进程地址")
     prometheus_url: Optional[str] = Field(default=None, description="Prometheus 地址")
     prometheus_api_key: Optional[str] = Field(default=None, description="Prometheus 鉴权信息")
-    data_sources: str = Field(default="docker", description="启用的数据源列表，使用逗号分隔")
-    access_log_paths: str = Field(default="", description="访问日志文件列表，使用逗号分隔")
+    data_sources: str = Field(default="logfile", description="启用的数据源列表，使用逗号分隔")
+    access_log_paths: str = Field(
+        default="data/raw_logs/access.seed.log",
+        description="访问日志文件列表，使用逗号分隔",
+    )
     sqlite_path: Optional[Path] = Field(default=None, description="SQLite 文件路径")
 
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent)
@@ -111,7 +110,14 @@ class RuntimeConfig(BaseSettings):
         if self.sqlite_path is None:
             self.sqlite_path = self.data_dir / "opsmind.db"
 
-        for path in [self.config_dir, self.data_dir, self.log_dir, self.raw_log_dir, self.tasks_dir, self.sqlite_path.parent]:
+        for path in [
+            self.config_dir,
+            self.data_dir,
+            self.log_dir,
+            self.raw_log_dir,
+            self.tasks_dir,
+            self.sqlite_path.parent,
+        ]:
             path.mkdir(parents=True, exist_ok=True)
 
     @classmethod

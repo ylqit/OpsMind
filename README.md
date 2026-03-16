@@ -13,7 +13,7 @@
 - 流量分析，支持请求趋势、状态码、路径、来源 IP、UA 和错误样本
 - 资源分析，支持主机、容器、Pod、服务维度的热点与风险展示
 - 异常中心，支持 incident 列表、证据链、摘要与分析入口
-- 建议中心，支持基线 / 建议 / diff 三视图、YAML 预览、复制、导出、反馈
+- 建议中心，支持 baseline / recommended / diff 三视图、YAML 预览、复制、导出与反馈
 - 任务中心，支持任务状态、阶段、trace、artifact 与失败诊断
 - AI 助手与质量看板，支持模型调用状态、诊断问答和质量指标
 - 只读执行插件，支持 Linux、Docker、Kubernetes 诊断命令
@@ -50,19 +50,19 @@ logs / metrics / assets
 
 ```text
 opsMind/
-+-- api/                  # 路由、依赖注入、WebSocket
-+-- engine/
-|   +-- analytics/        # 流量、资源、关联分析
-|   +-- domain/           # 资产、信号、异常、建议服务
-|   +-- ingest/           # 日志解析与聚合
-|   +-- llm/              # AI Provider 与路由
-|   +-- operations/       # 执行插件与运维操作
-|   +-- runtime/          # 任务、状态机、trace、artifact
-|   `-- storage/          # SQLite 与仓储层
-+-- frontend/             # React 前端
-+-- scripts/              # 数据初始化与辅助脚本
-+-- data/                 # 本地运行数据与任务产物
-`-- docs/                 # 说明文档
+├─ api/                  # 路由、依赖注入、WebSocket
+├─ engine/
+│  ├─ analytics/         # 流量、资源、关联分析
+│  ├─ domain/            # 资产、信号、异常、建议服务
+│  ├─ ingest/            # 日志解析与聚合
+│  ├─ llm/               # AI Provider 与路由
+│  ├─ operations/        # 执行插件与运维操作
+│  ├─ runtime/           # 任务、状态机、trace、artifact
+│  └─ storage/           # SQLite 与仓储层
+├─ frontend/             # React 前端
+├─ scripts/              # 演示数据与辅助脚本
+├─ data/                 # 本地运行数据
+└─ docs/                 # 项目文档
 ```
 
 ## Quick Start
@@ -113,8 +113,8 @@ npm run dev
 - `FRONTEND_PORT`：前端端口，默认 `3000`
 - `DATA_SOURCES`：数据源类型，默认 `logfile`
 - `ACCESS_LOG_PATHS`：访问日志路径
-- `ENABLE_SEED`：是否初始化演示数据
-- `SEED_RESET`：是否重置演示数据
+- `ENABLE_SEED`：是否执行演示数据初始化脚本
+- `SEED_RESET`：是否重置演示数据脚本生成的固定样本
 - `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`：AI Provider 配置
 - `PROMETHEUS_URL`：Prometheus 地址
 - `DOCKER_HOST`：Docker Socket 或管道地址

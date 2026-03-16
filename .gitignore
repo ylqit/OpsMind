@@ -24,7 +24,7 @@ env/
 *~
 .DS_Store
 
-# 数据文件
+# 运行数据
 data/
 *.db
 *.sqlite
@@ -43,22 +43,20 @@ config.yaml
 credentials.json
 *.p12
 *.pfx
-
-# MCP 配置（可能包含 API Key）
 mcp_config.json
 
-# 上传文件
+# 临时目录
 uploads/
 tmp/
 cache/
+out/
 
-# 模型权重
+# 模型文件
 *.pth
 *.bin
 *.pt
-out/
 
-# 前端
+# 前端依赖与构建
 node_modules/
 .npm
 dist/
@@ -72,18 +70,19 @@ htmlcov/
 pytest-cache-files-*/
 .test_tmp/
 %SystemDrive%/
+**/%SystemDrive%/
 test_api.py
 *.test.py
 tests/*
 api_test.html
 tests/__pycache__/
-__pycache__/
+frontend/test-results/
+data/pytest_tmp/
 
 # 前端构建临时文件
 frontend/tsconfig.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
 
-# 文档
+# Mock 文件
 __mocks__/
-*.log

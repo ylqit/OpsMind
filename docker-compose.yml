@@ -12,7 +12,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       SQLITE_PATH: /app/data/opsmind.db
-      # Compose 默认走日志模式，避免未挂载 Docker Socket 时启动失败。
+      # Compose 默认使用日志模式，避免未挂载 Docker Socket 时启动失败。
       DATA_SOURCES: ${DATA_SOURCES:-logfile}
       ACCESS_LOG_PATHS: ${ACCESS_LOG_PATHS:-/app/data/raw_logs/access.seed.log}
       ENABLE_SEED: ${ENABLE_SEED:-true}
@@ -40,4 +40,3 @@ services:
 volumes:
   opsmind_data:
   opsmind_logs:
-
