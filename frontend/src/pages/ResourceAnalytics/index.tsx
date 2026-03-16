@@ -252,6 +252,7 @@ const ResourceAnalytics: React.FC = () => {
     const activeTimeRange = override?.timeRange ?? timeRange
     const activeServiceKey = override?.serviceKey ?? deferredServiceKey
     const hasSnapshot = Boolean(summary)
+    // 已有快照时走轻量刷新，避免筛选切换时整页闪烁回到骨架屏。
     if (hasSnapshot) {
       setRefreshing(true)
     } else {
@@ -287,11 +288,13 @@ const ResourceAnalytics: React.FC = () => {
   useEffect(() => {
     const nextTimeRange = searchParams.get('time_range')
     const nextServiceKey = searchParams.get('service_key')
+    // URL 只负责恢复当前筛选，不直接承载页面自身的分析状态。
     syncOpsFilters({ timeRange: nextTimeRange, serviceKey: nextServiceKey })
     setFiltersReady(true)
   }, [searchParams, syncOpsFilters])
 
   useEffect(() => {
+    // store 变化再回写到 URL，保证主控台跨页联动和刷新后恢复使用同一套来源。
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous)
       next.set('time_range', timeRange)

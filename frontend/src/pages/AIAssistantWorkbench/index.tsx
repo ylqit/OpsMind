@@ -141,6 +141,7 @@ const AIAssistantWorkbench: React.FC = () => {
     [history],
   )
 
+  // 优先展示最新一轮回复里的命令建议；若还没发起对话，则回退到状态接口的默认建议。
   const activeSuggestions = latestAssistantItem?.suggestions?.length
     ? latestAssistantItem.suggestions
     : (statusPayload?.command_suggestions || [])
@@ -215,6 +216,7 @@ const AIAssistantWorkbench: React.FC = () => {
     setHistory((previous) => [...previous, userItem])
     setDiagnoseLoading(true)
     try {
+      // AI 助手始终基于当前页面筛选上下文发起诊断，避免对话结果脱离主控台视角。
       const response = (await aiApi.diagnoseWithAssistant({
         message: normalizedPrompt,
         service_key: serviceKey || entryContext.serviceKey || undefined,
@@ -232,6 +234,7 @@ const AIAssistantWorkbench: React.FC = () => {
         degradedReason: response.degraded_reason,
         suggestions: response.command_suggestions || [],
       }
+      // 对话历史只保留结构化后的结果，命令建议与降级信息都附着在同一条 assistant 消息上。
       setHistory((previous) => [...previous, assistantItem])
       if (response.status === 'degraded') {
         message.warning('AI 助手已降级到规则模式，建议先完成 Provider 配置')

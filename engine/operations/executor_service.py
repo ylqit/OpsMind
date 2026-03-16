@@ -83,6 +83,7 @@ class ExecutorService:
         self._seed_default_plugins()
 
     def _build_plugin_specs(self) -> dict[str, ExecutorPluginSpec]:
+        # 这里维护插件静态白名单与命令模板，是执行安全边界的唯一声明入口。
         return {
             ExecutorPluginKey.LINUX.value: ExecutorPluginSpec(
                 key=ExecutorPluginKey.LINUX.value,
@@ -280,6 +281,7 @@ class ExecutorService:
         }
 
     def _seed_default_plugins(self) -> None:
+        # 静态规格只描述能力边界，实际启停与熔断状态仍以数据库记录为准。
         defaults = [
             ExecutorPluginRecord(
                 plugin_key=spec.key,
@@ -330,6 +332,7 @@ class ExecutorService:
         }
 
     def _normalize_execution_context(self, execution_context: dict[str, Any] | None) -> ExecutorRunContext:
+        # 远程字段先统一进上下文对象，当前版本默认仍走本地执行。
         raw = execution_context if isinstance(execution_context, dict) else {}
         mode = str(raw.get("mode") or "local").strip().lower()
         if mode not in {"local", "remote"}:
@@ -384,6 +387,7 @@ class ExecutorService:
         else:
             health_status = ExecutorHealthStatus.HEALTHY.value
 
+        # 前端展示依赖分类统计，避免在页面侧重复解析命令包。
         readonly_examples = [" ".join(item) for item in (spec.readonly_prefixes if spec else tuple())]
         write_examples = [" ".join(item) for item in (spec.write_prefixes if spec else tuple())]
         readonly_command_packs = []

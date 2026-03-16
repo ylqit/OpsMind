@@ -1,10 +1,12 @@
 import axios from 'axios'
 import { getErrorMessage, getErrorType } from '@/utils/errorHandler'
 
+// 前端统一通过这一层消费后端契约，页面与 store 不直接拼接原始请求细节。
 const API_BASE_URL = '/api'
 
 const encodePathSegment = (value: string) => encodeURIComponent(value)
 
+// 产物相关 URL 统一在这里编码，避免任务页和建议页各自拼接路径。
 const buildTaskArtifactPath = (taskId: string, artifactId: string) =>
   `/tasks/${encodePathSegment(taskId)}/artifacts/${encodePathSegment(artifactId)}`
 
@@ -38,6 +40,7 @@ const extractErrorDetail = (payload: unknown): string => {
   return ''
 }
 
+// 共享领域类型：总览、异常、建议、任务和执行插件页面都依赖这些结构。
 export interface OverviewCard {
   key: string
   label: string
@@ -989,6 +992,7 @@ type HttpClient = {
   delete<T = any>(url: string, config?: unknown): Promise<T>
 }
 
+// 统一 HTTP 客户端：请求超时和错误文案都在这里收口。
 const rawApiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -997,6 +1001,7 @@ const rawApiClient = axios.create({
   },
 })
 
+// 在客户端统一规范错误文案，减少页面重复判断 HTTP 状态码。
 rawApiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -1035,12 +1040,14 @@ rawApiClient.interceptors.response.use(
 
 const apiClient = rawApiClient as unknown as HttpClient
 
+// 能力调试与兼容入口。
 export const capabilitiesApi = {
   list: () => apiClient.get('/capabilities'),
   getSchema: (name: string) => apiClient.get(`/capabilities/${encodePathSegment(name)}/schema`),
   dispatch: (name: string, params: Record<string, unknown>) => apiClient.post(`/capabilities/${encodePathSegment(name)}/dispatch`, { params }),
 }
 
+// 仪表盘与分析聚合接口。
 export const dashboardApi = {
   getOverview: (params?: { time_range?: string; service_key?: string }) => apiClient.get('/dashboard/overview', { params }),
   createDailyReport: (payload: { date: string; scope: string }) => apiClient.post('/reports/daily', payload),
@@ -1055,6 +1062,7 @@ export const resourcesApi = {
   listAssets: (params?: { asset_type?: string; service_key?: string; health_status?: string }) => apiClient.get('/assets', { params }),
 }
 
+// 异常、建议与任务主链路接口。
 export const incidentsApi = {
   list: (params?: { status?: string; severity?: string; service_key?: string; time_range?: string }) => apiClient.get('/incidents', { params }),
   get: (incidentId: string) => apiClient.get(`/incidents/${encodePathSegment(incidentId)}`),
@@ -1097,6 +1105,7 @@ export const tasksApi = {
   getArtifactDownloadUrl: (taskId: string, artifactId: string) => `${API_BASE_URL}${buildTaskArtifactPath(taskId, artifactId)}/download`,
 }
 
+// 质量与评估指标接口。
 export const metricsApi = {
   getRecommendation: (params?: {
     start_date?: string
@@ -1119,6 +1128,7 @@ export const metricsApi = {
     apiClient.get('/metrics/ai-usage', { params }),
 }
 
+// 执行插件与只读诊断接口。
 export const executorsApi = {
   getStatus: (params?: { limit?: number }) => apiClient.get('/executors/status', { params }),
   listReadonlyCommandPacks: (params?: { plugin_key?: string }) =>
@@ -1143,6 +1153,7 @@ export const executorsApi = {
   ) => apiClient.patch(`/executors/plugins/${encodePathSegment(pluginKey)}`, payload),
 }
 
+// AI Provider、助手和调用日志接口。
 export const aiApi = {
   chat: (payload: {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
@@ -1211,6 +1222,7 @@ const resolveProviderIdByName = async (providerName: string): Promise<string> =>
   return matched.provider_id
 }
 
+// 兼容层：旧页面仍可通过 llmApi 调用，内部统一转发到 aiApi。
 export const llmApi = {
   listProviders: () => aiApi.listProviders(),
   createProvider: (payload: {

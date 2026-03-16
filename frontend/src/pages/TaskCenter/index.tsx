@@ -228,6 +228,7 @@ export const TaskCenter: React.FC = () => {
   useTaskEventStream({
     enabled: true,
     onEvent: (event) => {
+      // 任务中心直接复用事件流做全表刷新，保持列表、详情和审批状态天然一致。
       if (event.task_id) {
         void loadTasks()
       }
@@ -252,6 +253,7 @@ export const TaskCenter: React.FC = () => {
     if (!selectedTaskId && taskIdFromQuery) {
       return
     }
+    // 当前选中的任务写回 URL，方便从异常中心和建议中心深链进入。
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous)
       if (selectedTaskId) {
@@ -352,6 +354,7 @@ export const TaskCenter: React.FC = () => {
     setPreviewLoading(true)
     setPreviewArtifactId(artifact.artifact_id)
     try {
+      // 任务详情页不缓存产物正文，保持列表切换时内存占用稳定。
       const response = (await tasksApi.getArtifactContent(artifact.task_id, artifact.artifact_id)) as ArtifactContentResponse
       setPreview({ artifact, content: response.content, filename: response.filename })
     } catch (error) {
@@ -376,6 +379,7 @@ export const TaskCenter: React.FC = () => {
     if (!selectedTask) {
       return
     }
+    // 优先从任务 payload/result_ref 恢复 incident 上下文，再把 artifact 深链带到建议中心。
     const payloadIncidentValue = selectedTask.task.payload['incident_id']
     const resultIncidentValue = selectedTask.task.result_ref?.['incident_id']
     const payloadIncidentId = typeof payloadIncidentValue === 'string' ? payloadIncidentValue : ''

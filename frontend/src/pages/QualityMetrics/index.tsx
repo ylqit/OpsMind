@@ -274,6 +274,7 @@ const QualityMetrics: React.FC = () => {
   }, [filtersReady, windowSize, serviceKey, providerName, model, version])
 
   useEffect(() => {
+    // 先从 URL 恢复共享筛选，再触发质量看板数据加载，避免首屏抖动和重复请求。
     syncQualityFilters({
       window: searchParams.get('window'),
       serviceKey: searchParams.get('service_key'),
@@ -285,6 +286,7 @@ const QualityMetrics: React.FC = () => {
   }, [searchParams, syncQualityFilters])
 
   useEffect(() => {
+    // 质量看板也回写统一筛选到 URL，这样刷新和跨页切换时都能保留上下文。
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous)
       next.set('window', windowSize)

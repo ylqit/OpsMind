@@ -160,6 +160,7 @@ export const IncidentCenter: React.FC = () => {
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
+  // 先在页面内完成证据分层，保持异常详情、摘要卡片和证据链展示口径一致。
   const groupedEvidence = useMemo(() => {
     const groups: Record<string, EvidenceItem[]> = {}
     const items = (selectedIncident?.incident.evidence_refs || []) as EvidenceItem[]
@@ -183,6 +184,7 @@ export const IncidentCenter: React.FC = () => {
       .map(([layer, items]) => [layer, sortEvidenceItems(items)] as const)
   }, [selectedIncident])
 
+  // 优先展示后端汇总出的诊断摘要，缺失时再回退到证据链和异常本身的摘要字段。
   const diagnosisSummary = useMemo(() => {
     if (!selectedIncident) {
       return null
@@ -290,6 +292,7 @@ export const IncidentCenter: React.FC = () => {
     if (!incidentId) {
       return
     }
+    // 跳页时把当前 incident 相关上下文带过去，减少建议中心重新定位的成本。
     if (selectedIncident?.incident.service_key) {
       setServiceKey(selectedIncident.incident.service_key)
     }
@@ -322,6 +325,7 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return
     }
+    // AI 助手默认接续当前异常上下文，而不是从空白会话重新开始。
     const params = new URLSearchParams()
     params.set('source', 'incident')
     params.set('incidentId', selectedIncident.incident.incident_id)
@@ -338,6 +342,7 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return
     }
+    // 通过异常时间窗反推主控台筛选条件，保证跨页联动仍落在同一观察窗口内。
     const params = new URLSearchParams()
     const timeWindowStart = new Date(selectedIncident.incident.time_window_start)
     const timeWindowEnd = new Date(selectedIncident.incident.time_window_end)

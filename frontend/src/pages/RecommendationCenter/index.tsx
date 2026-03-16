@@ -881,6 +881,7 @@ export const RecommendationCenter: React.FC = () => {
 
   const loadIncidentDetail = async (incidentId: string) => {
     const detail = (await incidentsApi.get(incidentId)) as IncidentDetailResponse
+    // 切换 incident 时同步清空页内派生缓存，避免上一条建议的视图残留到当前上下文。
     setSelected(detail)
     setAiReviewByRecommendationId({})
     setFeedbackByRecommendationId({})
@@ -923,6 +924,7 @@ export const RecommendationCenter: React.FC = () => {
     if (Object.prototype.hasOwnProperty.call(manifestMetaByRecommendationId, recommendationId)) {
       return manifestMetaByRecommendationId[recommendationId]
     }
+    // metadata 只做增强展示，缺失时页面仍应保持可用。
     const metadataArtifact = buildArtifactGroup(recommendation.artifact_refs).metadata
     if (!metadataArtifact) {
       setManifestMetaByRecommendationId((previous) => ({ ...previous, [recommendationId]: null }))
@@ -1052,6 +1054,7 @@ export const RecommendationCenter: React.FC = () => {
       message.warning('引用产物不存在或已失效')
       return
     }
+    // 证据跳转复用主预览链路，这样路由、三视图和复制/下载状态都能保持一致。
     await previewArtifact(targetArtifact, owner.recommendation_id, selected.incident.incident_id)
     setEvidenceDrawerOpen(false)
   }
@@ -1123,6 +1126,7 @@ export const RecommendationCenter: React.FC = () => {
   }
 
   const refreshIncidentWithRetry = async (incident: IncidentRecord) => {
+    // 建议生成是异步链路，短时间轮询即可把新草稿接回当前页，不额外引入复杂订阅。
     for (let index = 0; index < 3; index += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 800))
       const detail = (await incidentsApi.get(incident.incident_id)) as IncidentDetailResponse
@@ -1153,6 +1157,7 @@ export const RecommendationCenter: React.FC = () => {
     if (!selected) {
       return
     }
+    // 把当前建议或异常上下文带入 AI 助手，确保后续对话围绕同一条处理链继续展开。
     const params = new URLSearchParams()
     const timeRange = inferTimeRangeFromIncident(selected.incident)
     params.set('source', recommendation ? 'recommendation' : 'incident')

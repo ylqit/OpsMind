@@ -72,6 +72,8 @@ from settings import RuntimeConfig
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# 这些单例由 FastAPI lifespan 统一初始化，并挂到 app.state 供路由层复用。
+# 这样可以避免在模块导入阶段提前触发外部依赖或数据库访问。
 config: RuntimeConfig | None = None
 capability_registry: CapabilityRegistry | None = None
 alert_store: AlertStore | None = None
@@ -212,6 +214,7 @@ def refresh_llm_router_from_db() -> LLMRouter | None:
 
 
 def _build_data_sources_status(runtime_config: RuntimeConfig) -> dict[str, Any]:
+    # 主控台各页面共享这一份数据源摘要，统一呈现“可用 / 未配置 / 降级”状态。
     raw_logs = []
     if runtime_config.raw_log_dir:
         raw_logs = [item for item in runtime_config.raw_log_dir.glob("*.log") if item.is_file()]
@@ -254,6 +257,7 @@ def _build_data_sources_status(runtime_config: RuntimeConfig) -> dict[str, Any]:
 
 
 def _register_capabilities(registry: CapabilityRegistry, current_alert_store: AlertStore, llm_router: LLMRouter | None) -> None:
+    # 能力注册表继续保留给调试工作台使用；主产品页面优先走聚合 API。
     registry.register(HostMonitor())
     registry.register(AlertManager(current_alert_store))
     registry.register(RemediationPlan())
@@ -295,6 +299,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     llm_config = llm_config_manager.load_config()
     llm_config_manager_instance = llm_config_manager
 
+    # 先完成持久化与 Provider 恢复，再初始化依赖它们的运行时服务。
     runtime_db = SQLiteDatabase(config.sqlite_path or (config.data_dir or config.base_dir / "data") / "opsmind.db")
     runtime_db.initialize()
     task_repository = TaskRepository(runtime_db)
@@ -331,6 +336,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     artifact_store = ArtifactStore(config.tasks_dir or (config.data_dir or config.base_dir / "data") / "tasks")
     task_manager = TaskManager(task_repository, artifact_repository, trace_store, artifact_store, event_bus)
 
+    # 这里组装的是主链路依赖：资产、信号、异常、建议、流量、资源与执行插件。
     asset_service = AssetService(asset_repository, config.docker_host)
     signal_service = SignalService(signal_repository)
     incident_service = IncidentService(incident_repository, CorrelationEngine())
@@ -347,6 +353,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     data_sources_status = _build_data_sources_status(config)
     executor_service = ExecutorService(executor_plugin_repository, executor_audit_log_repository)
 
+    # 路由层统一从 app.state 取依赖，避免模块之间直接互相引用全局变量。
     app.state.runtime_config = config
     app.state.capability_registry = capability_registry
     app.state.alert_store = alert_store
@@ -367,6 +374,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.llm_router = llm_router_instance
     app.state.executor_service = executor_service
 
+    # 告警轮询与事件总线在应用生命周期内常驻，退出时统一停止。
     websocket.bind_event_bus(event_bus)
     background_task_manager = BackgroundTaskManager(alert_store)
     await background_task_manager.start()

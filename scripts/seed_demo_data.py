@@ -118,6 +118,7 @@ def ensure_access_log(seed_log_path: Path, reset: bool) -> None:
 
 
 def _build_manifest_files(task_dir: Path) -> tuple[ArtifactRef, ArtifactRef, ArtifactRef, ArtifactRef]:
+    # 同时生成基线、建议稿、diff 和 metadata，保证建议中心三视图在演示环境里完整可见。
     baseline_content = (
         "apiVersion: apps/v1\n"
         "kind: Deployment\n"

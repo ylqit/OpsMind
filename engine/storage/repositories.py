@@ -31,6 +31,7 @@ from engine.runtime.time_utils import parse_optional_utc_datetime, parse_utc_dat
 from .sqlite import SQLiteDatabase
 
 
+# 统一使用 ensure_ascii=False，避免中文摘要和说明字段被转义后影响前端展示。
 def _to_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
@@ -41,6 +42,7 @@ def _from_json(value: Optional[str], default: Any) -> Any:
     return json.loads(value)
 
 
+# 仓储层统一负责把数据库中的时间解析成 UTC 语义，业务层不再自己兜底。
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
     return parse_optional_utc_datetime(value)
 

@@ -52,6 +52,7 @@ class TaskManager:
 
     async def create_task(self, task_type: TaskType, payload: Dict[str, Any], runner: TaskRunner) -> TaskRecord:
         task = TaskRecord(task_type=task_type, payload=payload)
+        # 先落库和写初始状态，再启动后台协程，保证任务一创建就能被页面与恢复逻辑感知到。
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         await self._publish("task_created", task)
@@ -136,6 +137,7 @@ class TaskManager:
             observation=Observation(kind=ObservationKind.INLINE, summary=summary, data=data),
         )
         self.trace_store.append_trace(record)
+        # WebSocket 只广播轻量摘要，详细 trace 仍以文件和详情接口为准。
         await self._publish("task_progress", task, extra={"step": step, "action": action, "summary": summary, "data": data or {}})
 
     async def attach_artifact(self, task_id: str, artifact_ref) -> None:
@@ -193,6 +195,7 @@ class TaskManager:
             task = self._require_task(task_id)
             result = await runner(task)
             latest = self.get_task(task_id)
+            # 建议稿进入人工确认后，后台协程不再覆盖最终状态，由审批动作闭环完成。
             if latest and latest.status not in {TaskStatus.WAITING_CONFIRM, TaskStatus.COMPLETED}:
                 await self.complete_task(task_id, result)
         except asyncio.CancelledError:
@@ -210,6 +213,7 @@ class TaskManager:
             self._running_tasks.pop(task_id, None)
 
     async def _publish(self, event_type: str, task: TaskRecord, extra: Optional[Dict[str, Any]] = None) -> None:
+        # 统一任务事件载荷，前端任务中心、异常中心和建议中心都消费同一份结构。
         payload = {
             "type": event_type,
             "task_id": task.task_id,

@@ -64,7 +64,7 @@ node_modules/
 dist/
 build/
 
-# 测试
+# 测试与本地缓存
 .pytest_cache/
 .coverage
 htmlcov/
@@ -74,7 +74,7 @@ pytest-cache-files-*/
 %SystemDrive%/
 test_api.py
 *.test.py
-tests/
+tests/*
 api_test.html
 tests/__pycache__/
 __pycache__/
