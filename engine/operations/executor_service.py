@@ -5,7 +5,7 @@ import shlex
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Sequence
 
 from engine.runtime.models import (
@@ -15,6 +15,7 @@ from engine.runtime.models import (
     ExecutorPluginRecord,
     ExecutorRunStatus,
 )
+from engine.runtime.time_utils import utc_now
 from engine.storage.repositories import ExecutorAuditLogRepository, ExecutorPluginRepository
 
 
@@ -373,7 +374,7 @@ class ExecutorService:
 
     def _serialize_plugin(self, plugin: ExecutorPluginRecord) -> dict[str, Any]:
         spec = self._specs.get(plugin.plugin_key)
-        now = datetime.utcnow()
+        now = utc_now()
         circuit_open = bool(plugin.circuit_open_until and plugin.circuit_open_until > now)
 
         if not plugin.enabled:
@@ -453,7 +454,7 @@ class ExecutorService:
         # 统一证据快照结构，便于任务中心、异常中心和建议中心复用同一数据契约。
         return {
             "source": "executor_plugin",
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": utc_now().isoformat(),
             "execution": {
                 "execution_id": str(execution.get("execution_id") or ""),
                 "task_id": str(execution.get("task_id") or ""),
@@ -685,7 +686,7 @@ class ExecutorService:
             "last_error": error_text[:300],
         }
         if failure_count >= self.FAILURE_THRESHOLD:
-            updates["circuit_open_until"] = datetime.utcnow() + timedelta(seconds=self.CIRCUIT_COOLDOWN_SECONDS)
+            updates["circuit_open_until"] = utc_now() + timedelta(seconds=self.CIRCUIT_COOLDOWN_SECONDS)
         latest = self.plugin_repository.update(plugin.plugin_key, updates)
         return latest if latest else plugin
 
@@ -735,7 +736,7 @@ class ExecutorService:
             saved = self.audit_repository.save(audit)
             return self._build_run_response(saved, plugin, run_context)
 
-        now = datetime.utcnow()
+        now = utc_now()
         if plugin.circuit_open_until and plugin.circuit_open_until > now:
             audit = self._build_audit(
                 plugin_key=plugin_key,

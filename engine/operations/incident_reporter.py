@@ -8,12 +8,12 @@
 - Markdown 格式报告生成与导出
 """
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
 from engine.capabilities.base import BaseCapability, CapabilityMetadata
 from engine.capabilities.decorators import with_timeout, with_error_handling
 from engine.contracts import ActionResult
+from engine.runtime.time_utils import utc_now
 
 
 class IncidentReportInput(BaseModel):
@@ -112,7 +112,7 @@ class IncidentReporter(BaseCapability):
         """
         from main import alert_store, capability_registry
 
-        now = datetime.now()
+        now = utc_now()
         report_id = f"IR-{now.strftime('%Y%m%d-%H%M%S')}"
 
         report_data = {
@@ -272,7 +272,7 @@ class IncidentReporter(BaseCapability):
         Returns:
             Markdown 格式的报告内容
         """
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = utc_now().strftime("%Y-%m-%d %H:%M:%S")
         report_id = report_data["report_id"]
 
         md = f"""# 故障事件报告
@@ -378,7 +378,7 @@ class IncidentReporter(BaseCapability):
         Returns:
             报告文件路径
         """
-        now = datetime.now()
+        now = utc_now()
         report_id = f"IR-{now.strftime('%Y%m%d-%H%M%S')}"
 
         if report_dir is None:

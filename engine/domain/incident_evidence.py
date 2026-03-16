@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
 from typing import Any, Dict, Iterable, List
+
+from engine.runtime.time_utils import parse_utc_datetime
 
 
 LAYER_ORDER = {
@@ -403,7 +404,7 @@ def _normalize_timestamp_order(item: Dict[str, Any]) -> float:
     if not text:
         return 0.0
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        return parse_utc_datetime(text).timestamp()
     except ValueError:
         return 0.0
 

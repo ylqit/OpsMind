@@ -6,8 +6,9 @@
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from datetime import datetime
 import asyncio
+
+from engine.runtime.time_utils import utc_now_iso
 
 
 class AlertStore:
@@ -63,7 +64,7 @@ class AlertStore:
             data = await self._read_json(self.rules_file)
             rule_id = f"rule_{data['next_id']}"
             rule["id"] = rule_id
-            rule["created_at"] = datetime.now().isoformat()
+            rule["created_at"] = utc_now_iso()
             rule["updated_at"] = rule["created_at"]
             rule["enabled"] = True
             data["rules"].append(rule)
@@ -154,7 +155,7 @@ class AlertStore:
             data = await self._read_json(self.alerts_file)
             alert_id = f"alert_{data['next_id']}"
             alert["id"] = alert_id
-            alert["created_at"] = datetime.now().isoformat()
+            alert["created_at"] = utc_now_iso()
             alert["status"] = "active"
             data["alerts"].append(alert)
             data["next_id"] += 1
@@ -210,7 +211,7 @@ class AlertStore:
             for alert in data["alerts"]:
                 if alert["id"] == alert_id:
                     alert["status"] = "acknowledged"
-                    alert["acknowledged_at"] = datetime.now().isoformat()
+                    alert["acknowledged_at"] = utc_now_iso()
                     alert["acknowledged_by"] = acknowledged_by
                     await self._write_json(self.alerts_file, data)
                     return True
@@ -236,7 +237,7 @@ class AlertStore:
             for alert in data["alerts"]:
                 if alert["id"] == alert_id:
                     alert["status"] = "resolved"
-                    alert["resolved_at"] = datetime.now().isoformat()
+                    alert["resolved_at"] = utc_now_iso()
                     alert["resolved_by"] = resolved_by
                     await self._write_json(self.alerts_file, data)
                     return True
@@ -284,7 +285,7 @@ class AlertStore:
             for rule in data["rules"]:
                 if rule["id"] == rule_id:
                     rule.update(updates)
-                    rule["updated_at"] = datetime.now().isoformat()
+                    rule["updated_at"] = utc_now_iso()
                     await self._write_json(self.rules_file, data)
                     return True
             return False

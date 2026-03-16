@@ -10,10 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-
-def utc_now() -> datetime:
-    """统一的时间生成函数，便于测试与后续替换。"""
-    return datetime.utcnow()
+from .time_utils import utc_now
 
 
 class TaskType(str, Enum):

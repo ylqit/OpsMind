@@ -9,6 +9,8 @@ from typing import Optional, Dict, Any, List
 from uuid import UUID, uuid4
 from datetime import datetime
 
+from engine.runtime.time_utils import utc_now, utc_now_iso
+
 
 class RuntimeState(IntEnum):
     """
@@ -75,7 +77,7 @@ class ExecutionContext:
     state: RuntimeState
     history: List[Dict[str, Any]] = field(default_factory=list)
     variables: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
 
     @classmethod
@@ -89,7 +91,7 @@ class ExecutionContext:
         Returns:
             ExecutionContext: 新创建的执行上下文实例
         """
-        now = datetime.now()
+        now = utc_now()
         return cls(
             session_uuid=uuid4(),
             flow_id=flow_id,
@@ -111,7 +113,7 @@ class ExecutionContext:
         self.state = new_state
         if phase is not None:
             self.current_phase = phase
-        self.updated_at = datetime.now()
+        self.updated_at = utc_now()
 
     def record_history(self, entry: Dict[str, Any]) -> None:
         """
@@ -120,7 +122,7 @@ class ExecutionContext:
         Args:
             entry: 历史记录条目
         """
-        entry["timestamp"] = datetime.now().isoformat()
+        entry["timestamp"] = utc_now_iso()
         self.history.append(entry)
 
 

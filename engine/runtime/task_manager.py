@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from engine.runtime.artifact_store import ArtifactStore
@@ -23,6 +22,7 @@ from engine.runtime.models import (
     TraceRecord,
 )
 from engine.runtime.state_machine import TaskStateMachine
+from engine.runtime.time_utils import utc_now
 from engine.runtime.trace_store import TraceStore
 from engine.storage.repositories import ArtifactRepository, TaskRepository
 
@@ -67,8 +67,8 @@ class TaskManager:
         task.progress = 100
         task.progress_message = f"建议稿已确认，确认人：{approval.approved_by}"
         task.approval = approval
-        task.completed_at = datetime.utcnow()
-        task.updated_at = datetime.utcnow()
+        task.completed_at = utc_now()
+        task.updated_at = utc_now()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         self.trace_store.write_result(
@@ -102,7 +102,7 @@ class TaskManager:
         if TaskStateMachine.can_transition(task.status, TaskStatus.CANCELLED):
             task.status = TaskStatus.CANCELLED
             task.current_stage = TaskStatus.CANCELLED
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             self.task_repository.save(task)
             self.trace_store.write_state(task)
             await self._publish("task_failed", task, extra={"message": "任务已取消"})
@@ -119,7 +119,7 @@ class TaskManager:
         task.current_stage = stage
         task.progress = progress
         task.progress_message = message
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         await self._publish("task_stage_changed", task, extra={"message": message})
@@ -151,7 +151,7 @@ class TaskManager:
         task.progress = max(task.progress, 90)
         task.result_ref = result_ref
         task.progress_message = "建议稿已生成，等待人工确认"
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         await self._publish("task_waiting_confirm", task)
@@ -166,8 +166,8 @@ class TaskManager:
         task.progress = 100
         task.result_ref = result
         task.progress_message = "任务执行完成"
-        task.completed_at = datetime.utcnow()
-        task.updated_at = datetime.utcnow()
+        task.completed_at = utc_now()
+        task.updated_at = utc_now()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         self.trace_store.write_result(task_id, result)
@@ -182,7 +182,7 @@ class TaskManager:
         task.current_stage = TaskStatus.FAILED
         task.error = TaskError(error_code=error_code, error_message=error_message, failed_stage=failed_stage)
         task.progress_message = error_message
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         self.task_repository.save(task)
         self.trace_store.write_state(task)
         await self._publish("task_failed", task, extra={"error": task.error.model_dump(mode="json")})

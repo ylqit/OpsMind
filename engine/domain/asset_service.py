@@ -5,12 +5,12 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import List, Optional
 
 from engine.domain.service_key_resolver import resolve_docker_service_key, resolve_host_service_key
 from engine.integrations.data_sources.docker_adapter import DockerAdapter
 from engine.runtime.models import Asset, AssetType
+from engine.runtime.time_utils import utc_now
 from engine.storage.repositories import AssetRepository
 
 
@@ -42,7 +42,7 @@ class AssetService:
             source_refs={"source": "host_monitor", "alignment": alignment},
             health_status="healthy",
             unmapped=bool(alignment["unmapped"]),
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
 
     async def _build_container_assets(self, service_key: Optional[str]) -> List[Asset]:
@@ -74,7 +74,7 @@ class AssetService:
                     source_refs={"docker_id": item["id"], "alignment": alignment},
                     health_status=health_status,
                     unmapped=bool(alignment["unmapped"]),
-                    updated_at=datetime.utcnow(),
+                    updated_at=utc_now(),
                 )
             )
         return results

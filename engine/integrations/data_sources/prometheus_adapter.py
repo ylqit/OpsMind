@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from .base import DataSourceAdapter, DataSourceType, HealthStatus
 
+from engine.runtime.time_utils import utc_now, utc_now_iso
+
 
 class PrometheusAdapter(DataSourceAdapter):
     """
@@ -80,7 +82,7 @@ class PrometheusAdapter(DataSourceAdapter):
         Returns:
             HealthStatus: 健康状态
         """
-        start_time = datetime.now()
+        start_time = utc_now()
         try:
             if not self._client:
                 await self.initialize()
@@ -90,24 +92,24 @@ class PrometheusAdapter(DataSourceAdapter):
             data = response.json()
 
             if data.get("status") == "success":
-                latency = (datetime.now() - start_time).total_seconds() * 1000
+                latency = (utc_now() - start_time).total_seconds() * 1000
                 return HealthStatus(
                     healthy=True,
                     message="Prometheus 服务正常",
                     latency_ms=latency,
-                    last_check=datetime.now()
+                    last_check=utc_now()
                 )
             else:
                 return HealthStatus(
                     healthy=False,
                     message=f"Prometheus 返回错误状态：{data.get('error', 'unknown')}",
-                    last_check=datetime.now()
+                    last_check=utc_now()
                 )
         except Exception as e:
             return HealthStatus(
                 healthy=False,
                 message=f"健康检查失败：{str(e)}",
-                last_check=datetime.now()
+                last_check=utc_now()
             )
 
     async def close(self) -> None:
@@ -390,7 +392,7 @@ class PrometheusAdapter(DataSourceAdapter):
         return {
             "total_rules": len(prometheus_alerts),
             "synced_count": synced_count,
-            "synced_at": datetime.now().isoformat()
+            "synced_at": utc_now_iso()
         }
 
 

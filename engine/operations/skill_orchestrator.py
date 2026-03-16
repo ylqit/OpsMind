@@ -8,7 +8,6 @@
 - 编排执行日志
 """
 from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
 import asyncio
@@ -16,6 +15,7 @@ import asyncio
 from engine.capabilities.base import BaseCapability, CapabilityMetadata
 from engine.capabilities.decorators import with_timeout, with_error_handling
 from engine.contracts import ActionResult
+from engine.runtime.time_utils import utc_now, utc_now_iso
 
 
 class OrchestratorStepStatus(str, Enum):
@@ -211,8 +211,9 @@ class SkillOrchestrator(BaseCapability):
         Returns:
             执行结果
         """
-        workflow_id = f"WF-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        started_at = datetime.now().isoformat()
+        now = utc_now()
+        workflow_id = f"WF-{now.strftime('%Y%m%d-%H%M%S')}"
+        started_at = now.isoformat()
 
         execution_log: List[OrchestratorExecutionLog] = []
         step_results: Dict[str, Any] = {}
@@ -234,7 +235,7 @@ class SkillOrchestrator(BaseCapability):
 
             # 执行步骤
             log_entry.status = OrchestratorStepStatus.RUNNING
-            log_entry.started_at = datetime.now().isoformat()
+            log_entry.started_at = utc_now_iso()
 
             result = await self._execute_step_with_retry(step, context, registry)
 
@@ -258,7 +259,7 @@ class SkillOrchestrator(BaseCapability):
                     # 继续执行
                     step_results[step.id] = {"error": result.error}
 
-            log_entry.completed_at = datetime.now().isoformat()
+            log_entry.completed_at = utc_now_iso()
             execution_log.append(log_entry)
 
         # 所有步骤执行完成
@@ -273,7 +274,7 @@ class SkillOrchestrator(BaseCapability):
             "workflow_name": workflow_name,
             "status": overall_status,
             "started_at": started_at,
-            "completed_at": datetime.now().isoformat(),
+            "completed_at": utc_now_iso(),
             "steps": [log.dict() for log in execution_log],
             "results": step_results,
             "final_context": context

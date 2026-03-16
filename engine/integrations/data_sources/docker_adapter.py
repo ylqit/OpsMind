@@ -6,7 +6,8 @@ Docker 数据源适配器
 from typing import Dict, Any, List, Optional
 from .base import DataSourceAdapter, DataSourceType, HealthStatus
 import time
-from datetime import datetime
+
+from engine.runtime.time_utils import utc_now
 
 
 class DockerAdapter(DataSourceAdapter):
@@ -63,13 +64,13 @@ class DockerAdapter(DataSourceAdapter):
                 healthy=True,
                 message="Docker 守护进程正常",
                 latency_ms=latency,
-                last_check=datetime.now()
+                last_check=utc_now()
             )
         except Exception as e:
             return HealthStatus(
                 healthy=False,
                 message=str(e),
-                last_check=datetime.now()
+                last_check=utc_now()
             )
 
     async def list_containers(self, all: bool = True) -> List[Dict[str, Any]]:

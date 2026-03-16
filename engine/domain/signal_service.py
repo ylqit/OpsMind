@@ -5,11 +5,11 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from engine.domain.service_key_resolver import merge_alignment, pick_best_service_key, resolve_explicit_service_key
 from engine.runtime.models import Signal, SignalType
+from engine.runtime.time_utils import utc_now
 from engine.storage.repositories import SignalRepository
 
 
@@ -30,7 +30,7 @@ class SignalService:
                 severity=alert.get("severity") or alert.get("level") or "warning",
                 payload={**alert, "alignment": alignment},
                 source="alert_store",
-                timestamp=datetime.utcnow(),
+                timestamp=utc_now(),
             )
             self.signal_repository.save(signal)
             results.append(signal)
@@ -45,7 +45,7 @@ class SignalService:
             severity="warning" if float(log_summary.get("error_rate", 0.0)) >= 5 else "info",
             payload={**log_summary, "alignment": alignment},
             source="log_pipeline",
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
         )
         self.signal_repository.save(signal)
         return [signal]
@@ -59,7 +59,7 @@ class SignalService:
             severity="warning" if resource_summary.get("hotspots") else "info",
             payload={**resource_summary, "alignment": alignment},
             source="resource_analytics",
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
         )
         self.signal_repository.save(signal)
         return [signal]

@@ -5,10 +5,11 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List
 
 from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence
+from engine.runtime.time_utils import utc_now
 
 
 class CorrelationEngine:
@@ -185,8 +186,8 @@ class CorrelationEngine:
             "recommended_actions": recommended_actions,
             "evidence_refs": sorted_evidence,
             "related_asset_ids": related_asset_ids,
-            "time_window_start": (datetime.utcnow() - timedelta(hours=1)).isoformat(),
-            "time_window_end": datetime.utcnow().isoformat(),
+            "time_window_start": (utc_now() - timedelta(hours=1)).isoformat(),
+            "time_window_end": utc_now().isoformat(),
         }
 
     # 证据对象会被详情页、日报和后续导出链路复用，因此这里统一补齐优先级和信号强度。

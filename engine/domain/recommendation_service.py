@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-from datetime import datetime
 from difflib import unified_diff
 from typing import Any, Dict, List, Sequence
 
@@ -17,6 +16,7 @@ from engine.capabilities.k8s_yaml_generator import K8sYamlGenerator
 from engine.llm.structured_output import run_guarded_structured_chat
 from engine.runtime.artifact_store import ArtifactStore
 from engine.runtime.models import ArtifactKind, Recommendation, RecommendationKind
+from engine.runtime.time_utils import utc_now_iso
 from engine.storage.repositories import RecommendationRepository
 
 
@@ -375,7 +375,7 @@ class RecommendationService:
         recommended_kind_counts = self._extract_manifest_kind_counts(recommended_manifest)
         metadata = {
             "schema_version": "v1",
-            "generated_at": f"{datetime.utcnow().isoformat()}Z",
+            "generated_at": utc_now_iso(),
             "baseline": {
                 "filename": baseline_filename,
                 "sha256": self._sha256_text(baseline_manifest),

@@ -9,6 +9,8 @@ import re
 from datetime import datetime
 from typing import Dict, Optional
 
+from engine.runtime.time_utils import utc_now_iso
+
 
 COMBINED_LOG_PATTERN = re.compile(
     r'(?P<remote_addr>\S+)\s+\S+\s+\S+\s+\[(?P<time_local>[^\]]+)\]\s+'
@@ -64,9 +66,9 @@ class AccessLogParser:
 
     def _parse_time(self, value: str) -> str:
         if not value:
-            return datetime.utcnow().isoformat()
+            return utc_now_iso()
         try:
             parsed = datetime.strptime(value, "%d/%b/%Y:%H:%M:%S %z")
             return parsed.isoformat()
         except ValueError:
-            return datetime.utcnow().isoformat()
+            return utc_now_iso()

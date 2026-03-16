@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from engine.runtime.models import UsageMetricsDailyRecord
+from engine.runtime.time_utils import UTC_MIN, ensure_utc_datetime, utc_day_start, utc_now
 
 from .deps import (
     get_ai_call_log_repository_dep,
@@ -42,7 +43,7 @@ def _resolve_time_range(
     end_date: str | None,
     fallback_days: int = 7,
 ) -> tuple[date, date, datetime, datetime]:
-    today = datetime.utcnow().date()
+    today = utc_now().date()
 
     if start_date and end_date:
         start_day = _parse_day(start_date, "start_date")
@@ -60,8 +61,8 @@ def _resolve_time_range(
     if start_day > end_day:
         raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
 
-    start_dt = datetime.combine(start_day, datetime.min.time())
-    end_dt_exclusive = datetime.combine(end_day + timedelta(days=1), datetime.min.time())
+    start_dt = utc_day_start(start_day)
+    end_dt_exclusive = utc_day_start(end_day + timedelta(days=1))
     return start_day, end_day, start_dt, end_dt_exclusive
 
 
@@ -133,7 +134,8 @@ def _build_task_llm_context_map(logs: list[Any]) -> dict[str, dict[str, str]]:
         provider_name = str(getattr(item, "provider_name", "") or "unknown").strip() or "unknown"
         model_name = str(getattr(item, "model", "") or "unknown").strip() or "unknown"
         version_name = _resolve_model_version(model_name)
-        created_at = getattr(item, "created_at", None) or datetime.min
+        raw_created_at = getattr(item, "created_at", None)
+        created_at = ensure_utc_datetime(raw_created_at) if isinstance(raw_created_at, datetime) else UTC_MIN
         candidate = {
             "provider_name": provider_name,
             "model": model_name,

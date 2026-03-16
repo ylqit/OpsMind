@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
 from typing import Dict, Iterable, List
+
+from engine.runtime.time_utils import parse_utc_datetime, utc_now
 
 from .log_samples import build_log_samples, collect_log_sample_candidates
 
@@ -135,10 +136,10 @@ class LogAggregators:
 
     def _bucket_minute(self, iso_text: str) -> str:
         try:
-            parsed = datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
+            parsed = parse_utc_datetime(iso_text)
             return parsed.replace(second=0, microsecond=0).isoformat()
         except ValueError:
-            return datetime.now().replace(second=0, microsecond=0).isoformat()
+            return utc_now().replace(second=0, microsecond=0).isoformat()
 
     def _counter_to_named_list(self, counter: Counter[str], limit: int = 5, key_name: str = "name") -> List[Dict[str, object]]:
         return [{key_name: name, "count": count} for name, count in counter.most_common(limit)]

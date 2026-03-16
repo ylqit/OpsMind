@@ -26,6 +26,7 @@ from engine.runtime.models import (
     TaskRecord,
     UsageMetricsDailyRecord,
 )
+from engine.runtime.time_utils import parse_optional_utc_datetime, parse_utc_datetime, utc_now, utc_now_iso
 
 from .sqlite import SQLiteDatabase
 
@@ -41,9 +42,7 @@ def _from_json(value: Optional[str], default: Any) -> Any:
 
 
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    return datetime.fromisoformat(value)
+    return parse_optional_utc_datetime(value)
 
 
 class TaskRepository:
@@ -95,8 +94,8 @@ class TaskRepository:
             result_ref=_from_json(row["result_ref_json"], None),
             error=TaskError(**error_json) if error_json else None,
             approval=TaskApproval(**approval_json) if approval_json else None,
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
             completed_at=_parse_dt(row["completed_at"]),
         )
 
@@ -172,7 +171,7 @@ class ArtifactRepository:
             path=row["path"],
             preview=row["preview"] or "",
             size_bytes=row["size_bytes"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
         )
 
     def list_by_task(self, task_id: str) -> List[ArtifactRef]:
@@ -185,7 +184,7 @@ class ArtifactRepository:
                 path=row["path"],
                 preview=row["preview"] or "",
                 size_bytes=row["size_bytes"],
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -244,8 +243,8 @@ class AssetRepository:
                 source_refs=_from_json(row["source_refs_json"], {}),
                 health_status=row["health_status"],
                 unmapped=bool(row["unmapped"]),
-                created_at=datetime.fromisoformat(row["created_at"]),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
+                updated_at=parse_utc_datetime(row["updated_at"]),
             )
             for row in rows
         ]
@@ -314,13 +313,13 @@ class SignalRepository:
             Signal(
                 signal_id=row["signal_id"],
                 signal_type=row["signal_type"],
-                timestamp=datetime.fromisoformat(row["timestamp"]),
+                timestamp=parse_utc_datetime(row["timestamp"]),
                 asset_id=row["asset_id"],
                 service_key=row["service_key"],
                 severity=row["severity"],
                 payload=_from_json(row["payload_json"], {}),
                 source=row["source"],
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -368,8 +367,8 @@ class IncidentRepository:
             title=row["title"],
             severity=row["severity"],
             status=row["status"],
-            time_window_start=datetime.fromisoformat(row["time_window_start"]),
-            time_window_end=datetime.fromisoformat(row["time_window_end"]),
+            time_window_start=parse_utc_datetime(row["time_window_start"]),
+            time_window_end=parse_utc_datetime(row["time_window_end"]),
             service_key=row["service_key"],
             related_asset_ids=_from_json(row["related_asset_ids_json"], []),
             evidence_refs=_from_json(row["evidence_refs_json"], []),
@@ -377,8 +376,8 @@ class IncidentRepository:
             confidence=row["confidence"],
             recommended_actions=_from_json(row["recommended_actions_json"], []),
             reasoning_tags=_from_json(row["reasoning_tags_json"], []),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
         )
 
     def list(self, status: Optional[str] = None, severity: Optional[str] = None, service_key: Optional[str] = None) -> List[Incident]:
@@ -461,8 +460,8 @@ class RecommendationRepository:
             recommendation=row["recommendation"],
             risk_note=row["risk_note"],
             artifact_refs=_from_json(row["artifact_refs_json"], []),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
         )
 
     def list_by_incident(self, incident_id: str) -> List[Recommendation]:
@@ -522,7 +521,7 @@ class RecommendationFeedbackRepository:
                 reason_code=row["reason_code"] or "",
                 comment=row["comment"] or "",
                 operator=row["operator"] or "anonymous",
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -548,7 +547,7 @@ class RecommendationFeedbackRepository:
                 reason_code=row["reason_code"] or "",
                 comment=row["comment"] or "",
                 operator=row["operator"] or "anonymous",
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -589,7 +588,7 @@ class RecommendationFeedbackRepository:
                 reason_code=row["reason_code"] or "",
                 comment=row["comment"] or "",
                 operator=row["operator"] or "anonymous",
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -660,7 +659,7 @@ class AICallLogRepository:
                 latency_ms=row["latency_ms"],
                 request_tokens=row["request_tokens"],
                 response_tokens=row["response_tokens"],
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -690,7 +689,7 @@ class AICallLogRepository:
                 latency_ms=row["latency_ms"],
                 request_tokens=row["request_tokens"],
                 response_tokens=row["response_tokens"],
-                created_at=datetime.fromisoformat(row["created_at"]),
+                created_at=parse_utc_datetime(row["created_at"]),
             )
             for row in rows
         ]
@@ -772,7 +771,7 @@ class UsageMetricsDailyRepository:
                 guardrail_fallback_count=int(row["guardrail_fallback_count"] or 0),
                 guardrail_retried_count=int(row["guardrail_retried_count"] or 0),
                 guardrail_schema_error_count=int(row["guardrail_schema_error_count"] or 0),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
+                updated_at=parse_utc_datetime(row["updated_at"]),
             )
             for row in rows
         ]
@@ -795,8 +794,8 @@ class AIProviderConfigRepository:
             is_default=bool(row["is_default"]),
             timeout=row["timeout"],
             max_retries=row["max_retries"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
         )
 
     def count(self) -> int:
@@ -831,7 +830,7 @@ class AIProviderConfigRepository:
         return [self._from_row(row) for row in rows]
 
     def save(self, record: AIProviderConfigRecord) -> AIProviderConfigRecord:
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         is_default = 1 if record.is_default else 0
         if is_default:
             self.db.execute("UPDATE ai_provider_configs SET is_default = 0")
@@ -867,7 +866,7 @@ class AIProviderConfigRepository:
             return None
 
         merged = current.model_copy(update=updates)
-        merged.updated_at = datetime.utcnow()
+        merged.updated_at = utc_now()
         return self.save(merged)
 
     def set_default(self, provider_id: str) -> Optional[AIProviderConfigRecord]:
@@ -879,7 +878,7 @@ class AIProviderConfigRepository:
         self.db.execute("UPDATE ai_provider_configs SET is_default = 0")
         self.db.execute(
             "UPDATE ai_provider_configs SET is_default = 1, updated_at = ? WHERE provider_id = ?",
-            (datetime.utcnow().isoformat(), provider_id),
+            (utc_now_iso(), provider_id),
         )
         return self.get(provider_id)
 
@@ -913,7 +912,7 @@ class ExecutorPluginRepository:
             failure_count=int(row["failure_count"] or 0),
             circuit_open_until=_parse_dt(row["circuit_open_until"]),
             last_error=row["last_error"] or "",
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
         )
 
     def list(self) -> List[ExecutorPluginRecord]:
@@ -962,7 +961,7 @@ class ExecutorPluginRepository:
         if not current:
             return None
         merged = current.model_copy(update=updates)
-        merged.updated_at = datetime.utcnow()
+        merged.updated_at = utc_now()
         return self.save(merged)
 
 
@@ -987,7 +986,7 @@ class ExecutorAuditLogRepository:
             error_message=row["error_message"] or "",
             operator=row["operator"] or "system",
             approval_ticket=row["approval_ticket"] or "",
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_utc_datetime(row["created_at"]),
         )
 
     def save(self, item: ExecutorAuditRecord) -> ExecutorAuditRecord:

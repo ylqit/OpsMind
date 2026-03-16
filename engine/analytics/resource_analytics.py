@@ -13,6 +13,7 @@ from engine.capabilities.host_monitor import HostMonitor
 from engine.domain.service_key_resolver import resolve_docker_service_key
 from engine.integrations.data_sources.docker_adapter import DockerAdapter
 from engine.integrations.data_sources.prometheus_adapter import PrometheusAdapter
+from engine.runtime.time_utils import utc_now
 from engine.storage.repositories import AssetRepository, SignalRepository
 
 
@@ -869,7 +870,7 @@ class ResourceAnalyticsEngine:
 
     def _resolve_since_time(self, time_range: str) -> datetime:
         normalized = (time_range or "1h").strip().lower()
-        now = datetime.utcnow()
+        now = utc_now()
         if normalized.endswith("m"):
             return now - timedelta(minutes=max(1, int(normalized[:-1] or "60")))
         if normalized.endswith("h"):

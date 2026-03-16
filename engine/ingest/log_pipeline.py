@@ -5,9 +5,11 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+
+from engine.runtime.time_utils import ensure_utc_datetime, parse_utc_datetime, utc_now
 
 from .aggregators import LogAggregators
 from .log_enricher import LogEnricher
@@ -197,14 +199,14 @@ class LogPipeline:
 
     def _parse_record_time(self, iso_text: str) -> Optional[datetime]:
         try:
-            parsed = datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
+            parsed = parse_utc_datetime(iso_text)
         except ValueError:
             return None
         return self._normalize_time(parsed)
 
     def _resolve_cutoff(self, time_range: str) -> datetime:
         time_range = (time_range or "1h").strip().lower()
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_utc = self._normalize_time(utc_now())
         if time_range.endswith("m"):
             minutes = int(time_range[:-1] or "60")
             return now_utc - timedelta(minutes=minutes)
@@ -217,6 +219,4 @@ class LogPipeline:
         return now_utc - timedelta(hours=1)
 
     def _normalize_time(self, value: datetime) -> datetime:
-        if value.tzinfo is not None:
-            return value.astimezone(timezone.utc).replace(tzinfo=None)
-        return value
+        return ensure_utc_datetime(value).replace(tzinfo=None)
