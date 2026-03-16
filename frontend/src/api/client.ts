@@ -628,12 +628,21 @@ export interface AIAssistantCommandSuggestion {
   command: string
 }
 
+export type AIAssistantProviderStatus = 'ready' | 'degraded' | 'unavailable'
+
 export interface AIAssistantStatusResponse {
+  status: AIAssistantProviderStatus
+  status_message: string
   provider_ready: boolean
   degraded_reason: string
   default_provider: string
+  default_provider_id: string
+  default_model: string
+  provider_source: 'router' | 'repository' | 'none'
+  router_default_provider: string
   providers_total: number
   enabled_providers: number
+  configured_providers: number
   command_suggestions: AIAssistantCommandSuggestion[]
 }
 

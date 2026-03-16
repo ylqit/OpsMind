@@ -3,13 +3,13 @@ import { Alert, Button, Card, Col, Drawer, Empty, Input, List, Modal, Row, Segme
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   aiApi,
+  type AIAssistantStatusResponse,
   incidentsApi,
   recommendationsApi,
   tasksApi,
   type ArtifactContentResponse,
   type IncidentDetailResponse,
   type IncidentRecord,
-  type LLMProviderRecord,
   type RecommendationAIReviewResponse,
   type RecommendationArtifactView,
   type RecommendationArtifactViewKey,
@@ -23,6 +23,8 @@ import {
   type RecommendationRecord,
   type TaskArtifact,
 } from '@/api/client'
+import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
+import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -217,15 +219,35 @@ const getArtifactViewLabel = (viewKey: RecommendationArtifactViewKey) => {
   return 'Diff'
 }
 
-const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
-  return providers.some((provider) => provider.enabled && provider.api_key_configured && Boolean(provider.model?.trim()))
-}
-
 const isProviderUnavailableError = (error: unknown) => {
   if (!(error instanceof Error)) {
     return false
   }
   return error.message.includes('LLM Provider') || error.message.includes('未启用可用的 LLM Provider')
+}
+
+const inferTimeRangeFromIncident = (incident: IncidentRecord) => {
+  const startedAt = new Date(incident.time_window_start)
+  const endedAt = new Date(incident.time_window_end)
+  const durationMs = Math.max(0, endedAt.getTime() - startedAt.getTime())
+  const hours = durationMs / (1000 * 60 * 60)
+  if (hours > 6) {
+    return '24h'
+  }
+  if (hours > 1) {
+    return '6h'
+  }
+  return '1h'
+}
+
+const buildRecommendationAssistantPrompt = (
+  incident: IncidentRecord,
+  recommendation?: RecommendationRecord | null,
+) => {
+  if (recommendation) {
+    return `请围绕 recommendation ${recommendation.recommendation_id} 复核风险、证据完整性和下一步只读验证动作。`
+  }
+  return `请基于 incident ${incident.incident_id} 的建议上下文，总结当前处理重点和下一步只读验证动作。`
 }
 
 const buildDiffSummary = (content: string): DiffSummary => {
@@ -540,6 +562,7 @@ export const RecommendationCenter: React.FC = () => {
   const [bundleExportingId, setBundleExportingId] = useState('')
   const [aiProviderReady, setAiProviderReady] = useState<boolean | null>(null)
   const [aiProviderChecking, setAiProviderChecking] = useState(true)
+  const [assistantStatus, setAssistantStatus] = useState<AIAssistantStatusResponse | null>(null)
   const [aiReviewLoadingId, setAiReviewLoadingId] = useState('')
   const [aiReviewByRecommendationId, setAiReviewByRecommendationId] = useState<Record<string, RecommendationAIReviewResponse>>({})
   const [feedbackByRecommendationId, setFeedbackByRecommendationId] = useState<Record<string, RecommendationFeedbackListResponse>>({})
@@ -1114,15 +1137,36 @@ export const RecommendationCenter: React.FC = () => {
   const refreshAIProviderAvailability = useCallback(async () => {
     setAiProviderChecking(true)
     try {
-      const payload = (await aiApi.listProviders()) as { providers?: LLMProviderRecord[] }
-      setAiProviderReady(hasUsableAIProvider(payload.providers || []))
+      const payload = (await aiApi.getAssistantStatus()) as AIAssistantStatusResponse
+      setAssistantStatus(payload)
+      setAiProviderReady(payload.provider_ready)
     } catch {
-      // provider 状态接口失败时保持可尝试，避免误伤主流程。
+      // 状态接口失败时不阻塞主流程，但会隐藏更细的 AI 状态说明。
+      setAssistantStatus(null)
       setAiProviderReady(true)
     } finally {
       setAiProviderChecking(false)
     }
   }, [])
+
+  const openAssistantWorkbench = (recommendation?: RecommendationRecord | null) => {
+    if (!selected) {
+      return
+    }
+    const params = new URLSearchParams()
+    const timeRange = inferTimeRangeFromIncident(selected.incident)
+    params.set('source', recommendation ? 'recommendation' : 'incident')
+    params.set('incidentId', selected.incident.incident_id)
+    params.set('time_range', timeRange)
+    params.set('prompt', buildRecommendationAssistantPrompt(selected.incident, recommendation))
+    if (selected.incident.service_key) {
+      params.set('service_key', selected.incident.service_key)
+    }
+    if (recommendation) {
+      params.set('recommendationId', recommendation.recommendation_id)
+    }
+    navigate(`/assistant?${params.toString()}`)
+  }
 
   const generate = async () => {
     if (!selected) {
@@ -1216,6 +1260,9 @@ export const RecommendationCenter: React.FC = () => {
           </Paragraph>
         </div>
         <Space>
+          <Button onClick={() => openAssistantWorkbench(activeRecommendation || null)} disabled={!selected}>
+            AI 助手
+          </Button>
           <Button
             type="primary"
             onClick={() => void generate()}
@@ -1227,16 +1274,11 @@ export const RecommendationCenter: React.FC = () => {
           <Button onClick={() => void loadData()} loading={loading}>刷新详情</Button>
         </Space>
       </div>
-      {aiProviderReady === false ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="AI 功能未启用"
-          description="请先在「LLM 设置」启用可用 Provider，AI 复核入口会在配置完成后自动恢复。"
-          action={<Button type="link" size="small" onClick={() => navigate('/llm-settings')}>前往 LLM 设置</Button>}
-          style={{ marginBottom: 16 }}
-        />
-      ) : null}
+      <AIProviderStatusStrip
+        status={assistantStatus}
+        loading={aiProviderChecking}
+        onOpenSettings={() => navigate('/llm-settings')}
+      />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={7}>
@@ -1661,39 +1703,17 @@ export const RecommendationCenter: React.FC = () => {
 
                   {activeAiReview ? (
                     <Card type="inner" title="AI 复核" size="small">
-                      <Space wrap style={{ marginBottom: 10 }}>
-                        <Tag color={getRiskLevelColor(activeAiReview.risk_level)}>风险等级：{activeAiReview.risk_level}</Tag>
-                        <Tag color="geekblue">置信度：{Math.round(activeAiReview.confidence * 100)}%</Tag>
-                        <Tag>{activeAiReview.parse_mode === 'json' ? '结构化输出' : '降级输出'}</Tag>
-                      </Space>
-                      <Paragraph style={{ marginBottom: 8 }}>{activeAiReview.summary}</Paragraph>
-                      <Paragraph type="secondary" style={{ marginBottom: 12 }}>{activeAiReview.risk_assessment}</Paragraph>
-                      <Text strong style={{ display: 'block', marginBottom: 6 }}>验证检查</Text>
-                      <List
-                        size="small"
-                        dataSource={activeAiReview.validation_checks}
-                        locale={{ emptyText: '暂无' }}
-                        renderItem={(item) => <List.Item>{item}</List.Item>}
-                        style={{ marginBottom: 8 }}
-                      />
-                      <Text strong style={{ display: 'block', marginBottom: 6 }}>回滚步骤</Text>
-                      <List
-                        size="small"
-                        dataSource={activeAiReview.rollback_plan}
-                        locale={{ emptyText: '暂无' }}
-                        renderItem={(item) => <List.Item>{item}</List.Item>}
-                        style={{ marginBottom: 8 }}
-                      />
-                      <Text strong style={{ display: 'block', marginBottom: 6 }}>证据引用</Text>
-                      <List
-                        size="small"
-                        dataSource={activeAiReview.evidence_citations}
-                        locale={{ emptyText: '暂无' }}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <Text code>{item}</Text>
-                          </List.Item>
-                        )}
+                      <AIDiagnosisCard
+                        summary={activeAiReview.summary}
+                        riskLevel={activeAiReview.risk_level}
+                        confidence={activeAiReview.confidence}
+                        provider={activeAiReview.provider}
+                        parseMode={activeAiReview.parse_mode}
+                        supportingText={activeAiReview.risk_assessment}
+                        validationChecks={activeAiReview.validation_checks}
+                        rollbackPlan={activeAiReview.rollback_plan}
+                        evidenceCitations={activeAiReview.evidence_citations}
+                        roleViews={activeAiReview.role_views}
                       />
                     </Card>
                   ) : null}

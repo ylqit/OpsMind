@@ -207,6 +207,53 @@ def _build_assistant_fallback_answer(
     return "\n".join(lines)
 
 
+def _build_assistant_status_payload(
+    llm_router,
+    provider_repository,
+    executor_service,
+) -> dict[str, Any]:
+    providers = provider_repository.list() if provider_repository else []
+    enabled_items = [item for item in providers if item.enabled]
+    default_provider = provider_repository.get_default() if provider_repository else None
+    command_suggestions = _collect_command_suggestions(executor_service, limit=10)
+    router_clients = getattr(llm_router, "clients", {}) if llm_router else {}
+    router_default_provider = str(getattr(llm_router, "default_client_name", "") or "")
+    provider_ready = bool(router_clients)
+
+    status: Literal["ready", "degraded", "unavailable"] = "ready"
+    status_message = "当前 AI 路由已就绪，可直接进入 AI 诊断链路。"
+    degraded_reason = ""
+    if not provider_ready and enabled_items:
+        status = "degraded"
+        status_message = "检测到已启用 Provider，但当前 AI 路由未就绪，页面将降级为只读诊断模式。"
+        degraded_reason = status_message
+    elif not provider_ready:
+        status = "unavailable"
+        status_message = "未检测到可用 AI Provider，页面将自动降级为只读诊断模式。"
+        degraded_reason = status_message
+
+    default_provider_name = default_provider.name if default_provider else router_default_provider
+    default_provider_id = default_provider.provider_id if default_provider else ""
+    default_model = default_provider.model if default_provider else ""
+    provider_source = "router" if provider_ready else ("repository" if default_provider else "none")
+
+    return {
+        "status": status,
+        "status_message": status_message,
+        "provider_ready": provider_ready,
+        "degraded_reason": degraded_reason,
+        "default_provider": default_provider_name,
+        "default_provider_id": default_provider_id,
+        "default_model": default_model,
+        "provider_source": provider_source,
+        "router_default_provider": router_default_provider,
+        "providers_total": len(providers),
+        "enabled_providers": len(enabled_items),
+        "configured_providers": len([item for item in enabled_items if bool((item.model or "").strip())]),
+        "command_suggestions": command_suggestions,
+    }
+
+
 @router.get("/assistant/status")
 async def get_ai_assistant_status(
     llm_router=Depends(get_llm_router_dep),
@@ -214,24 +261,11 @@ async def get_ai_assistant_status(
     executor_service=Depends(get_executor_service_dep),
 ):
     """AI 助手工作台状态信息。"""
-    providers = provider_repository.list() if provider_repository else []
-    enabled_count = len([item for item in providers if item.enabled])
-    default_provider = provider_repository.get_default() if provider_repository else None
-    command_suggestions = _collect_command_suggestions(executor_service, limit=10)
-
-    provider_ready = bool(llm_router and getattr(llm_router, "clients", {}))
-    degraded_reason = ""
-    if not provider_ready:
-        degraded_reason = "未检测到可用 AI Provider，工作台将自动降级为只读建议模式。"
-
-    return {
-        "provider_ready": provider_ready,
-        "degraded_reason": degraded_reason,
-        "default_provider": default_provider.name if default_provider else "",
-        "providers_total": len(providers),
-        "enabled_providers": enabled_count,
-        "command_suggestions": command_suggestions,
-    }
+    return _build_assistant_status_payload(
+        llm_router=llm_router,
+        provider_repository=provider_repository,
+        executor_service=executor_service,
+    )
 
 
 @router.post("/assistant/diagnose")

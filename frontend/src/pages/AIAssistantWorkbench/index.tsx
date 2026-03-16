@@ -1,6 +1,5 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
   AutoComplete,
   Button,
   Card,
@@ -14,12 +13,14 @@ import {
   Typography,
   message,
 } from 'antd'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   aiApi,
   type AIAssistantCommandSuggestion,
   type AIAssistantDiagnoseResponse,
   type AIAssistantStatusResponse,
 } from '@/api/client'
+import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
 
@@ -48,6 +49,15 @@ interface AssistantConversationItem {
   suggestions?: AIAssistantCommandSuggestion[]
 }
 
+interface AssistantEntryContext {
+  source: 'manual' | 'incident' | 'recommendation'
+  incidentId: string
+  recommendationId: string
+  prompt: string
+  serviceKey: string
+  timeRange: '1h' | '6h' | '24h'
+}
+
 const groupSuggestions = (items: AIAssistantCommandSuggestion[]) => {
   const grouped = new Map<string, { label: string; items: AIAssistantCommandSuggestion[] }>()
   for (const item of items) {
@@ -61,7 +71,32 @@ const groupSuggestions = (items: AIAssistantCommandSuggestion[]) => {
   return Array.from(grouped.entries()).map(([key, value]) => ({ key, ...value }))
 }
 
+const getContextLabel = (source: AssistantEntryContext['source']) => {
+  if (source === 'incident') {
+    return '来自异常中心'
+  }
+  if (source === 'recommendation') {
+    return '来自建议中心'
+  }
+  return '手动进入'
+}
+
+const getStatusLabel = (status?: AIAssistantStatusResponse['status']) => {
+  if (status === 'ready') {
+    return '已就绪'
+  }
+  if (status === 'degraded') {
+    return '降级中'
+  }
+  if (status === 'unavailable') {
+    return '不可用'
+  }
+  return '未知'
+}
+
 const AIAssistantWorkbench: React.FC = () => {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const timeRange = useWorkspaceFilterStore((state) => state.timeRange)
   const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
   const setTimeRange = useWorkspaceFilterStore((state) => state.setTimeRange)
@@ -74,16 +109,32 @@ const AIAssistantWorkbench: React.FC = () => {
   const [prompt, setPrompt] = useState('')
   const [history, setHistory] = useState<AssistantConversationItem[]>([])
 
-  const serviceOptions = useMemo(
-    () => {
-      const values = new Set<string>()
-      if (serviceKey) {
-        values.add(serviceKey)
-      }
-      return Array.from(values).map((item) => ({ value: item, label: item }))
-    },
-    [serviceKey],
-  )
+  const entryContext = useMemo<AssistantEntryContext>(() => {
+    const sourceValue = (searchParams.get('source') || '').trim()
+    return {
+      source: sourceValue === 'incident' || sourceValue === 'recommendation' ? sourceValue : 'manual',
+      incidentId: (searchParams.get('incidentId') || '').trim(),
+      recommendationId: (searchParams.get('recommendationId') || '').trim(),
+      prompt: (searchParams.get('prompt') || '').trim(),
+      serviceKey: (searchParams.get('service_key') || '').trim(),
+      timeRange: (searchParams.get('time_range') || '').trim() === '24h'
+        ? '24h'
+        : (searchParams.get('time_range') || '').trim() === '6h'
+          ? '6h'
+          : '1h',
+    }
+  }, [searchParams])
+
+  const serviceOptions = useMemo(() => {
+    const values = new Set<string>()
+    if (serviceKey) {
+      values.add(serviceKey)
+    }
+    if (entryContext.serviceKey) {
+      values.add(entryContext.serviceKey)
+    }
+    return Array.from(values).map((item) => ({ value: item, label: item }))
+  }, [entryContext.serviceKey, serviceKey])
 
   const latestAssistantItem = useMemo(
     () => [...history].reverse().find((item) => item.role === 'assistant'),
@@ -95,6 +146,9 @@ const AIAssistantWorkbench: React.FC = () => {
     : (statusPayload?.command_suggestions || [])
 
   const groupedSuggestions = useMemo(() => groupSuggestions(activeSuggestions), [activeSuggestions])
+  const hasEntryContext = Boolean(
+    entryContext.incidentId || entryContext.recommendationId || entryContext.source !== 'manual' || entryContext.prompt,
+  )
 
   const loadAssistantStatus = async () => {
     setStatusLoading(true)
@@ -109,9 +163,22 @@ const AIAssistantWorkbench: React.FC = () => {
     }
   }
 
-  React.useEffect(() => {
+  useEffect(() => {
     void loadAssistantStatus()
   }, [])
+
+  useEffect(() => {
+    if (entryContext.serviceKey && entryContext.serviceKey !== serviceKey) {
+      setServiceKey(entryContext.serviceKey)
+    }
+    if (entryContext.timeRange && entryContext.timeRange !== timeRange) {
+      setTimeRange(entryContext.timeRange)
+    }
+    // 只在首次带上下文进入时预填提示词，避免覆盖用户正在编辑的内容。
+    if (entryContext.prompt) {
+      setPrompt((previous) => (previous.trim() ? previous : entryContext.prompt))
+    }
+  }, [entryContext.prompt, entryContext.serviceKey, entryContext.timeRange, serviceKey, setServiceKey, setTimeRange, timeRange])
 
   const copyText = async (value: string, successText: string) => {
     try {
@@ -120,6 +187,18 @@ const AIAssistantWorkbench: React.FC = () => {
     } catch {
       message.error('复制失败，请手动复制')
     }
+  }
+
+  const openSourcePage = () => {
+    if (entryContext.recommendationId || entryContext.source === 'recommendation') {
+      const params = new URLSearchParams()
+      if (entryContext.incidentId) {
+        params.set('incidentId', entryContext.incidentId)
+      }
+      navigate(`/recommendations${params.toString() ? `?${params.toString()}` : ''}`)
+      return
+    }
+    navigate('/incidents')
   }
 
   const runDiagnose = async () => {
@@ -138,8 +217,9 @@ const AIAssistantWorkbench: React.FC = () => {
     try {
       const response = (await aiApi.diagnoseWithAssistant({
         message: normalizedPrompt,
-        service_key: serviceKey || undefined,
+        service_key: serviceKey || entryContext.serviceKey || undefined,
         time_range: timeRange,
+        incident_id: entryContext.incidentId || undefined,
         include_command_packs: true,
       })) as AIAssistantDiagnoseResponse
       const assistantItem: AssistantConversationItem = {
@@ -197,13 +277,37 @@ const AIAssistantWorkbench: React.FC = () => {
         />
       ) : null}
 
-      {statusPayload && !statusPayload.provider_ready ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="当前未检测到可用 AI Provider"
-          description={statusPayload.degraded_reason || '工作台会自动降级为规则模式，仍可给出只读排查建议。'}
-        />
+      <AIProviderStatusStrip
+        status={statusPayload}
+        loading={statusLoading}
+        onOpenSettings={() => navigate('/llm-settings')}
+      />
+
+      {hasEntryContext ? (
+        <Card title="当前诊断上下文" className="ops-surface-card" size="small" style={{ marginBottom: 16 }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag color="blue">{getContextLabel(entryContext.source)}</Tag>
+              {entryContext.incidentId ? <Tag>incident：{entryContext.incidentId}</Tag> : null}
+              {entryContext.recommendationId ? <Tag color="purple">recommendation：{entryContext.recommendationId}</Tag> : null}
+              <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || entryContext.serviceKey || '全部'}</Tag>
+              <Tag>时间窗：{timeRange}</Tag>
+            </Space>
+            {entryContext.prompt ? (
+              <Paragraph style={{ marginBottom: 0 }}>
+                预设问题：{entryContext.prompt}
+              </Paragraph>
+            ) : null}
+            <Space wrap>
+              <Button size="small" onClick={() => setPrompt(entryContext.prompt || prompt)}>
+                带入预设问题
+              </Button>
+              <Button size="small" onClick={openSourcePage}>
+                返回来源页面
+              </Button>
+            </Space>
+          </Space>
+        </Card>
       ) : null}
 
       <Row gutter={[16, 16]}>
@@ -213,8 +317,8 @@ const AIAssistantWorkbench: React.FC = () => {
               <Space wrap>
                 <Tag color="blue">时间窗：{timeRange}</Tag>
                 <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || '全部'}</Tag>
-                <Tag color={statusPayload?.provider_ready ? 'green' : 'gold'}>
-                  Provider：{statusPayload?.provider_ready ? (statusPayload.default_provider || '已可用') : '降级模式'}
+                <Tag color={statusPayload?.status === 'ready' ? 'green' : statusPayload?.status === 'degraded' ? 'gold' : 'red'}>
+                  AI：{getStatusLabel(statusPayload?.status)}
                 </Tag>
               </Space>
               <Space wrap>

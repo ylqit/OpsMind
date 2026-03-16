@@ -5,18 +5,19 @@ import {
   aiApi,
   incidentsApi,
   recommendationsApi,
-  type AISummaryRoleView,
+  type AIAssistantStatusResponse,
   type IncidentEvidenceRef,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
   type IncidentLogSample,
   type IncidentRecommendationTaskLink,
   type IncidentRecord,
-  type LLMProviderRecord,
   type RecommendationRecord,
   type TaskArtifact,
   type TaskRecord,
 } from '@/api/client'
+import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
+import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useTaskEventStream, type TaskEventMessage } from '@/hooks/useTaskEventStream'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
@@ -58,12 +59,6 @@ const signalStrengthMeta: Record<string, { label: string; color: string }> = {
   low: { label: '低优先', color: 'default' },
 }
 
-const aiRoleViewMeta: Array<{ key: 'traffic' | 'resource' | 'risk'; title: string; color: string }> = [
-  { key: 'traffic', title: '流量视角', color: 'blue' },
-  { key: 'resource', title: '资源视角', color: 'orange' },
-  { key: 'risk', title: '风险视角', color: 'red' },
-]
-
 const formatEvidenceValue = (item: EvidenceItem) => {
   if (item.value === undefined || item.value === null || item.value === '') {
     return '-'
@@ -95,10 +90,6 @@ const sortEvidenceItems = (items: EvidenceItem[]) => {
     }
     return String(left.title || left.metric || '').localeCompare(String(right.title || right.metric || ''))
   })
-}
-
-const hasUsableAIProvider = (providers: LLMProviderRecord[]) => {
-  return providers.some((provider) => provider.enabled && provider.api_key_configured && Boolean(provider.model?.trim()))
 }
 
 const isProviderUnavailableError = (error: unknown) => {
@@ -146,6 +137,10 @@ const getTaskAlertMeta = (task: RecommendationTaskState) => {
   return { type: 'info' as const, title: '建议任务正在处理中' }
 }
 
+const buildAssistantPrompt = (incident: IncidentRecord) => {
+  return `请基于 incident ${incident.incident_id} 的现有证据，总结异常结论、风险和下一步只读排查动作。`
+}
+
 export const IncidentCenter: React.FC = () => {
   const navigate = useNavigate()
   const serviceKey = useWorkspaceFilterStore((state) => state.serviceKey)
@@ -161,6 +156,7 @@ export const IncidentCenter: React.FC = () => {
   const [aiSummary, setAiSummary] = useState<IncidentAISummaryResponse | null>(null)
   const [aiProviderReady, setAiProviderReady] = useState<boolean | null>(null)
   const [aiProviderChecking, setAiProviderChecking] = useState(true)
+  const [assistantStatus, setAssistantStatus] = useState<AIAssistantStatusResponse | null>(null)
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
   const [error, setError] = useState('')
 
@@ -217,25 +213,6 @@ export const IncidentCenter: React.FC = () => {
     return recommendationTask
   }, [recommendationTask, selectedIncident])
 
-  const aiRoleViews = useMemo(() => {
-    if (!aiSummary?.role_views) {
-      return []
-    }
-    // 固定输出三视角，避免因为字段缺失导致 UI 布局抖动。
-    return aiRoleViewMeta
-      .map((meta) => {
-        const view = aiSummary.role_views?.[meta.key] as AISummaryRoleView | undefined
-        if (!view) {
-          return null
-        }
-        return {
-          ...meta,
-          view,
-        }
-      })
-      .filter((item): item is { key: 'traffic' | 'resource' | 'risk'; title: string; color: string; view: AISummaryRoleView } => Boolean(item))
-  }, [aiSummary])
-
   const latestRecommendation = useMemo(() => {
     if (!selectedIncident?.recommendations.length) {
       return null
@@ -282,10 +259,12 @@ export const IncidentCenter: React.FC = () => {
   const refreshAIProviderAvailability = useCallback(async () => {
     setAiProviderChecking(true)
     try {
-      const payload = (await aiApi.listProviders()) as { providers?: LLMProviderRecord[] }
-      setAiProviderReady(hasUsableAIProvider(payload.providers || []))
+      const payload = (await aiApi.getAssistantStatus()) as AIAssistantStatusResponse
+      setAssistantStatus(payload)
+      setAiProviderReady(payload.provider_ready)
     } catch {
-      // 获取 provider 状态失败时不阻塞页面操作，保持为可尝试状态。
+      // 状态接口失败时不阻塞页面主流程，但会隐藏状态条的细节信息。
+      setAssistantStatus(null)
       setAiProviderReady(true)
     } finally {
       setAiProviderChecking(false)
@@ -337,6 +316,22 @@ export const IncidentCenter: React.FC = () => {
       return
     }
     navigate(`/tasks?taskId=${encodeURIComponent(visibleRecommendationTask.taskId)}`)
+  }
+
+  const openAssistantWorkbench = () => {
+    if (!selectedIncident) {
+      return
+    }
+    const params = new URLSearchParams()
+    params.set('source', 'incident')
+    params.set('incidentId', selectedIncident.incident.incident_id)
+    params.set('time_range', timeRange)
+    params.set('prompt', buildAssistantPrompt(selectedIncident.incident))
+    if (selectedIncident.incident.service_key) {
+      setServiceKey(selectedIncident.incident.service_key)
+      params.set('service_key', selectedIncident.incident.service_key)
+    }
+    navigate(`/assistant?${params.toString()}`)
   }
 
   const openTrafficForIncident = () => {
@@ -451,6 +446,9 @@ export const IncidentCenter: React.FC = () => {
         </div>
         <Space wrap>
           <Input value={serviceKey} onChange={(event) => setServiceKey(event.target.value)} placeholder="service_key，例如 docker/nginx" style={{ width: 220 }} />
+          <Button onClick={openAssistantWorkbench} disabled={!selectedIncident}>
+            AI 助手
+          </Button>
           <Button
             type="primary"
             loading={creating}
@@ -471,16 +469,11 @@ export const IncidentCenter: React.FC = () => {
           onAction={() => void loadIncidents()}
         />
       ) : null}
-      {aiProviderReady === false ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="AI 功能未启用"
-          description="请先到「LLM 设置」启用可用 Provider，异常总结和 AI 复核入口会在配置后自动恢复。"
-          action={<Button type="link" size="small" onClick={() => navigate('/llm-settings')}>前往 LLM 设置</Button>}
-          style={{ marginBottom: 16 }}
-        />
-      ) : null}
+      <AIProviderStatusStrip
+        status={assistantStatus}
+        loading={aiProviderChecking}
+        onOpenSettings={() => navigate('/llm-settings')}
+      />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={9}>
@@ -633,62 +626,16 @@ export const IncidentCenter: React.FC = () => {
 
                 {aiSummary ? (
                   <Card type="inner" title="AI 异常总结" style={{ marginBottom: 16 }}>
-                    <Space style={{ marginBottom: 12, flexWrap: 'wrap' }}>
-                      <Tag color={aiSummary.risk_level === 'high' ? 'red' : aiSummary.risk_level === 'medium' ? 'orange' : 'green'}>
-                        风险等级: {aiSummary.risk_level}
-                      </Tag>
-                      <Tag color="geekblue">AI 置信度: {Math.round(aiSummary.confidence * 100)}%</Tag>
-                      <Tag>{aiSummary.parse_mode === 'json' ? '结构化输出' : '降级输出'}</Tag>
-                    </Space>
-                    <Paragraph style={{ marginBottom: 12, whiteSpace: 'pre-wrap' }}>{aiSummary.summary}</Paragraph>
-                    {aiRoleViews.length ? (
-                      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-                        {aiRoleViews.map((item) => (
-                          <Col xs={24} md={8} key={item.key}>
-                            <Card size="small" title={<Space><Tag color={item.color}>{item.title}</Tag></Space>}>
-                              <Paragraph style={{ marginBottom: 8 }}>{item.view.headline}</Paragraph>
-                              <Text strong style={{ display: 'block', marginBottom: 6 }}>关键发现</Text>
-                              <List
-                                size="small"
-                                dataSource={item.view.key_findings}
-                                locale={{ emptyText: '无' }}
-                                renderItem={(entry) => <List.Item>{entry}</List.Item>}
-                                style={{ marginBottom: 8 }}
-                              />
-                              <Text strong style={{ display: 'block', marginBottom: 6 }}>建议动作</Text>
-                              <List
-                                size="small"
-                                dataSource={item.view.actions}
-                                locale={{ emptyText: '无' }}
-                                renderItem={(entry) => <List.Item>{entry}</List.Item>}
-                              />
-                            </Card>
-                          </Col>
-                        ))}
-                      </Row>
-                    ) : null}
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>可能原因</Text>
-                    <List
-                      size="small"
-                      dataSource={aiSummary.primary_causes}
-                      locale={{ emptyText: '无' }}
-                      renderItem={(item) => <List.Item>{item}</List.Item>}
-                      style={{ marginBottom: 12 }}
-                    />
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>建议动作</Text>
-                    <List
-                      size="small"
-                      dataSource={aiSummary.recommended_actions}
-                      locale={{ emptyText: '无' }}
-                      renderItem={(item) => <List.Item>{item}</List.Item>}
-                      style={{ marginBottom: 12 }}
-                    />
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>证据引用</Text>
-                    <List
-                      size="small"
-                      dataSource={aiSummary.evidence_citations}
-                      locale={{ emptyText: '无' }}
-                      renderItem={(item) => <List.Item><Text code>{item}</Text></List.Item>}
+                    <AIDiagnosisCard
+                      summary={aiSummary.summary}
+                      riskLevel={aiSummary.risk_level}
+                      confidence={aiSummary.confidence}
+                      provider={aiSummary.provider}
+                      parseMode={aiSummary.parse_mode}
+                      primaryCauses={aiSummary.primary_causes}
+                      recommendedActions={aiSummary.recommended_actions}
+                      evidenceCitations={aiSummary.evidence_citations}
+                      roleViews={aiSummary.role_views}
                     />
                   </Card>
                 ) : null}
