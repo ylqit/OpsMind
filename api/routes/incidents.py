@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence, summarize_incident_evidence
 from engine.llm.structured_output import run_guarded_scenario_chat
-from engine.runtime.models import ArtifactKind, TaskStatus, TaskType
+from engine.runtime.models import ArtifactKind, Claim, TaskStatus, TaskType
 
 from .deps import (
     get_alert_store,
@@ -52,6 +52,7 @@ class IncidentAISummaryPayload(BaseModel):
     primary_causes: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
     role_views: dict[str, dict[str, Any]] = Field(default_factory=dict)
     parse_mode: str = "fallback"
     validation_status: str = "fallback_template"
@@ -88,6 +89,207 @@ class IncidentSummarySchema(BaseModel):
     recommended_actions: list[str] = Field(default_factory=list, max_length=10)
     evidence_citations: list[str] = Field(default_factory=list, max_length=10)
     role_views: IncidentRoleViewsSchema | None = None
+
+
+def _collect_evidence_ids(items: list[dict[str, Any]], limit: int = 3) -> list[str]:
+    evidence_ids: list[str] = []
+    for item in items:
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        if not evidence_id or evidence_id in evidence_ids:
+            continue
+        evidence_ids.append(evidence_id)
+        if len(evidence_ids) >= limit:
+            break
+    return evidence_ids
+
+
+def _build_claim(
+    *,
+    claim_id: str,
+    kind: str,
+    statement: str,
+    evidence_ids: list[str],
+    confidence: float,
+    limitations: list[str],
+    title: str = "",
+    source: str = "incident",
+    next_step: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_statement = str(statement).strip()
+    if not normalized_statement:
+        return None
+    claim = Claim.model_validate(
+        {
+            "claim_id": claim_id,
+            "kind": kind,
+            "statement": normalized_statement,
+            "evidence_ids": [item for item in evidence_ids if item],
+            "confidence": confidence,
+            "limitations": [item for item in limitations if str(item).strip()],
+            "title": title,
+            "source": source,
+            "next_step": str(next_step).strip() or None if next_step is not None else None,
+        }
+    )
+    return claim.model_dump(mode="python")
+
+
+def _build_claim_limitations(
+    *,
+    evidence_refs: list[dict[str, Any]],
+    evidence_summary: dict[str, Any] | None = None,
+    risk_level: str | None = None,
+) -> list[str]:
+    layer_counts = (evidence_summary or {}).get("layers")
+    if not isinstance(layer_counts, dict):
+        layer_counts = {}
+
+    limitations: list[str] = []
+    if len(evidence_refs) < 2:
+        limitations.append("当前证据数量有限，结论需要继续验证。")
+    if not layer_counts.get("traffic"):
+        limitations.append("缺少流量侧证据，入口行为判断可信度有限。")
+    if not layer_counts.get("resource"):
+        limitations.append("缺少资源侧证据，容量与瓶颈判断仍需补充。")
+    if risk_level == "high":
+        limitations.append("当前风险较高，执行前需要准备回滚与观察窗口。")
+
+    deduplicated: list[str] = []
+    for item in limitations:
+        if item not in deduplicated:
+            deduplicated.append(item)
+    return deduplicated[:3]
+
+
+def _build_incident_claims(incident_payload: dict[str, Any], evidence_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence_refs = [item for item in incident_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    highlight_ids = _collect_evidence_ids(evidence_summary.get("highlights") or [], limit=3)
+    default_evidence_ids = highlight_ids or _collect_evidence_ids(evidence_refs, limit=3)
+    confidence = _normalize_confidence(incident_payload.get("confidence"))
+    risk_level = "high" if str(incident_payload.get("severity") or "").lower() == "critical" else "medium"
+    limitations = _build_claim_limitations(
+        evidence_refs=evidence_refs,
+        evidence_summary=evidence_summary,
+        risk_level=risk_level,
+    )
+    claims: list[dict[str, Any]] = []
+
+    summary_claim = _build_claim(
+        claim_id=f"{incident_payload.get('incident_id')}_summary",
+        kind="summary",
+        title="异常结论",
+        statement=str(incident_payload.get("summary") or ""),
+        evidence_ids=default_evidence_ids,
+        confidence=confidence,
+        limitations=limitations,
+        source="incident_detail",
+        next_step=str(evidence_summary.get("next_step") or ""),
+    )
+    if summary_claim:
+        claims.append(summary_claim)
+
+    for index, raw_cause in enumerate(_to_string_list(incident_payload.get("reasoning_tags"), limit=3), start=1):
+        statement = f"当前异常与“{raw_cause.replace('_', ' ')}”信号相关，需要继续交叉验证。"
+        cause_claim = _build_claim(
+            claim_id=f"{incident_payload.get('incident_id')}_cause_{index}",
+            kind="cause",
+            title=f"原因判断 {index}",
+            statement=statement,
+            evidence_ids=default_evidence_ids[:2] or default_evidence_ids,
+            confidence=max(0.35, min(confidence, 0.82)),
+            limitations=limitations,
+            source="incident_detail",
+        )
+        if cause_claim:
+            claims.append(cause_claim)
+
+    for index, action in enumerate(_to_string_list(incident_payload.get("recommended_actions"), limit=2), start=1):
+        action_claim = _build_claim(
+            claim_id=f"{incident_payload.get('incident_id')}_action_{index}",
+            kind="action",
+            title=f"建议动作 {index}",
+            statement=action,
+            evidence_ids=default_evidence_ids[:2] or default_evidence_ids,
+            confidence=max(0.3, min(confidence, 0.76)),
+            limitations=["执行前请结合变更窗口、回滚预案和现场观察结果复核。"],
+            source="incident_detail",
+        )
+        if action_claim:
+            claims.append(action_claim)
+
+    if risk_level:
+        risk_statement = "当前异常风险较高，建议先控制影响面再进行后续定位。" if risk_level == "high" else "当前异常风险可控，但仍建议在观察窗口内逐步验证。"
+        risk_claim = _build_claim(
+            claim_id=f"{incident_payload.get('incident_id')}_risk",
+            kind="risk",
+            title="风险判断",
+            statement=risk_statement,
+            evidence_ids=default_evidence_ids[:2] or default_evidence_ids,
+            confidence=max(0.35, min(confidence, 0.72)),
+            limitations=limitations,
+            source="incident_detail",
+        )
+        if risk_claim:
+            claims.append(risk_claim)
+
+    return claims
+
+
+def _build_incident_ai_claims(
+    incident,
+    normalized_payload: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    confidence = _normalize_confidence(normalized_payload.get("confidence"))
+    default_evidence_ids = _collect_evidence_ids(evidence_refs, limit=3)
+    limitations = _build_claim_limitations(
+        evidence_refs=evidence_refs,
+        risk_level=str(normalized_payload.get("risk_level") or "medium"),
+    )
+    claims: list[dict[str, Any]] = []
+
+    summary_claim = _build_claim(
+        claim_id=f"{incident.incident_id}_ai_summary",
+        kind="summary",
+        title="AI 总结",
+        statement=str(normalized_payload.get("summary") or ""),
+        evidence_ids=default_evidence_ids,
+        confidence=confidence,
+        limitations=limitations,
+        source="incident_ai_summary",
+    )
+    if summary_claim:
+        claims.append(summary_claim)
+
+    for index, cause in enumerate(_to_string_list(normalized_payload.get("primary_causes"), limit=3), start=1):
+        cause_claim = _build_claim(
+            claim_id=f"{incident.incident_id}_ai_cause_{index}",
+            kind="cause",
+            title=f"AI 原因判断 {index}",
+            statement=cause,
+            evidence_ids=default_evidence_ids[:2] or default_evidence_ids,
+            confidence=max(0.35, min(confidence, 0.8)),
+            limitations=limitations,
+            source="incident_ai_summary",
+        )
+        if cause_claim:
+            claims.append(cause_claim)
+
+    for index, action in enumerate(_to_string_list(normalized_payload.get("recommended_actions"), limit=2), start=1):
+        action_claim = _build_claim(
+            claim_id=f"{incident.incident_id}_ai_action_{index}",
+            kind="action",
+            title=f"AI 建议动作 {index}",
+            statement=action,
+            evidence_ids=default_evidence_ids[:2] or default_evidence_ids,
+            confidence=max(0.3, min(confidence, 0.74)),
+            limitations=["AI 建议需结合真实发布窗口与回滚能力确认后再执行。"],
+            source="incident_ai_summary",
+        )
+        if action_claim:
+            claims.append(action_claim)
+
+    return claims
 
 
 def _serialize_incident(incident) -> dict[str, Any]:
@@ -359,11 +561,13 @@ async def get_incident_detail(
 
     incident_payload = _serialize_incident(incident)
     recommendation_tasks = _build_recommendation_task_links(incident_id, task_manager)
+    evidence_summary = _build_evidence_summary(incident_payload)
     return {
         "incident": incident_payload,
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
-        "evidence_summary": _build_evidence_summary(incident_payload),
+        "evidence_summary": evidence_summary,
+        "claims": _build_incident_claims(incident_payload, evidence_summary),
         "recommendation_task": recommendation_tasks[0] if recommendation_tasks else None,
         "recommendation_tasks": recommendation_tasks,
     }
@@ -451,6 +655,7 @@ async def generate_incident_ai_summary(
     )
 
     normalized = _normalize_summary_payload(guardrail_result.data, fallback_payload)
+    incident_payload = _serialize_incident(incident)
     result = IncidentAISummaryPayload(
         incident_id=incident.incident_id,
         provider=request.provider or llm_router.default_client_name,
@@ -461,6 +666,7 @@ async def generate_incident_ai_summary(
         guardrail_error_message=guardrail_result.error_message,
         log_sample_count=len(samples),
         recommendation_count=len(recommendations),
+        claims=_build_incident_ai_claims(incident, normalized, incident_payload.get("evidence_refs") or []),
         **normalized,
     )
     return result.model_dump(mode="json")

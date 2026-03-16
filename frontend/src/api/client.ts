@@ -114,6 +114,19 @@ export interface EvidenceRef {
   [key: string]: unknown
 }
 
+export interface ClaimRecord {
+  claim_id: string
+  kind: string
+  statement: string
+  evidence_ids: string[]
+  confidence: number
+  limitations: string[]
+  title?: string
+  source?: string
+  next_step?: string | null
+  [key: string]: unknown
+}
+
 export interface IncidentRecord {
   incident_id: string
   title: string
@@ -231,6 +244,7 @@ export interface RecommendationArtifactViewsPayload {
 export interface RecommendationDetailResponse extends RecommendationRecord {
   evidence_refs: RecommendationEvidenceRef[]
   log_samples: LogSampleRecord[]
+  claims: ClaimRecord[]
   evidence_status: 'sufficient' | 'insufficient'
   evidence_message: string
   confidence_effective: number
@@ -574,6 +588,7 @@ export interface IncidentDetailResponse {
   recommendations: RecommendationRecord[]
   log_samples: LogSampleRecord[]
   evidence_summary: IncidentEvidenceSummary
+  claims: ClaimRecord[]
   recommendation_task?: IncidentRecommendationTaskLink | null
   recommendation_tasks?: IncidentRecommendationTaskLink[]
 }
@@ -599,6 +614,7 @@ export interface IncidentAISummaryResponse {
   primary_causes: string[]
   recommended_actions: string[]
   evidence_citations: string[]
+  claims: ClaimRecord[]
   role_views?: AISummaryRoleViews
   parse_mode: string
   validation_status?: string
@@ -620,6 +636,7 @@ export interface RecommendationAIReviewResponse {
   rollback_plan: string[]
   validation_checks: string[]
   evidence_citations: string[]
+  claims: ClaimRecord[]
   role_views?: AISummaryRoleViews
   parse_mode: string
   validation_status?: string

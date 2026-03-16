@@ -150,6 +150,22 @@ class EvidenceRef(BaseModel):
     alignment: Optional[Dict[str, Any]] = None
 
 
+class Claim(BaseModel):
+    """统一结论对象，明确表达“判断、证据、限制”三段信息。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    claim_id: str
+    kind: str = "summary"
+    statement: str
+    evidence_ids: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    limitations: List[str] = Field(default_factory=list)
+    title: str = ""
+    source: str = "analysis"
+    next_step: Optional[str] = None
+
+
 class Observation(BaseModel):
     kind: ObservationKind
     summary: str

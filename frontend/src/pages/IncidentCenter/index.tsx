@@ -6,6 +6,7 @@ import {
   incidentsApi,
   recommendationsApi,
   type AIAssistantStatusResponse,
+  type ClaimRecord,
   type IncidentEvidenceRef,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
@@ -58,6 +59,15 @@ const signalStrengthMeta: Record<string, { label: string; color: string }> = {
   medium: { label: '中优先', color: 'gold' },
   low: { label: '低优先', color: 'default' },
 }
+
+const claimMeta: Record<string, { label: string; color: string }> = {
+  summary: { label: '结论', color: 'blue' },
+  cause: { label: '原因', color: 'purple' },
+  action: { label: '动作', color: 'green' },
+  risk: { label: '风险', color: 'orange' },
+}
+
+const getClaimMeta = (kind: string) => claimMeta[kind] || { label: '判断', color: 'default' }
 
 const formatEvidenceValue = (item: EvidenceItem) => {
   if (item.value === undefined || item.value === null || item.value === '') {
@@ -204,6 +214,9 @@ export const IncidentCenter: React.FC = () => {
       layerCounts: evidenceSummary?.layers || {},
     }
   }, [selectedIncident])
+
+  const incidentClaims = useMemo<ClaimRecord[]>(() => selectedIncident?.claims || [], [selectedIncident])
+  const aiSummaryClaims = useMemo<ClaimRecord[]>(() => aiSummary?.claims || [], [aiSummary])
 
   const visibleRecommendationTask = useMemo(() => {
     if (!selectedIncident || !recommendationTask) {
@@ -613,6 +626,33 @@ export const IncidentCenter: React.FC = () => {
                           renderItem={(item) => <List.Item style={{ paddingBlock: 4 }}>{item}</List.Item>}
                         />
                       ) : null}
+                      {incidentClaims.length ? (
+                        <List
+                          size="small"
+                          header={<Text strong>结论拆解</Text>}
+                          dataSource={incidentClaims}
+                          style={{ marginBottom: 12 }}
+                          renderItem={(item) => {
+                            const meta = getClaimMeta(item.kind)
+                            return (
+                              <List.Item>
+                                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Tag color={meta.color}>{meta.label}</Tag>
+                                    {item.title ? <Text strong>{item.title}</Text> : null}
+                                    <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
+                                    <Tag>证据 {item.evidence_ids.length}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
+                                  {item.limitations.length ? (
+                                    <Text type="secondary">限制：{item.limitations.join('；')}</Text>
+                                  ) : null}
+                                </Space>
+                              </List.Item>
+                            )
+                          }}
+                        />
+                      ) : null}
                       <div className="ops-incident-brief__highlights">
                         {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
                           <div key={`${item.layer}-${item.metric}-${item.title}`} className="ops-incident-brief__highlight">
@@ -642,6 +682,33 @@ export const IncidentCenter: React.FC = () => {
                       evidenceCitations={aiSummary.evidence_citations}
                       roleViews={aiSummary.role_views}
                     />
+                    {aiSummaryClaims.length ? (
+                      <List
+                        size="small"
+                        header={<Text strong>AI 结论拆解</Text>}
+                        dataSource={aiSummaryClaims}
+                        style={{ marginTop: 12 }}
+                        renderItem={(item) => {
+                          const meta = getClaimMeta(item.kind)
+                          return (
+                            <List.Item>
+                              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                <Space wrap>
+                                  <Tag color={meta.color}>{meta.label}</Tag>
+                                  {item.title ? <Text strong>{item.title}</Text> : null}
+                                  <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
+                                  <Tag>证据 {item.evidence_ids.length}</Tag>
+                                </Space>
+                                <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
+                                {item.limitations.length ? (
+                                  <Text type="secondary">限制：{item.limitations.join('；')}</Text>
+                                ) : null}
+                              </Space>
+                            </List.Item>
+                          )
+                        }}
+                      />
+                    ) : null}
                   </Card>
                 ) : null}
 

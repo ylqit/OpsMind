@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.llm.structured_output import run_guarded_scenario_chat
-from engine.runtime.models import ArtifactRef, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
+from engine.runtime.models import ArtifactRef, Claim, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
 
 from .deps import (
     get_incident_service,
@@ -64,6 +64,7 @@ class RecommendationAIReviewPayload(BaseModel):
     rollback_plan: list[str] = Field(default_factory=list)
     validation_checks: list[str] = Field(default_factory=list)
     evidence_citations: list[str] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
     role_views: dict[str, dict[str, Any]] = Field(default_factory=dict)
     parse_mode: str = "fallback"
     validation_status: str = "fallback_template"
@@ -402,6 +403,72 @@ def _build_evidence_summary(refs: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _collect_evidence_ids(refs: list[dict[str, Any]], limit: int = 3) -> list[str]:
+    evidence_ids: list[str] = []
+    for item in refs:
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        if not evidence_id or evidence_id in evidence_ids:
+            continue
+        evidence_ids.append(evidence_id)
+        if len(evidence_ids) >= limit:
+            break
+    return evidence_ids
+
+
+def _build_claim(
+    *,
+    claim_id: str,
+    kind: str,
+    statement: str,
+    evidence_ids: list[str],
+    confidence: float,
+    limitations: list[str],
+    title: str = "",
+    source: str = "recommendation",
+    next_step: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_statement = str(statement).strip()
+    if not normalized_statement:
+        return None
+    claim = Claim.model_validate(
+        {
+            "claim_id": claim_id,
+            "kind": kind,
+            "statement": normalized_statement,
+            "evidence_ids": [item for item in evidence_ids if item],
+            "confidence": confidence,
+            "limitations": [item for item in limitations if str(item).strip()],
+            "title": title,
+            "source": source,
+            "next_step": str(next_step).strip() or None if next_step is not None else None,
+        }
+    )
+    return claim.model_dump(mode="python")
+
+
+def _build_recommendation_limitations(
+    *,
+    evidence_status: str,
+    evidence_summary: dict[str, int],
+    risk_note: str,
+) -> list[str]:
+    limitations: list[str] = []
+    if evidence_status != "sufficient":
+        limitations.append("当前可追溯证据不足，建议先补充日志、指标或任务产物。")
+    if int(evidence_summary.get("artifact", 0)) == 0:
+        limitations.append("缺少任务产物支撑，配置草稿仍需人工复核。")
+    if int(evidence_summary.get("log_snippet", 0)) == 0:
+        limitations.append("缺少现场日志样本，异常触发路径仍需补充确认。")
+    if risk_note.strip():
+        limitations.append("请结合风险提示与回滚预案评估执行窗口。")
+
+    deduplicated: list[str] = []
+    for item in limitations:
+        if item not in deduplicated:
+            deduplicated.append(item)
+    return deduplicated[:3]
+
+
 def _build_insufficient_evidence_ref(recommendation, incident) -> dict[str, Any]:
     incident_summary = str(getattr(incident, "summary", "") or "").strip()
     recommendation_summary = str(getattr(recommendation, "recommendation", "") or "").strip()
@@ -460,6 +527,122 @@ def _build_recommendation_evidence_payload(recommendation, incident, log_samples
         "recommendation_effective": recommendation.recommendation,
         "evidence_summary": _build_evidence_summary(evidence_refs),
     }
+
+
+def _build_recommendation_claims(recommendation, incident, evidence_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence_refs = [item for item in evidence_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    evidence_ids = _collect_evidence_ids(evidence_refs, limit=3)
+    confidence = float(evidence_payload.get("confidence_effective") or recommendation.confidence or 0.5)
+    limitations = _build_recommendation_limitations(
+        evidence_status=str(evidence_payload.get("evidence_status") or "insufficient"),
+        evidence_summary=evidence_payload.get("evidence_summary") or {},
+        risk_note=str(getattr(recommendation, "risk_note", "") or ""),
+    )
+    claims: list[dict[str, Any]] = []
+
+    summary_claim = _build_claim(
+        claim_id=f"{recommendation.recommendation_id}_summary",
+        kind="summary",
+        title="建议结论",
+        statement=str(evidence_payload.get("recommendation_effective") or recommendation.recommendation or ""),
+        evidence_ids=evidence_ids,
+        confidence=confidence,
+        limitations=limitations,
+        source="recommendation_detail",
+    )
+    if summary_claim:
+        claims.append(summary_claim)
+
+    observation_text = str(getattr(recommendation, "observation", "") or getattr(incident, "summary", "") or "").strip()
+    observation_claim = _build_claim(
+        claim_id=f"{recommendation.recommendation_id}_observation",
+        kind="cause",
+        title="触发观察",
+        statement=observation_text,
+        evidence_ids=evidence_ids[:2] or evidence_ids,
+        confidence=max(0.3, min(confidence, 0.78)),
+        limitations=limitations,
+        source="recommendation_detail",
+    )
+    if observation_claim:
+        claims.append(observation_claim)
+
+    risk_text = str(getattr(recommendation, "risk_note", "") or "").strip()
+    risk_claim = _build_claim(
+        claim_id=f"{recommendation.recommendation_id}_risk",
+        kind="risk",
+        title="风险提示",
+        statement=risk_text or "建议执行前需要人工确认变更风险和回滚策略。",
+        evidence_ids=evidence_ids[:2] or evidence_ids,
+        confidence=max(0.28, min(confidence, 0.7)),
+        limitations=limitations,
+        source="recommendation_detail",
+    )
+    if risk_claim:
+        claims.append(risk_claim)
+
+    return claims
+
+
+def _build_recommendation_ai_claims(
+    recommendation,
+    review_payload: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    confidence = float(review_payload.get("confidence") or 0.5)
+    evidence_ids = _collect_evidence_ids(evidence_refs, limit=3)
+    limitations = _build_recommendation_limitations(
+        evidence_status="sufficient" if evidence_ids else "insufficient",
+        evidence_summary={
+            "artifact": len([item for item in evidence_refs if item.get("source_type") == "artifact"]),
+            "log_snippet": len([item for item in evidence_refs if item.get("source_type") == "log_snippet"]),
+        },
+        risk_note=str(review_payload.get("risk_assessment") or ""),
+    )
+    claims: list[dict[str, Any]] = []
+
+    summary_claim = _build_claim(
+        claim_id=f"{recommendation.recommendation_id}_ai_summary",
+        kind="summary",
+        title="AI 复核结论",
+        statement=str(review_payload.get("summary") or ""),
+        evidence_ids=evidence_ids,
+        confidence=confidence,
+        limitations=limitations,
+        source="recommendation_ai_review",
+    )
+    if summary_claim:
+        claims.append(summary_claim)
+
+    risk_claim = _build_claim(
+        claim_id=f"{recommendation.recommendation_id}_ai_risk",
+        kind="risk",
+        title="AI 风险判断",
+        statement=str(review_payload.get("risk_assessment") or ""),
+        evidence_ids=evidence_ids[:2] or evidence_ids,
+        confidence=max(0.3, min(confidence, 0.76)),
+        limitations=limitations,
+        source="recommendation_ai_review",
+    )
+    if risk_claim:
+        claims.append(risk_claim)
+
+    checks = [item for item in review_payload.get("validation_checks") or [] if str(item).strip()]
+    if checks:
+        action_claim = _build_claim(
+            claim_id=f"{recommendation.recommendation_id}_ai_checks",
+            kind="action",
+            title="验证动作",
+            statement="；".join(checks[:3]),
+            evidence_ids=evidence_ids[:2] or evidence_ids,
+            confidence=max(0.28, min(confidence, 0.72)),
+            limitations=["复核建议仍需结合变更窗口和回滚方案完成最终确认。"],
+            source="recommendation_ai_review",
+        )
+        if action_claim:
+            claims.append(action_claim)
+
+    return claims
 
 
 def _build_artifact_group(artifacts: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
@@ -1203,6 +1386,7 @@ async def get_recommendation_detail(
     detail["task_context"] = task_context
     detail["task_trace_preview"] = task_trace_preview
     detail["task_trace_summary"] = _build_task_trace_summary(task_trace_preview)
+    detail["claims"] = _build_recommendation_claims(recommendation, incident, evidence_payload)
     return detail
 
 
@@ -1356,6 +1540,8 @@ async def review_recommendation_with_ai(
     )
 
     normalized = _normalize_review_payload(guardrail_result.data, fallback_payload)
+    evidence_payload = _build_recommendation_evidence_payload(recommendation, incident)
+    evidence_refs = [item for item in evidence_payload.get("evidence_refs") or [] if isinstance(item, dict)]
     result = RecommendationAIReviewPayload(
         recommendation_id=recommendation.recommendation_id,
         incident_id=recommendation.incident_id,
@@ -1365,6 +1551,7 @@ async def review_recommendation_with_ai(
         retry_count=guardrail_result.retry_count,
         guardrail_error_code=guardrail_result.error_code,
         guardrail_error_message=guardrail_result.error_message,
+        claims=_build_recommendation_ai_claims(recommendation, normalized, evidence_refs),
         **normalized,
     )
     return result.model_dump(mode="json")

@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   aiApi,
   type AIAssistantStatusResponse,
+  type ClaimRecord,
   incidentsApi,
   recommendationsApi,
   tasksApi,
@@ -208,6 +209,15 @@ const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_ty
   }
   return '异常上下文'
 }
+
+const claimMeta: Record<string, { label: string; color: string }> = {
+  summary: { label: '结论', color: 'blue' },
+  cause: { label: '原因', color: 'purple' },
+  action: { label: '动作', color: 'green' },
+  risk: { label: '风险', color: 'orange' },
+}
+
+const getClaimMeta = (kind: string) => claimMeta[kind] || { label: '判断', color: 'default' }
 
 const getArtifactViewLabel = (viewKey: RecommendationArtifactViewKey) => {
   if (viewKey === 'baseline') {
@@ -592,6 +602,14 @@ export const RecommendationCenter: React.FC = () => {
   const activeRecommendationDetail = useMemo(
     () => (activeRecommendation ? detailByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, detailByRecommendationId],
+  )
+  const activeRecommendationClaims = useMemo<ClaimRecord[]>(
+    () => activeRecommendationDetail?.claims || [],
+    [activeRecommendationDetail],
+  )
+  const activeAiReviewClaims = useMemo<ClaimRecord[]>(
+    () => activeAiReview?.claims || [],
+    [activeAiReview],
   )
   const activeArtifactViews = useMemo<RecommendationArtifactViewsPayload | null>(
     () => activeRecommendationDetail?.artifact_views || null,
@@ -1706,6 +1724,34 @@ export const RecommendationCenter: React.FC = () => {
                     </Card>
                   ) : null}
 
+                  {activeRecommendationClaims.length ? (
+                    <Card type="inner" title="结论拆解" size="small">
+                      <List
+                        size="small"
+                        dataSource={activeRecommendationClaims}
+                        renderItem={(item) => {
+                          const meta = getClaimMeta(item.kind)
+                          return (
+                            <List.Item>
+                              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                <Space wrap>
+                                  <Tag color={meta.color}>{meta.label}</Tag>
+                                  {item.title ? <Text strong>{item.title}</Text> : null}
+                                  <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
+                                  <Tag>证据 {item.evidence_ids.length}</Tag>
+                                </Space>
+                                <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
+                                {item.limitations.length ? (
+                                  <Text type="secondary">限制：{item.limitations.join('；')}</Text>
+                                ) : null}
+                              </Space>
+                            </List.Item>
+                          )
+                        }}
+                      />
+                    </Card>
+                  ) : null}
+
                   {activeAiReview ? (
                     <Card type="inner" title="AI 复核" size="small">
                       <AIDiagnosisCard
@@ -1720,6 +1766,33 @@ export const RecommendationCenter: React.FC = () => {
                         evidenceCitations={activeAiReview.evidence_citations}
                         roleViews={activeAiReview.role_views}
                       />
+                      {activeAiReviewClaims.length ? (
+                        <List
+                          size="small"
+                          header={<Text strong>AI 复核拆解</Text>}
+                          dataSource={activeAiReviewClaims}
+                          style={{ marginTop: 12 }}
+                          renderItem={(item) => {
+                            const meta = getClaimMeta(item.kind)
+                            return (
+                              <List.Item>
+                                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Tag color={meta.color}>{meta.label}</Tag>
+                                    {item.title ? <Text strong>{item.title}</Text> : null}
+                                    <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
+                                    <Tag>证据 {item.evidence_ids.length}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
+                                  {item.limitations.length ? (
+                                    <Text type="secondary">限制：{item.limitations.join('；')}</Text>
+                                  ) : null}
+                                </Space>
+                              </List.Item>
+                            )
+                          }}
+                        />
+                      ) : null}
                     </Card>
                   ) : null}
 
