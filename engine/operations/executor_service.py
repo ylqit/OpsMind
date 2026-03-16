@@ -42,6 +42,25 @@ class ReadonlyCommandPackItem:
     command: str
 
 
+@dataclass(frozen=True)
+class ExecutorRunContext:
+    """执行上下文：当前默认本地执行，远程模式仅保留接口。"""
+
+    mode: str = "local"
+    remote_kind: str = ""
+    remote_target: str = ""
+    remote_namespace: str = ""
+
+    def to_dict(self, remote_enabled: bool) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "remote_kind": self.remote_kind,
+            "remote_target": self.remote_target,
+            "remote_namespace": self.remote_namespace,
+            "remote_enabled": remote_enabled,
+        }
+
+
 class ExecutorService:
     """统一管理 Linux/K8s/Docker 插件执行。"""
 
@@ -50,6 +69,7 @@ class ExecutorService:
     DEFAULT_TIMEOUT_SECONDS = 20
     MAX_PREVIEW_CHARS = 4000
     MAX_COMMAND_CHARS = 400
+    REMOTE_EXECUTION_ENABLED = False
 
     def __init__(
         self,
@@ -307,6 +327,49 @@ class ExecutorService:
             "approval_required": error_code == "EXECUTOR_APPROVAL_REQUIRED",
             "has_approval_ticket": bool(approval_ticket),
         }
+
+    def _normalize_execution_context(self, execution_context: dict[str, Any] | None) -> ExecutorRunContext:
+        raw = execution_context if isinstance(execution_context, dict) else {}
+        mode = str(raw.get("mode") or "local").strip().lower()
+        if mode not in {"local", "remote"}:
+            mode = "local"
+        return ExecutorRunContext(
+            mode=mode,
+            remote_kind=str(raw.get("remote_kind") or "").strip(),
+            remote_target=str(raw.get("remote_target") or "").strip(),
+            remote_namespace=str(raw.get("remote_namespace") or "").strip(),
+        )
+
+    def _build_run_response(
+        self,
+        audit: ExecutorAuditRecord,
+        plugin: ExecutorPluginRecord,
+        context: ExecutorRunContext,
+    ) -> dict[str, Any]:
+        return {
+            "execution": self._serialize_audit(audit),
+            "plugin": self._serialize_plugin(plugin),
+            "execution_context": context.to_dict(remote_enabled=self.REMOTE_EXECUTION_ENABLED),
+        }
+
+    def _execute_local_command(self, tokens: Sequence[str], timeout_value: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            tokens,
+            capture_output=True,
+            text=True,
+            timeout=timeout_value,
+            check=False,
+        )
+
+    def _execute_remote_command(
+        self,
+        context: ExecutorRunContext,
+        tokens: Sequence[str],
+        timeout_value: int,
+    ) -> subprocess.CompletedProcess:
+        # 远程执行抽象层先保留接口，待后续接入具体协议（如 ssh/k8s api）。
+        del context, tokens, timeout_value
+        raise NotImplementedError("远程执行通道尚未接入")
 
     def _serialize_plugin(self, plugin: ExecutorPluginRecord) -> dict[str, Any]:
         spec = self._specs.get(plugin.plugin_key)
@@ -646,6 +709,7 @@ class ExecutorService:
         task_id: str | None = None,
         operator: str = "system",
         approval_ticket: str = "",
+        execution_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         plugin = self.plugin_repository.get(plugin_key)
         if not plugin:
@@ -654,6 +718,7 @@ class ExecutorService:
         spec = self._specs.get(plugin_key)
         if not spec:
             raise ValueError("插件规格未注册")
+        run_context = self._normalize_execution_context(execution_context)
 
         if not plugin.enabled:
             audit = self._build_audit(
@@ -668,10 +733,7 @@ class ExecutorService:
                 task_id=task_id,
             )
             saved = self.audit_repository.save(audit)
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)
 
         now = datetime.utcnow()
         if plugin.circuit_open_until and plugin.circuit_open_until > now:
@@ -687,10 +749,22 @@ class ExecutorService:
                 task_id=task_id,
             )
             saved = self.audit_repository.save(audit)
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)
+
+        if run_context.mode == "remote" and not self.REMOTE_EXECUTION_ENABLED:
+            audit = self._build_audit(
+                plugin_key=plugin_key,
+                command=command,
+                readonly=readonly,
+                status=ExecutorRunStatus.REJECTED,
+                operator=operator,
+                approval_ticket=approval_ticket,
+                error_code="EXECUTOR_REMOTE_DISABLED",
+                error_message="远程执行未启用，当前仅支持本地执行",
+                task_id=task_id,
+            )
+            saved = self.audit_repository.save(audit)
+            return self._build_run_response(saved, plugin, run_context)
 
         tokens, error_code, error_message = self._validate_command(
             plugin=plugin,
@@ -712,22 +786,16 @@ class ExecutorService:
                 task_id=task_id,
             )
             saved = self.audit_repository.save(audit)
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)
 
         timeout_value = max(1, min(timeout_seconds or self.DEFAULT_TIMEOUT_SECONDS, 120))
         started = time.perf_counter()
 
         try:
-            result = subprocess.run(
-                tokens,
-                capture_output=True,
-                text=True,
-                timeout=timeout_value,
-                check=False,
-            )
+            if run_context.mode == "remote":
+                result = self._execute_remote_command(run_context, tokens, timeout_value)
+            else:
+                result = self._execute_local_command(tokens, timeout_value)
             duration_ms = int((time.perf_counter() - started) * 1000)
             if result.returncode == 0:
                 audit = self._build_audit(
@@ -745,10 +813,7 @@ class ExecutorService:
                 )
                 saved = self.audit_repository.save(audit)
                 plugin = self._reset_failure_state(plugin)
-                return {
-                    "execution": self._serialize_audit(saved),
-                    "plugin": self._serialize_plugin(plugin),
-                }
+                return self._build_run_response(saved, plugin, run_context)
 
             audit = self._build_audit(
                 plugin_key=plugin_key,
@@ -767,10 +832,7 @@ class ExecutorService:
             )
             saved = self.audit_repository.save(audit)
             plugin = self._apply_failure_state(plugin, saved.error_message or "命令执行失败")
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)
         except subprocess.TimeoutExpired as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             audit = self._build_audit(
@@ -789,10 +851,24 @@ class ExecutorService:
             )
             saved = self.audit_repository.save(audit)
             plugin = self._apply_failure_state(plugin, "命令执行超时")
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)
+        except NotImplementedError as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            audit = self._build_audit(
+                plugin_key=plugin_key,
+                command=command,
+                readonly=readonly,
+                status=ExecutorRunStatus.REJECTED,
+                operator=operator,
+                approval_ticket=approval_ticket,
+                duration_ms=duration_ms,
+                task_id=task_id,
+                error_code="EXECUTOR_REMOTE_NOT_IMPLEMENTED",
+                error_message=str(exc),
+            )
+            saved = self.audit_repository.save(audit)
+            plugin = self._apply_failure_state(plugin, str(exc))
+            return self._build_run_response(saved, plugin, run_context)
         except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.perf_counter() - started) * 1000)
             audit = self._build_audit(
@@ -809,7 +885,4 @@ class ExecutorService:
             )
             saved = self.audit_repository.save(audit)
             plugin = self._apply_failure_state(plugin, str(exc))
-            return {
-                "execution": self._serialize_audit(saved),
-                "plugin": self._serialize_plugin(plugin),
-            }
+            return self._build_run_response(saved, plugin, run_context)

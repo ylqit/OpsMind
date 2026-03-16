@@ -883,6 +883,14 @@ export interface ExecutorFailureDigest extends ExecutorAuditLog {
   has_approval_ticket?: boolean
 }
 
+export interface ExecutorExecutionContext {
+  mode: 'local' | 'remote' | string
+  remote_kind?: string
+  remote_target?: string
+  remote_namespace?: string
+  remote_enabled?: boolean
+}
+
 export interface ExecutorStatusResponse {
   plugins: ExecutorPluginStatus[]
   recent_logs: ExecutorAuditLog[]
@@ -909,6 +917,7 @@ export interface ExecutorStatusResponse {
 export interface ExecutorRunResponse {
   execution: ExecutorAuditLog
   plugin: ExecutorPluginStatus
+  execution_context?: ExecutorExecutionContext
   task_evidence?: {
     linked: boolean
     reason?: string
@@ -1118,6 +1127,7 @@ export const executorsApi = {
     task_id?: string
     operator?: string
     approval_ticket?: string
+    execution_context?: ExecutorExecutionContext
   }) => apiClient.post('/executors/run', payload),
   patchPlugin: (
     pluginKey: string,

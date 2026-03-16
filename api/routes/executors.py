@@ -13,6 +13,15 @@ from .deps import get_executor_service_dep, get_task_manager
 router = APIRouter(prefix="/executors", tags=["executors"])
 
 
+class ExecutorExecutionContextRequest(BaseModel):
+    """执行上下文请求，默认本地执行。"""
+
+    mode: str = Field(default="local", description="执行模式：local | remote")
+    remote_kind: str = Field(default="", description="远程执行类型")
+    remote_target: str = Field(default="", description="远程目标标识")
+    remote_namespace: str = Field(default="", description="远程命名空间")
+
+
 class ExecutorRunRequest(BaseModel):
     """执行请求。"""
 
@@ -23,6 +32,7 @@ class ExecutorRunRequest(BaseModel):
     task_id: str | None = Field(default=None, description="关联任务 ID")
     operator: str = Field(default="system", description="操作人")
     approval_ticket: str = Field(default="", description="写操作审批单")
+    execution_context: ExecutorExecutionContextRequest | None = Field(default=None, description="执行上下文")
 
 
 class ExecutorPluginPatchRequest(BaseModel):
@@ -163,6 +173,7 @@ async def run_executor(
             task_id=payload.task_id,
             operator=payload.operator,
             approval_ticket=payload.approval_ticket,
+            execution_context=payload.execution_context.model_dump() if payload.execution_context else None,
         )
         if payload.task_id:
             try:
