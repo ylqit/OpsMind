@@ -8,6 +8,7 @@ import {
   BarChartOutlined,
   DeploymentUnitOutlined,
   ExperimentOutlined,
+  RobotOutlined,
   SettingOutlined,
   ThunderboltOutlined,
   ToolOutlined,
@@ -24,6 +25,7 @@ import RecommendationCenter from './pages/RecommendationCenter'
 import TaskCenter from './pages/TaskCenter'
 import QualityMetrics from './pages/QualityMetrics'
 import ExecutorPlugins from './pages/ExecutorPlugins'
+import AIAssistantWorkbench from './pages/AIAssistantWorkbench'
 import { RouteErrorBoundary, LoadingFallback } from './components/ErrorBoundary'
 
 const { Header, Content, Sider } = Layout
@@ -36,6 +38,7 @@ const primaryMenuItems: NonNullable<MenuProps['items']>[number][] = [
   { key: '/recommendations', icon: <ExperimentOutlined />, label: '建议中心' },
   { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务中心' },
   { key: '/quality', icon: <BarChartOutlined />, label: '质量看板' },
+  { key: '/assistant', icon: <RobotOutlined />, label: 'AI 助手' },
   { key: '/executors', icon: <ToolOutlined />, label: '执行插件' },
 ]
 
@@ -93,6 +96,7 @@ const AppLayout: React.FC = () => {
               <Route path="/recommendations" element={<RecommendationCenter />} />
               <Route path="/tasks" element={<TaskCenter />} />
               <Route path="/quality" element={<QualityMetrics />} />
+              <Route path="/assistant" element={<AIAssistantWorkbench />} />
               <Route path="/executors" element={<ExecutorPlugins />} />
               <Route path="/workbench" element={<CapabilityWorkbench />} />
               <Route path="/llm-settings" element={<LLMSettings />} />

@@ -25,6 +25,9 @@ vi.mock('./pages/TaskCenter', () => ({
 vi.mock('./pages/QualityMetrics', () => ({
   default: () => <div>QualityMetrics Smoke</div>,
 }))
+vi.mock('./pages/AIAssistantWorkbench', () => ({
+  default: () => <div>AIAssistantWorkbench Smoke</div>,
+}))
 vi.mock('./pages/ExecutorPlugins', () => ({
   default: () => <div>ExecutorPlugins Smoke</div>,
 }))

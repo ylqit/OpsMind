@@ -116,6 +116,7 @@ opsMind 当前围绕以下主链路建设：
 - `RecommendationCenter`
 - `TaskCenter`
 - `QualityMetrics`
+- `AIAssistantWorkbench`
 - `ExecutorPlugins`
 - `CapabilityWorkbench`
 - `LLMSettings`

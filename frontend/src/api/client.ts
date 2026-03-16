@@ -617,6 +617,40 @@ export interface RecommendationAIReviewResponse {
   guardrail_error_message?: string
 }
 
+export interface AIAssistantCommandSuggestion {
+  plugin_key: string
+  plugin_name: string
+  category_key: string
+  category_label: string
+  template_id: string
+  title: string
+  description: string
+  command: string
+}
+
+export interface AIAssistantStatusResponse {
+  provider_ready: boolean
+  degraded_reason: string
+  default_provider: string
+  providers_total: number
+  enabled_providers: number
+  command_suggestions: AIAssistantCommandSuggestion[]
+}
+
+export interface AIAssistantDiagnoseResponse {
+  status: 'success' | 'degraded'
+  answer: string
+  provider: string
+  degraded_reason: string
+  latency_ms: number
+  command_suggestions: AIAssistantCommandSuggestion[]
+  context: {
+    service_key: string
+    time_range: string
+    incident_id: string
+  }
+}
+
 export interface RecommendationMetricsTrendItem {
   date: string
   feedback_total: number
@@ -1178,6 +1212,18 @@ export const aiApi = {
     },
   ) => apiClient.patch(`/ai/providers/${encodePathSegment(providerId)}`, payload),
   deleteProvider: (providerId: string) => apiClient.delete(`/ai/providers/${encodePathSegment(providerId)}`),
+  getAssistantStatus: () => apiClient.get('/ai/assistant/status'),
+  diagnoseWithAssistant: (payload: {
+    message: string
+    service_key?: string
+    time_range?: string
+    incident_id?: string
+    provider?: string
+    temperature?: number
+    max_tokens?: number
+    task_id?: string
+    include_command_packs?: boolean
+  }) => apiClient.post('/ai/assistant/diagnose', payload),
 }
 
 const resolveProviderIdByName = async (providerName: string): Promise<string> => {

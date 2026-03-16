@@ -21,6 +21,7 @@ from engine.runtime.models import AIProviderConfigRecord
 from .deps import (
     get_ai_call_log_repository_dep,
     get_ai_provider_config_repository_dep,
+    get_executor_service_dep,
     get_llm_router_dep,
     get_refresh_llm_router_dep,
 )
@@ -85,6 +86,20 @@ class AIProviderPatchRequest(BaseModel):
     max_retries: int | None = Field(default=None, ge=0, le=5, description="最大重试次数")
 
 
+class AIAssistantDiagnoseRequest(BaseModel):
+    """AI 助手诊断请求。"""
+
+    message: str = Field(..., min_length=1, description="用户输入的问题描述")
+    service_key: str | None = Field(default=None, description="服务标识，可选")
+    time_range: str = Field(default="1h", description="时间窗")
+    incident_id: str | None = Field(default=None, description="关联异常 ID，可选")
+    provider: str | None = Field(default=None, description="指定 Provider，可选")
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="采样温度")
+    max_tokens: int = Field(default=1200, ge=1, le=8192, description="最大输出 token")
+    task_id: str | None = Field(default=None, description="关联任务 ID，可选")
+    include_command_packs: bool = Field(default=True, description="是否附带只读命令建议")
+
+
 def _normalize_error_code(error: Exception) -> str:
     text = str(error).lower()
     if "timeout" in text or "timed out" in text:
@@ -110,6 +125,195 @@ def _build_client_from_record(record: AIProviderConfigRecord) -> LLMClient:
         max_retries=record.max_retries,
     )
     return LLMClient(provider_config)
+
+
+def _collect_command_suggestions(executor_service, limit: int = 8) -> list[dict[str, str]]:
+    if not executor_service:
+        return []
+    payload = executor_service.list_readonly_command_packs()
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    suggestions: list[dict[str, str]] = []
+    for plugin in items:
+        plugin_key = str(plugin.get("plugin_key") or "")
+        display_name = str(plugin.get("display_name") or plugin_key or "executor")
+        command_packs = plugin.get("readonly_command_packs", [])
+        if not isinstance(command_packs, list):
+            continue
+        for pack in command_packs:
+            if not isinstance(pack, dict):
+                continue
+            command = str(pack.get("command") or "").strip()
+            if not command:
+                continue
+            suggestions.append(
+                {
+                    "plugin_key": plugin_key,
+                    "plugin_name": display_name,
+                    "category_key": str(pack.get("category_key") or ""),
+                    "category_label": str(pack.get("category_label") or ""),
+                    "template_id": str(pack.get("template_id") or ""),
+                    "title": str(pack.get("title") or command),
+                    "description": str(pack.get("description") or ""),
+                    "command": command,
+                }
+            )
+            if len(suggestions) >= limit:
+                return suggestions
+    return suggestions
+
+
+def _build_assistant_system_prompt(
+    service_key: str,
+    time_range: str,
+    incident_id: str,
+    command_suggestions: list[dict[str, str]],
+) -> str:
+    lines = [
+        "你是 opsMind 的运维诊断助手。",
+        "请先给出结论，再给出证据与风险，最后给出可执行的下一步。",
+        "你只能建议只读诊断动作，不得建议直接执行高风险写操作。",
+        f"当前上下文：service_key={service_key or 'all'}，time_range={time_range or '1h'}，incident_id={incident_id or 'none'}。",
+    ]
+    if command_suggestions:
+        lines.append("可引用的只读命令模板如下：")
+        for item in command_suggestions[:5]:
+            lines.append(f"- [{item['plugin_name']}] {item['title']}: {item['command']}")
+    lines.append(
+        "输出格式：\n"
+        "1) 诊断结论（2-3 句）\n"
+        "2) 证据与风险（列表）\n"
+        "3) 下一步动作（仅只读）"
+    )
+    return "\n".join(lines)
+
+
+def _build_assistant_fallback_answer(
+    reason: str,
+    command_suggestions: list[dict[str, str]],
+    service_key: str,
+    time_range: str,
+) -> str:
+    lines = [
+        "当前 AI Provider 不可用，已切换为本地规则诊断模式。",
+        f"建议先聚焦 service_key={service_key or 'all'}，时间窗={time_range or '1h'} 做只读排查。",
+    ]
+    if command_suggestions:
+        lines.append("可先执行以下只读命令：")
+        for item in command_suggestions[:3]:
+            lines.append(f"- {item['command']}（{item['title']}）")
+    else:
+        lines.append("当前没有可用命令模板，请先检查执行插件是否已启用。")
+    lines.append(f"降级原因：{reason}")
+    return "\n".join(lines)
+
+
+@router.get("/assistant/status")
+async def get_ai_assistant_status(
+    llm_router=Depends(get_llm_router_dep),
+    provider_repository=Depends(get_ai_provider_config_repository_dep),
+    executor_service=Depends(get_executor_service_dep),
+):
+    """AI 助手工作台状态信息。"""
+    providers = provider_repository.list() if provider_repository else []
+    enabled_count = len([item for item in providers if item.enabled])
+    default_provider = provider_repository.get_default() if provider_repository else None
+    command_suggestions = _collect_command_suggestions(executor_service, limit=10)
+
+    provider_ready = bool(llm_router and getattr(llm_router, "clients", {}))
+    degraded_reason = ""
+    if not provider_ready:
+        degraded_reason = "未检测到可用 AI Provider，工作台将自动降级为只读建议模式。"
+
+    return {
+        "provider_ready": provider_ready,
+        "degraded_reason": degraded_reason,
+        "default_provider": default_provider.name if default_provider else "",
+        "providers_total": len(providers),
+        "enabled_providers": enabled_count,
+        "command_suggestions": command_suggestions,
+    }
+
+
+@router.post("/assistant/diagnose")
+async def diagnose_with_ai_assistant(
+    payload: AIAssistantDiagnoseRequest,
+    llm_router=Depends(get_llm_router_dep),
+    executor_service=Depends(get_executor_service_dep),
+):
+    """对话式只读诊断入口。"""
+    started = time.perf_counter()
+    service_key = (payload.service_key or "").strip()
+    incident_id = (payload.incident_id or "").strip()
+    command_suggestions = _collect_command_suggestions(executor_service, limit=8) if payload.include_command_packs else []
+
+    if payload.provider and llm_router and payload.provider not in llm_router.clients:
+        raise HTTPException(status_code=404, detail="Provider 不存在")
+
+    if not llm_router:
+        reason = "NO_PROVIDER"
+        return {
+            "status": "degraded",
+            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, payload.time_range),
+            "provider": "",
+            "degraded_reason": reason,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "command_suggestions": command_suggestions,
+            "context": {
+                "service_key": service_key,
+                "time_range": payload.time_range,
+                "incident_id": incident_id,
+            },
+        }
+
+    system_prompt = _build_assistant_system_prompt(
+        service_key=service_key,
+        time_range=payload.time_range,
+        incident_id=incident_id,
+        command_suggestions=command_suggestions,
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": payload.message},
+    ]
+    try:
+        content = await llm_router.chat(
+            messages,
+            provider=payload.provider,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+            _source="ai_assistant",
+            _endpoint="assistant_diagnose",
+            _task_id=payload.task_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        reason = _normalize_error_code(exc)
+        return {
+            "status": "degraded",
+            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, payload.time_range),
+            "provider": payload.provider or getattr(llm_router, "default_client_name", ""),
+            "degraded_reason": reason,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "command_suggestions": command_suggestions,
+            "context": {
+                "service_key": service_key,
+                "time_range": payload.time_range,
+                "incident_id": incident_id,
+            },
+        }
+
+    return {
+        "status": "success",
+        "answer": content,
+        "provider": payload.provider or llm_router.default_client_name,
+        "degraded_reason": "",
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+        "command_suggestions": command_suggestions,
+        "context": {
+            "service_key": service_key,
+            "time_range": payload.time_range,
+            "incident_id": incident_id,
+        },
+    }
 
 
 @router.post("/chat")
