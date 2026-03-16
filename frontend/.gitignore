@@ -27,6 +27,14 @@ dist-ssr
 # Build
 build
 .vite
+playwright-report
+test-results
+playwright.config.js
+playwright.config.d.ts
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
 
 # Environment
 .env
