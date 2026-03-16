@@ -1032,45 +1032,6 @@ export const capabilitiesApi = {
   dispatch: (name: string, params: Record<string, unknown>) => apiClient.post(`/capabilities/${encodePathSegment(name)}/dispatch`, { params }),
 }
 
-export const alertsApi = {
-  query: (status?: string, severity?: string, limit?: number) => apiClient.get('/alerts', { params: { status, severity, limit } }),
-  acknowledge: (alertId: string, acknowledgedBy?: string) =>
-    apiClient.post('/alerts/acknowledge', null, {
-      params: { alert_id: alertId, acknowledged_by: acknowledgedBy || 'user' },
-    }),
-  resolve: (alertId: string, resolvedBy?: string) =>
-    apiClient.post('/alerts/resolve', null, {
-      params: { alert_id: alertId, resolved_by: resolvedBy || 'user' },
-    }),
-  createRule: (ruleData: Record<string, unknown>) => apiClient.post('/alerts/rules', ruleData),
-  listRules: () => apiClient.get('/alerts/rules'),
-  deleteRule: (ruleId: string) => apiClient.delete(`/alerts/rules/${encodePathSegment(ruleId)}`),
-}
-
-export const remediationApi = {
-  listPlans: () => apiClient.get('/remediation/plans'),
-  getPlan: (planId: string) => apiClient.get(`/remediation/plans/${encodePathSegment(planId)}`),
-  execute: (planId: string, stepIndices: number[], dryRun?: boolean, containerName?: string) =>
-    apiClient.post('/remediation/execute', null, {
-      params: {
-        plan_id: planId,
-        step_indices: stepIndices,
-        dry_run: dryRun ?? true,
-        container_name: containerName,
-      },
-    }),
-}
-
-export const containersApi = {
-  list: () => apiClient.get('/containers'),
-  get: (name: string) => apiClient.get(`/containers/${encodePathSegment(name)}`),
-  getLogs: (name: string, lines?: number) => apiClient.get(`/containers/${encodePathSegment(name)}/logs`, { params: { lines: lines ?? 50 } }),
-}
-
-export const hostApi = {
-  getMetrics: () => apiClient.get('/host/metrics'),
-}
-
 export const dashboardApi = {
   getOverview: (params?: { time_range?: string; service_key?: string }) => apiClient.get('/dashboard/overview', { params }),
   createDailyReport: (payload: { date: string; scope: string }) => apiClient.post('/reports/daily', payload),

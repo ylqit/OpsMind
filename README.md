@@ -83,12 +83,6 @@ opsMind 当前围绕以下主链路建设：
 - `/api/executors/*`
 - `/api/ai/*`
 
-### LLM 兼容路由
-
-- `/api/llm/*`
-
-当前保留为兼容入口，底层与 `/api/ai/*` 共用同一套 Provider 配置、Router 刷新和调用日志。
-
 ### 调试路由
 
 - `api/legacy_routes.py`
@@ -193,7 +187,6 @@ curl http://localhost:8000/api/tasks
 
 - 主导航页面优先使用 `api/routes/` 下的聚合路由
 - 新的 AI 能力优先落在 `/api/ai/*`
-- `/api/llm/*` 只做兼容，不再作为主入口扩展
 - 执行插件默认保持只读优先
 - YAML 草稿、diff 和大结果通过任务与 artifact 交付
 

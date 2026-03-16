@@ -69,10 +69,20 @@ build/
 .coverage
 htmlcov/
 .tox/
+pytest-cache-files-*/
+.test_tmp/
+%SystemDrive%/
 test_api.py
 *.test.py
 tests/
 api_test.html
+tests/__pycache__/
+__pycache__/
+
+# 前端构建临时文件
+frontend/tsconfig.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # 文档
 __mocks__/
