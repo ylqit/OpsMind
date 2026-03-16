@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.llm.structured_output import run_guarded_scenario_chat
-from engine.runtime.models import ArtifactRef, RecommendationFeedback, TaskStatus, TaskType
+from engine.runtime.models import ArtifactRef, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
 
 from .deps import (
     get_incident_service,
@@ -97,6 +97,49 @@ def _artifact_filename(artifact: dict[str, Any]) -> str:
     return Path(raw_path).name or raw_path
 
 
+def _normalize_evidence_confidence(priority: int, signal_strength: str) -> float:
+    if signal_strength == "high":
+        return 0.9 if priority >= 85 else 0.82
+    if signal_strength == "medium":
+        return 0.68 if priority >= 70 else 0.58
+    return 0.4
+
+
+def _build_evidence_ref(payload: dict[str, Any]) -> dict[str, Any]:
+    """统一建议详情里的证据结构，兼容现有页面字段并补齐公共 EvidenceRef。"""
+
+    locator_payload = dict(payload.get("locator") or payload.get("source_ref") or {})
+    artifact_ref = payload.get("artifact_ref") if isinstance(payload.get("artifact_ref"), dict) else None
+    artifact_id = str(payload.get("artifact_id") or locator_payload.get("artifact_id") or "").strip()
+    if artifact_ref:
+        if not artifact_id:
+            artifact_id = str(artifact_ref.get("artifact_id") or "").strip()
+        if artifact_ref.get("task_id") and not locator_payload.get("task_id"):
+            locator_payload["task_id"] = artifact_ref.get("task_id")
+        if artifact_ref.get("artifact_id") and not locator_payload.get("artifact_id"):
+            locator_payload["artifact_id"] = artifact_ref.get("artifact_id")
+    jump = payload.get("jump") if isinstance(payload.get("jump"), dict) else {}
+    if jump.get("kind") and not locator_payload.get("jump_kind"):
+        locator_payload["jump_kind"] = str(jump.get("kind"))
+
+    priority = int(payload.get("priority") or 50)
+    signal_strength = str(payload.get("signal_strength") or "medium")
+    snippet = str(payload.get("snippet") or payload.get("quote") or payload.get("summary") or "").strip()
+    evidence = EvidenceRef.model_validate(
+        {
+            **payload,
+            "kind": str(payload.get("kind") or payload.get("source_type") or "other"),
+            "source": str(payload.get("source") or payload.get("source_type") or "other"),
+            "locator": EvidenceLocator(**locator_payload),
+            "artifact_id": artifact_id or None,
+            "snippet": snippet[:240],
+            "confidence": payload.get("confidence") or _normalize_evidence_confidence(priority, signal_strength),
+            "source_ref": locator_payload,
+        }
+    )
+    return evidence.model_dump(mode="python")
+
+
 def _build_incident_metric_evidence(incident) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     if not incident:
@@ -115,18 +158,28 @@ def _build_incident_metric_evidence(incident) -> list[dict[str, Any]]:
             value_text = f"{value}{unit}" if unit else str(value)
 
         refs.append(
-            {
-                "evidence_id": f"metric_{incident.incident_id}_{index}",
-                "source_type": "metric_snapshot",
-                "title": title,
-                "summary": summary or "指标快照证据",
-                "quote": value_text,
-                "metric": metric,
-                "priority": int(item.get("priority") or 60),
-                "signal_strength": str(item.get("signal_strength") or "medium"),
-                "artifact_ref": None,
-                "jump": {"kind": "none"},
-            }
+            _build_evidence_ref(
+                {
+                    "evidence_id": f"metric_{incident.incident_id}_{index}",
+                    "kind": "metric",
+                    "source": "incident",
+                    "source_type": "metric_snapshot",
+                    "title": title,
+                    "summary": summary or "指标快照证据",
+                    "quote": value_text,
+                    "metric": metric,
+                    "priority": int(item.get("priority") or 60),
+                    "signal_strength": str(item.get("signal_strength") or "medium"),
+                    "artifact_ref": None,
+                    "jump": {"kind": "none"},
+                    "locator": {
+                        "service_key": str(getattr(incident, "service_key", "") or ""),
+                        "timestamp": str(item.get("source_ref", {}).get("timestamp") or item.get("timestamp") or ""),
+                        "path": str(item.get("source_ref", {}).get("path") or ""),
+                        "layer": str(item.get("layer") or "other"),
+                    },
+                }
+            )
         )
     return refs
 
@@ -185,22 +238,32 @@ def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     filename = _artifact_filename(artifact)
 
     refs: list[dict[str, Any]] = [
-        {
-            "evidence_id": f"artifact_{artifact_id or filename}",
-            "source_type": "artifact",
-            "title": filename,
-            "summary": preview or f"任务产物（{kind or 'artifact'}）",
-            "quote": preview[:200],
-            "metric": "",
-            "priority": 78,
-            "signal_strength": "high" if kind in {"manifest", "diff", "json"} else "medium",
-            "artifact_ref": artifact,
-            "jump": {
+        _build_evidence_ref(
+            {
+                "evidence_id": f"artifact_{artifact_id or filename}",
                 "kind": "artifact",
-                "task_id": task_id,
-                "artifact_id": artifact_id,
-            },
-        }
+                "source": "artifact",
+                "source_type": "artifact",
+                "title": filename,
+                "summary": preview or f"任务产物（{kind or 'artifact'}）",
+                "quote": preview[:200],
+                "metric": "",
+                "priority": 78,
+                "signal_strength": "high" if kind in {"manifest", "diff", "json"} else "medium",
+                "artifact_ref": artifact,
+                "jump": {
+                    "kind": "artifact",
+                    "task_id": task_id,
+                    "artifact_id": artifact_id,
+                },
+                "locator": {
+                    "task_id": task_id,
+                    "artifact_id": artifact_id,
+                    "path": raw_path,
+                    "layer": "artifact",
+                },
+            }
+        )
     ]
 
     if not raw_path:
@@ -215,42 +278,62 @@ def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     if excerpt:
         if kind in {"log_snippet", "text"} or artifact_path.suffix.lower() == ".log" or "access" in filename.lower():
             refs.append(
-                {
-                    "evidence_id": f"log_{artifact_id or filename}",
-                    "source_type": "log_snippet",
-                    "title": f"{filename} 日志片段",
-                    "summary": "来自任务产物的现场日志样本",
-                    "quote": excerpt,
-                    "metric": "",
-                    "priority": 84,
-                    "signal_strength": "high",
-                    "artifact_ref": artifact,
-                    "jump": {
-                        "kind": "artifact",
-                        "task_id": task_id,
-                        "artifact_id": artifact_id,
-                    },
-                }
+                _build_evidence_ref(
+                    {
+                        "evidence_id": f"log_{artifact_id or filename}",
+                        "kind": "log",
+                        "source": "artifact",
+                        "source_type": "log_snippet",
+                        "title": f"{filename} 日志片段",
+                        "summary": "来自任务产物的现场日志样本",
+                        "quote": excerpt,
+                        "metric": "",
+                        "priority": 84,
+                        "signal_strength": "high",
+                        "artifact_ref": artifact,
+                        "jump": {
+                            "kind": "artifact",
+                            "task_id": task_id,
+                            "artifact_id": artifact_id,
+                        },
+                        "locator": {
+                            "task_id": task_id,
+                            "artifact_id": artifact_id,
+                            "path": raw_path,
+                            "layer": "artifact",
+                        },
+                    }
+                )
             )
 
         for metric, value in _extract_metric_quotes_from_text(excerpt):
             refs.append(
-                {
-                    "evidence_id": f"metric_{artifact_id or filename}_{metric}",
-                    "source_type": "metric_snapshot",
-                    "title": f"{filename} 指标快照",
-                    "summary": f"从产物中提取到 {metric}={value}",
-                    "quote": f"{metric}={value}",
-                    "metric": metric,
-                    "priority": 82,
-                    "signal_strength": "medium",
-                    "artifact_ref": artifact,
-                    "jump": {
-                        "kind": "artifact",
-                        "task_id": task_id,
-                        "artifact_id": artifact_id,
-                    },
-                }
+                _build_evidence_ref(
+                    {
+                        "evidence_id": f"metric_{artifact_id or filename}_{metric}",
+                        "kind": "metric",
+                        "source": "artifact",
+                        "source_type": "metric_snapshot",
+                        "title": f"{filename} 指标快照",
+                        "summary": f"从产物中提取到 {metric}={value}",
+                        "quote": f"{metric}={value}",
+                        "metric": metric,
+                        "priority": 82,
+                        "signal_strength": "medium",
+                        "artifact_ref": artifact,
+                        "jump": {
+                            "kind": "artifact",
+                            "task_id": task_id,
+                            "artifact_id": artifact_id,
+                        },
+                        "locator": {
+                            "task_id": task_id,
+                            "artifact_id": artifact_id,
+                            "path": raw_path,
+                            "layer": "artifact",
+                        },
+                    }
+                )
             )
     return refs
 
@@ -261,18 +344,31 @@ def _build_log_sample_evidence(log_samples: list[dict[str, Any]]) -> list[dict[s
         status = int(item.get("status") or 0)
         latency_ms = float(item.get("latency_ms") or 0.0)
         refs.append(
-            {
-                "evidence_id": f"log_sample_{index}",
-                "source_type": "log_snippet",
-                "title": f"{item.get('path') or '/'} 访问日志样本",
-                "summary": f"状态码 {status}，耗时 {round(latency_ms, 2)} ms，来源 {item.get('client_ip') or '-'}",
-                "quote": str(item.get("user_agent") or "").strip(),
-                "metric": "status" if status >= 500 else "latency_ms",
-                "priority": 90 if status >= 500 else 76,
-                "signal_strength": "high" if status >= 500 else "medium",
-                "artifact_ref": None,
-                "jump": {"kind": "none"},
-            }
+            _build_evidence_ref(
+                {
+                    "evidence_id": f"log_sample_{index}",
+                    "kind": "log",
+                    "source": "traffic",
+                    "source_type": "log_snippet",
+                    "title": f"{item.get('path') or '/'} 访问日志样本",
+                    "summary": f"状态码 {status}，耗时 {round(latency_ms, 2)} ms，来源 {item.get('client_ip') or '-'}",
+                    "quote": str(item.get("user_agent") or "").strip(),
+                    "metric": "status" if status >= 500 else "latency_ms",
+                    "priority": 90 if status >= 500 else 76,
+                    "signal_strength": "high" if status >= 500 else "medium",
+                    "artifact_ref": None,
+                    "jump": {"kind": "none"},
+                    "locator": {
+                        "service_key": str(item.get("service_key") or ""),
+                        "timestamp": str(item.get("timestamp") or ""),
+                        "path": str(item.get("path") or ""),
+                        "status": status,
+                        "client_ip": str(item.get("client_ip") or ""),
+                        "geo_label": str(item.get("geo_label") or ""),
+                        "layer": "traffic",
+                    },
+                }
+            )
         )
     return refs
 
@@ -309,18 +405,26 @@ def _build_evidence_summary(refs: list[dict[str, Any]]) -> dict[str, int]:
 def _build_insufficient_evidence_ref(recommendation, incident) -> dict[str, Any]:
     incident_summary = str(getattr(incident, "summary", "") or "").strip()
     recommendation_summary = str(getattr(recommendation, "recommendation", "") or "").strip()
-    return {
-        "evidence_id": f"incident_context_{recommendation.recommendation_id}",
-        "source_type": "incident_evidence",
-        "title": "证据不足说明",
-        "summary": incident_summary or "当前建议缺少可追溯的现场证据，仅保留 incident 上下文作为提示。",
-        "quote": recommendation_summary or "建议暂不具备执行条件",
-        "metric": "",
-        "priority": 95,
-        "signal_strength": "low",
-        "artifact_ref": None,
-        "jump": {"kind": "none"},
-    }
+    return _build_evidence_ref(
+        {
+            "evidence_id": f"incident_context_{recommendation.recommendation_id}",
+            "kind": "analysis",
+            "source": "incident",
+            "source_type": "incident_evidence",
+            "title": "证据不足说明",
+            "summary": incident_summary or "当前建议缺少可追溯的现场证据，仅保留 incident 上下文作为提示。",
+            "quote": recommendation_summary or "建议暂不具备执行条件",
+            "metric": "",
+            "priority": 95,
+            "signal_strength": "low",
+            "artifact_ref": None,
+            "jump": {"kind": "none"},
+            "locator": {
+                "service_key": str(getattr(incident, "service_key", "") or ""),
+                "layer": "diagnosis",
+            },
+        }
+    )
 
 
 def _build_recommendation_evidence_payload(recommendation, incident, log_samples: list[dict[str, Any]] | None = None) -> dict[str, Any]:

@@ -54,6 +54,66 @@ export interface TimeSeriesPoint {
   value: number
 }
 
+export interface EvidenceTimeRange {
+  start?: string | null
+  end?: string | null
+}
+
+export interface EvidenceLocator {
+  service_key?: string
+  asset_ids?: string[]
+  task_id?: string
+  trace_id?: string
+  alert_id?: string
+  artifact_id?: string
+  execution_id?: string
+  timestamp?: string
+  path?: string
+  status?: string | number
+  source?: string
+  namespace?: string
+  client_ip?: string
+  geo_label?: string
+  layer?: string
+  jump_kind?: string
+  [key: string]: unknown
+}
+
+export interface EvidenceRef {
+  evidence_id: string
+  kind: string
+  source: string
+  title: string
+  summary: string
+  time_range?: EvidenceTimeRange | null
+  locator?: EvidenceLocator
+  artifact_id?: string | null
+  snippet?: string
+  confidence?: number
+  layer: string
+  type: string
+  source_type: string
+  metric: string
+  value?: unknown
+  unit?: string
+  priority: number
+  signal_strength: 'high' | 'medium' | 'low'
+  source_ref: EvidenceLocator
+  tags: string[]
+  service_key?: string
+  next_step?: string
+  reasoning_tags?: string[]
+  alignment?: Record<string, unknown>
+  quote?: string
+  artifact_ref?: TaskArtifact | null
+  jump?: {
+    kind: 'artifact' | 'none'
+    task_id?: string
+    artifact_id?: string
+  }
+  [key: string]: unknown
+}
+
 export interface IncidentRecord {
   incident_id: string
   title: string
@@ -72,44 +132,7 @@ export interface IncidentRecord {
   updated_at: string
 }
 
-export interface IncidentEvidenceRef {
-  evidence_id: string
-  layer: string
-  type: string
-  source_type: string
-  title: string
-  summary: string
-  metric: string
-  value?: unknown
-  unit?: string
-  priority: number
-  signal_strength: 'high' | 'medium' | 'low'
-  source_ref: {
-    service_key?: string
-    asset_ids?: string[]
-    task_id?: string
-    trace_id?: string
-    alert_id?: string
-    timestamp?: string
-    path?: string
-    status?: string | number
-    source?: string
-    namespace?: string
-    client_ip?: string
-    geo_label?: string
-    layer?: string
-    [key: string]: unknown
-  }
-  tags: string[]
-  next_step?: string
-  reasoning_tags?: string[]
-  alignment?: Record<string, unknown>
-  service_key?: string
-  current_stage?: string
-  progress?: number
-  severity?: string
-  [key: string]: unknown
-}
+export type IncidentEvidenceRef = EvidenceRef
 
 export interface IncidentEvidenceSummary {
   total: number
@@ -146,22 +169,7 @@ export interface RecommendationRecord {
   updated_at: string
 }
 
-export interface RecommendationEvidenceRef {
-  evidence_id: string
-  source_type: 'artifact' | 'log_snippet' | 'metric_snapshot' | 'incident_evidence'
-  title: string
-  summary: string
-  quote: string
-  metric?: string
-  priority?: number
-  signal_strength?: string
-  artifact_ref?: TaskArtifact | null
-  jump?: {
-    kind: 'artifact' | 'none'
-    task_id?: string
-    artifact_id?: string
-  }
-}
+export type RecommendationEvidenceRef = EvidenceRef
 
 export type RecommendationArtifactViewKey = 'baseline' | 'recommended' | 'diff'
 

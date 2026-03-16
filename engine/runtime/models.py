@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .time_utils import utc_now
 
@@ -82,6 +82,72 @@ class ArtifactRef(BaseModel):
     preview: str = ""
     size_bytes: int = 0
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class EvidenceTimeRange(BaseModel):
+    """统一证据时间窗，兼容日志片段、指标快照和任务现场。"""
+
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+class EvidenceLocator(BaseModel):
+    """统一证据定位信息，前端可据此跳转回任务、日志或产物。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    service_key: Optional[str] = None
+    asset_ids: List[str] = Field(default_factory=list)
+    task_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    alert_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    execution_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    path: Optional[str] = None
+    status: Optional[str | int] = None
+    source: Optional[str] = None
+    namespace: Optional[str] = None
+    client_ip: Optional[str] = None
+    geo_label: Optional[str] = None
+    layer: Optional[str] = None
+    jump_kind: Optional[str] = None
+
+
+class EvidenceRef(BaseModel):
+    """统一证据对象。
+
+    这里同时保留现有页面仍在消费的兼容字段，避免证据模型升级时打断前端主链路。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    evidence_id: str
+    kind: str = "other"
+    source: str = "other"
+    title: str
+    summary: str = ""
+    time_range: Optional[EvidenceTimeRange] = None
+    locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
+    artifact_id: Optional[str] = None
+    snippet: str = ""
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # 兼容当前 IncidentCenter / RecommendationCenter 使用中的字段。
+    layer: str = "other"
+    type: str = "other"
+    source_type: str = "other"
+    metric: str = ""
+    value: Any = None
+    unit: str = ""
+    priority: int = 50
+    signal_strength: Literal["high", "medium", "low"] = "medium"
+    source_ref: Dict[str, Any] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
+    service_key: Optional[str] = None
+    next_step: Optional[str] = None
+    reasoning_tags: List[str] = Field(default_factory=list)
+    alignment: Optional[Dict[str, Any]] = None
 
 
 class Observation(BaseModel):

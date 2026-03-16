@@ -7,6 +7,7 @@ import hashlib
 import json
 from typing import Any, Dict, Iterable, List
 
+from engine.runtime.models import EvidenceLocator, EvidenceRef, EvidenceTimeRange
 from engine.runtime.time_utils import parse_utc_datetime
 
 
@@ -69,7 +70,7 @@ def normalize_incident_evidence(
 
     if source_ref.get("service_key") and not normalized.get("service_key"):
         normalized["service_key"] = source_ref["service_key"]
-    return normalized
+    return _to_evidence_ref_payload(normalized)
 
 
 def sort_incident_evidence(evidence_refs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -362,6 +363,32 @@ def _normalize_source_ref(
     return source_ref
 
 
+def _to_evidence_ref_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    """把证据字典统一收口到 EvidenceRef 结构，同时保留旧字段兼容前端。"""
+
+    source_ref = dict(item.get("source_ref") or {})
+    time_range = _normalize_time_range(item, source_ref)
+    signal_strength = _normalize_signal_strength(item.get("signal_strength"), _normalize_priority(item.get("priority")))
+    locator_payload = _normalize_locator(item, source_ref)
+    snippet = _normalize_snippet(item)
+    evidence = EvidenceRef.model_validate(
+        {
+            **item,
+            "kind": _normalize_kind(item),
+            "source": _normalize_source(item, source_ref),
+            "time_range": EvidenceTimeRange(**time_range) if time_range else None,
+            "locator": EvidenceLocator(**locator_payload),
+            "artifact_id": _normalize_artifact_id(item, source_ref),
+            "snippet": snippet,
+            "confidence": _normalize_confidence(item, signal_strength),
+            "signal_strength": signal_strength,
+            # 兼容层仍保留 source_ref，避免当前前端跳转逻辑回归。
+            "source_ref": locator_payload,
+        }
+    )
+    return evidence.model_dump(mode="python")
+
+
 def _make_evidence_id(layer: str, evidence_type: str, title: str, summary: str, source_ref: Dict[str, Any]) -> str:
     basis = json.dumps(
         {
@@ -375,6 +402,79 @@ def _make_evidence_id(layer: str, evidence_type: str, title: str, summary: str, 
         sort_keys=True,
     )
     return f"evidence_{hashlib.sha1(basis.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _normalize_kind(item: Dict[str, Any]) -> str:
+    evidence_type = str(item.get("source_type") or item.get("type") or "").strip().lower()
+    if "artifact" in evidence_type:
+        return "artifact"
+    if "log" in evidence_type:
+        return "log"
+    if "alert" in evidence_type:
+        return "alert"
+    if "task" in evidence_type:
+        return "task"
+    if evidence_type in {"hotspot", "resource_summary", "traffic_summary", "metric_snapshot"}:
+        return "metric"
+    if evidence_type in {"diagnosis", "service_key_alignment", "incident_evidence"}:
+        return "analysis"
+    return "other"
+
+
+def _normalize_source(item: Dict[str, Any], source_ref: Dict[str, Any]) -> str:
+    source = str(source_ref.get("source") or item.get("layer") or item.get("source_type") or item.get("type") or "other").strip().lower()
+    return source or "other"
+
+
+def _normalize_time_range(item: Dict[str, Any], source_ref: Dict[str, Any]) -> Dict[str, str] | None:
+    start = str(item.get("time_window_start") or item.get("start_time") or source_ref.get("start") or "").strip()
+    end = str(item.get("time_window_end") or item.get("end_time") or source_ref.get("end") or "").strip()
+    timestamp = str(source_ref.get("timestamp") or item.get("timestamp") or "").strip()
+    if not start and timestamp:
+        start = timestamp
+    if not end and timestamp:
+        end = timestamp
+    if not start and not end:
+        return None
+    return {"start": start or None, "end": end or None}
+
+
+def _normalize_locator(item: Dict[str, Any], source_ref: Dict[str, Any]) -> Dict[str, Any]:
+    locator = dict(source_ref)
+    if item.get("artifact_id") and not locator.get("artifact_id"):
+        locator["artifact_id"] = str(item.get("artifact_id"))
+    if item.get("execution_id") and not locator.get("execution_id"):
+        locator["execution_id"] = str(item.get("execution_id"))
+    return locator
+
+
+def _normalize_artifact_id(item: Dict[str, Any], source_ref: Dict[str, Any]) -> str | None:
+    artifact_id = str(item.get("artifact_id") or source_ref.get("artifact_id") or "").strip()
+    return artifact_id or None
+
+
+def _normalize_snippet(item: Dict[str, Any]) -> str:
+    snippet = str(item.get("snippet") or item.get("quote") or "").strip()
+    if snippet:
+        return snippet[:240]
+    summary = str(item.get("summary") or "").strip()
+    return summary[:240]
+
+
+def _normalize_confidence(item: Dict[str, Any], signal_strength: str) -> float:
+    raw = item.get("confidence")
+    if raw is not None:
+        try:
+            value = float(raw)
+            return max(0.0, min(1.0, value))
+        except (TypeError, ValueError):
+            pass
+    priority = _normalize_priority(item.get("priority"))
+    if signal_strength == "high":
+        return 0.9 if priority >= 90 else 0.82
+    if signal_strength == "medium":
+        return 0.66 if priority >= 70 else 0.58
+    return 0.4
 
 
 def _coerce_int(value: Any) -> int:
