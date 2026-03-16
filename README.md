@@ -131,6 +131,24 @@ opsMind 当前围绕以下主链路建设：
 - 可选：Docker
 - 可选：Prometheus
 
+### Docker Compose 启动
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+默认地址：
+
+- 前端：`http://localhost:3000`
+- 后端：`http://localhost:8000`
+
+说明：
+
+- SQLite 文件位于容器内 `/app/data/opsmind.db`，由 compose volume 持久化。
+- 首次启动会自动执行 `scripts/seed_demo_data.py`，写入演示日志、incident、recommendation、task 和 artifact。
+- 如需每次启动重置演示数据，可在 `.env` 中将 `SEED_RESET=true`。
+
 ### 后端启动
 
 ```bash

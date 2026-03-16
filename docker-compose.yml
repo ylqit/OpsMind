@@ -1,0 +1,43 @@
+name: opsmind
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: opsmind-backend
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      SQLITE_PATH: /app/data/opsmind.db
+      # Compose 默认走日志模式，避免未挂载 Docker Socket 时启动失败。
+      DATA_SOURCES: ${DATA_SOURCES:-logfile}
+      ACCESS_LOG_PATHS: ${ACCESS_LOG_PATHS:-/app/data/raw_logs/access.seed.log}
+      ENABLE_SEED: ${ENABLE_SEED:-true}
+      SEED_RESET: ${SEED_RESET:-false}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - opsmind_data:/app/data
+      - opsmind_logs:/app/logs
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: opsmind-frontend
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  opsmind_data:
+  opsmind_logs:
+
