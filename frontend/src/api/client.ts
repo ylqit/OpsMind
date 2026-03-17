@@ -167,6 +167,33 @@ export interface IncidentEvidenceSummary {
   summary_lines: string[]
 }
 
+export interface IncidentBaselineHighlight {
+  highlight_id: string
+  layer: string
+  metric: string
+  title: string
+  summary: string
+  current_value?: number | string | null
+  baseline_value?: number | string | null
+  delta_value?: number | string | null
+  delta_percent?: number | null
+  unit?: string
+  severity: 'high' | 'medium' | 'low' | string
+  direction: 'up' | 'down' | 'flat' | string
+  source: string
+  next_step?: string
+}
+
+export interface IncidentBaselineSummary {
+  status: 'ready' | 'partial' | 'unavailable' | string
+  headline: string
+  message: string
+  next_step?: string
+  source_modes: string[]
+  layers: Record<string, number>
+  highlights: IncidentBaselineHighlight[]
+}
+
 export interface TaskArtifact {
   artifact_id: string
   task_id: string
@@ -600,6 +627,7 @@ export interface IncidentDetailResponse {
   recommendations: RecommendationRecord[]
   log_samples: LogSampleRecord[]
   evidence_summary: IncidentEvidenceSummary
+  baseline_summary: IncidentBaselineSummary
   claims: ClaimRecord[]
   diagnosis_report: DiagnosisReport
   assistant_writebacks?: AIWritebackRecord[]

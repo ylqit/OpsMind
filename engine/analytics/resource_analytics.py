@@ -73,6 +73,7 @@ class ResourceAnalyticsEngine:
         if seed_snapshot:
             risk_items = self._merge_risk_items(risk_items, seed_snapshot.get("risk_items", []))
             risk_summary = self._build_risk_summary(risk_items)
+        baseline_summary = self._build_baseline_summary(host_metrics, docker_summary, risk_items)
 
         source_health = self._build_source_health(host_result, docker_summary, prometheus_summary)
         data_health = self._build_resource_data_health(source_health)
@@ -100,6 +101,7 @@ class ResourceAnalyticsEngine:
             "hotspot_summary": hotspot_summary,
             "risk_summary": risk_summary,
             "risk_items": risk_items,
+            "baseline_summary": baseline_summary,
             "source_health": source_health,
             "data_status": data_health["status"],
             "data_message": data_health["message"],
@@ -1122,6 +1124,138 @@ class ResourceAnalyticsEngine:
         return {
             "summary": summary,
             "items": items[:30],
+        }
+
+    def _build_baseline_summary(
+        self,
+        host_metrics: Dict[str, Any],
+        docker_summary: Dict[str, Any],
+        risk_items: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """资源侧目前没有稳定历史序列时，先用安全阈值做参考基线。"""
+
+        highlights: List[Dict[str, Any]] = []
+        cpu_usage = float(host_metrics.get("cpu", {}).get("usage_percent", 0) or 0)
+        memory_usage = float(host_metrics.get("memory", {}).get("usage_percent", 0) or 0)
+        restart_total = sum(int(item.get("restarts", 0) or 0) for item in docker_summary.get("items", []) if isinstance(item, dict))
+        oom_total = sum(1 for item in docker_summary.get("items", []) if isinstance(item, dict) and item.get("oom_killed"))
+        critical_risks = sum(1 for item in risk_items if str(item.get("level") or "") == "critical")
+
+        if cpu_usage:
+            cpu_delta = cpu_usage - self.HOST_CPU_HOTSPOT_THRESHOLD
+            if cpu_delta >= 5:
+                highlights.append(
+                    {
+                        "highlight_id": "resource_host_cpu",
+                        "layer": "resource",
+                        "metric": "host_cpu",
+                        "title": f"主机 CPU 高于参考基线 {cpu_delta:.1f} 个百分点",
+                        "summary": (
+                            f"当前主机 CPU 使用率约 {cpu_usage:.1f}%，"
+                            f"已经高于参考基线 {self.HOST_CPU_HOTSPOT_THRESHOLD:.1f}%。"
+                        ),
+                        "current_value": round(cpu_usage, 2),
+                        "baseline_value": round(self.HOST_CPU_HOTSPOT_THRESHOLD, 2),
+                        "delta_value": round(cpu_delta, 2),
+                        "delta_percent": round(cpu_delta / self.HOST_CPU_HOTSPOT_THRESHOLD * 100.0, 2),
+                        "unit": "%",
+                        "severity": "high" if cpu_delta >= 15 else "medium",
+                        "direction": "up",
+                        "source": "safety_threshold",
+                        "next_step": "优先核对热点进程和高流量服务，确认是单点资源瓶颈还是整体负载抬升。",
+                    }
+                )
+
+        if memory_usage:
+            memory_delta = memory_usage - self.HOST_MEMORY_HOTSPOT_THRESHOLD
+            if memory_delta >= 5:
+                highlights.append(
+                    {
+                        "highlight_id": "resource_host_memory",
+                        "layer": "resource",
+                        "metric": "host_memory",
+                        "title": f"主机内存高于参考基线 {memory_delta:.1f} 个百分点",
+                        "summary": (
+                            f"当前主机内存使用率约 {memory_usage:.1f}%，"
+                            f"已经高于参考基线 {self.HOST_MEMORY_HOTSPOT_THRESHOLD:.1f}%。"
+                        ),
+                        "current_value": round(memory_usage, 2),
+                        "baseline_value": round(self.HOST_MEMORY_HOTSPOT_THRESHOLD, 2),
+                        "delta_value": round(memory_delta, 2),
+                        "delta_percent": round(memory_delta / self.HOST_MEMORY_HOTSPOT_THRESHOLD * 100.0, 2),
+                        "unit": "%",
+                        "severity": "high" if memory_delta >= 10 else "medium",
+                        "direction": "up",
+                        "source": "safety_threshold",
+                        "next_step": "优先检查缓存、容器 limits 和 OOM 风险，确认是否存在持续内存挤压。",
+                    }
+                )
+
+        if restart_total > 0:
+            highlights.append(
+                {
+                    "highlight_id": "resource_restarts",
+                    "layer": "resource",
+                    "metric": "restarts",
+                    "title": f"容器重启次数高于参考基线 {restart_total} 次",
+                    "summary": f"当前窗口累计观察到 {restart_total} 次容器重启，参考基线应接近 0 次。",
+                    "current_value": restart_total,
+                    "baseline_value": 0,
+                    "delta_value": restart_total,
+                    "delta_percent": None,
+                    "unit": "次",
+                    "severity": "high" if restart_total >= self.RESTART_HIGH_THRESHOLD else "medium",
+                    "direction": "up",
+                    "source": "safety_threshold",
+                    "next_step": "优先检查探针、依赖连接和重启前日志，确认是否由配置或资源上限触发。",
+                }
+            )
+
+        if oom_total > 0:
+            highlights.append(
+                {
+                    "highlight_id": "resource_oom",
+                    "layer": "resource",
+                    "metric": "oom_killed",
+                    "title": f"检测到 {oom_total} 个 OOM 风险实例",
+                    "summary": f"当前窗口检测到 {oom_total} 个容器出现 OOM 相关风险，参考基线应为 0。",
+                    "current_value": oom_total,
+                    "baseline_value": 0,
+                    "delta_value": oom_total,
+                    "delta_percent": None,
+                    "unit": "个",
+                    "severity": "high",
+                    "direction": "up",
+                    "source": "safety_threshold",
+                    "next_step": "优先检查内存 limits、应用峰值和对象堆积，必要时先止血再继续定位。",
+                }
+            )
+
+        highlights.sort(
+            key=lambda item: (
+                -self._risk_rank("critical" if str(item.get("severity") or "") == "high" else "high"),
+                -self._extract_metric_value(item.get("delta_percent") or item.get("delta_value")),
+                str(item.get("metric") or ""),
+            )
+        )
+
+        if highlights:
+            return {
+                "status": "ready",
+                "source": "safety_threshold",
+                "headline": str(highlights[0]["title"]),
+                "message": "资源侧基线当前使用安全阈值作为参考，适合快速判断 CPU、内存和重启是否偏离常态。",
+                "highlights": highlights[:4],
+                "critical_risk_count": critical_risks,
+            }
+
+        return {
+            "status": "ready",
+            "source": "safety_threshold",
+            "headline": "当前资源侧未明显偏离参考基线。",
+            "message": "CPU、内存和重启次数暂未观察到超出安全阈值的明显偏移。",
+            "highlights": [],
+            "critical_risk_count": critical_risks,
         }
 
     def _risk_item(

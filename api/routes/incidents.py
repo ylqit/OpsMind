@@ -350,6 +350,68 @@ def _build_evidence_summary(incident_payload: dict[str, Any]) -> dict[str, Any]:
     return summarize_incident_evidence([item for item in evidence_refs if isinstance(item, dict)])
 
 
+def _build_incident_baseline_summary(incident_payload: dict[str, Any]) -> dict[str, Any]:
+    evidence_refs = [item for item in incident_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    summary_item = next((item for item in evidence_refs if str(item.get("type") or "") == "baseline_summary"), None)
+    deviation_items = [item for item in evidence_refs if str(item.get("type") or "") == "baseline_deviation"]
+
+    summary_payload = summary_item.get("baseline") if isinstance(summary_item, dict) and isinstance(summary_item.get("baseline"), dict) else {}
+    highlights: list[dict[str, Any]] = []
+    layer_counts: dict[str, int] = {}
+    source_modes: list[str] = []
+
+    for item in deviation_items:
+        layer = str(item.get("layer") or "other")
+        layer_counts[layer] = layer_counts.get(layer, 0) + 1
+        baseline_payload = item.get("baseline") if isinstance(item.get("baseline"), dict) else {}
+        source_mode = str(baseline_payload.get("source") or "").strip()
+        if source_mode and source_mode not in source_modes:
+            source_modes.append(source_mode)
+        highlights.append(
+            {
+                "highlight_id": str(
+                    baseline_payload.get("highlight_id")
+                    or item.get("evidence_id")
+                    or item.get("metric")
+                    or "baseline_highlight"
+                ),
+                "layer": layer,
+                "metric": str(baseline_payload.get("metric") or item.get("metric") or "baseline"),
+                "title": str(baseline_payload.get("title") or item.get("title") or "基线偏移"),
+                "summary": str(baseline_payload.get("summary") or item.get("summary") or ""),
+                "current_value": baseline_payload.get("current_value"),
+                "baseline_value": baseline_payload.get("baseline_value"),
+                "delta_value": baseline_payload.get("delta_value"),
+                "delta_percent": baseline_payload.get("delta_percent"),
+                "unit": str(baseline_payload.get("unit") or item.get("unit") or ""),
+                "severity": str(baseline_payload.get("severity") or "medium"),
+                "direction": str(baseline_payload.get("direction") or "up"),
+                "source": source_mode or str(summary_payload.get("source_modes", [""])[0] if isinstance(summary_payload.get("source_modes"), list) and summary_payload.get("source_modes") else ""),
+                "next_step": str(baseline_payload.get("next_step") or item.get("next_step") or ""),
+            }
+        )
+
+    headline = str(summary_payload.get("headline") or "")
+    if not headline and summary_item:
+        headline = str(summary_item.get("summary") or "")
+    if not headline:
+        headline = "当前 incident 尚未形成可用的基线偏移信息。"
+
+    next_step = str(summary_payload.get("next_step") or "")
+    if not next_step and summary_item:
+        next_step = str(summary_item.get("next_step") or "")
+
+    return {
+        "status": str(summary_payload.get("status") or ("ready" if highlights else "unavailable")),
+        "headline": headline,
+        "message": str(summary_payload.get("message") or ("已根据现场证据提取基线偏移。" if highlights else "现有 incident 证据还不足以形成稳定的基线偏移判断。")),
+        "next_step": next_step,
+        "source_modes": source_modes or ([item for item in summary_payload.get("source_modes", []) if isinstance(item, str)] if isinstance(summary_payload, dict) else []),
+        "layers": layer_counts,
+        "highlights": highlights,
+    }
+
+
 def _extract_recommendation_items(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     recommendations = task_payload.get("recommendations")
     if not isinstance(recommendations, list):
@@ -614,6 +676,7 @@ async def get_incident_detail(
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
         "evidence_summary": evidence_summary,
+        "baseline_summary": _build_incident_baseline_summary(incident_payload),
         "claims": incident_claims,
         "diagnosis_report": _build_incident_diagnosis_report(
             summary=str(incident_payload.get("summary") or ""),

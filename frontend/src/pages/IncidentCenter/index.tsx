@@ -6,6 +6,7 @@ import {
   incidentsApi,
   recommendationsApi,
   type AIAssistantStatusResponse,
+  type IncidentBaselineSummary,
   type ClaimRecord,
   type DiagnosisReport,
   type IncidentEvidenceRef,
@@ -116,6 +117,16 @@ const formatEvidenceValue = (item: EvidenceItem) => {
     return `${item.value}${item.unit ? ` ${item.unit}` : ''}`
   }
   return `${String(item.value)}${item.unit ? ` ${item.unit}` : ''}`
+}
+
+const formatBaselineMetricValue = (value: unknown, unit?: string) => {
+  if (value === undefined || value === null || value === '') {
+    return '-'
+  }
+  if (typeof value === 'number') {
+    return `${value}${unit ? ` ${unit}` : ''}`
+  }
+  return `${String(value)}${unit ? ` ${unit}` : ''}`
 }
 
 const pickRecommendationArtifact = (recommendation: RecommendationRecord): TaskArtifact | null => {
@@ -335,6 +346,11 @@ export const IncidentCenter: React.FC = () => {
       layerCounts: evidenceSummary?.layers || {},
     }
   }, [selectedIncident])
+
+  const incidentBaselineSummary = useMemo<IncidentBaselineSummary | null>(
+    () => selectedIncident?.baseline_summary || null,
+    [selectedIncident],
+  )
 
   const incidentDiagnosisReport = useMemo<DiagnosisReport | null>(() => selectedIncident?.diagnosis_report || null, [selectedIncident])
   const incidentClaims = useMemo<ClaimRecord[]>(
@@ -1021,6 +1037,89 @@ export const IncidentCenter: React.FC = () => {
                     </Space>
                   </Col>
                 </Row>
+
+                {incidentBaselineSummary ? (
+                  <Card
+                    type="inner"
+                    title="基线偏移分析"
+                    style={{ marginBottom: 16 }}
+                  >
+                    <Row gutter={[16, 16]}>
+                      <Col xs={24} lg={8}>
+                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                          <Alert
+                            type={incidentBaselineSummary?.highlights?.length ? 'warning' : 'info'}
+                            showIcon
+                            message={incidentBaselineSummary?.headline || '基线偏移分析'}
+                            description={incidentBaselineSummary?.message || '当前没有可展示的基线偏移信息。'}
+                          />
+                          <Space wrap>
+                            {(incidentBaselineSummary?.source_modes || []).map((item) => (
+                              <Tag key={`baseline-source-${item}`} color="blue">
+                                {item === 'historical_trend' ? '历史趋势基线' : item === 'safety_threshold' ? '安全阈值基线' : item}
+                              </Tag>
+                            ))}
+                            {Object.entries(incidentBaselineSummary?.layers || {}).map(([layer, count]) => (
+                              <Tag key={`baseline-layer-${layer}`} color={layerMeta[layer]?.color || layerMeta.other.color}>
+                                {layerMeta[layer]?.title || layerMeta.other.title} {count}
+                              </Tag>
+                            ))}
+                          </Space>
+                          {incidentBaselineSummary?.next_step ? (
+                            <Alert
+                              type="info"
+                              showIcon
+                              message="推荐下一步"
+                              description={incidentBaselineSummary.next_step}
+                            />
+                          ) : null}
+                        </Space>
+                      </Col>
+                      <Col xs={24} lg={16}>
+                        {incidentBaselineSummary?.highlights?.length ? (
+                          <List
+                            size="small"
+                            dataSource={incidentBaselineSummary.highlights}
+                            renderItem={(item) => (
+                              <List.Item style={{ paddingInline: 0 }}>
+                                <div style={{ width: '100%' }}>
+                                  <Space wrap style={{ marginBottom: 6 }}>
+                                    <Tag color={layerMeta[item.layer]?.color || layerMeta.other.color}>
+                                      {layerMeta[item.layer]?.title || layerMeta.other.title}
+                                    </Tag>
+                                    <Tag color={item.severity === 'high' ? 'red' : item.severity === 'medium' ? 'gold' : 'default'}>
+                                      {item.severity === 'high' ? '高偏移' : item.severity === 'medium' ? '中偏移' : '低偏移'}
+                                    </Tag>
+                                    <Text strong>{item.title}</Text>
+                                    <Tag color="geekblue">当前 {formatBaselineMetricValue(item.current_value, item.unit)}</Tag>
+                                    <Tag>基线 {formatBaselineMetricValue(item.baseline_value, item.unit)}</Tag>
+                                    {typeof item.delta_percent === 'number' ? (
+                                      <Tag color={item.direction === 'up' ? 'red' : 'green'}>
+                                        {item.direction === 'up' ? '偏高' : '偏低'} {Math.abs(item.delta_percent).toFixed(1)}%
+                                      </Tag>
+                                    ) : (
+                                      <Tag color={item.direction === 'up' ? 'red' : 'green'}>
+                                        偏移 {formatBaselineMetricValue(item.delta_value, item.unit)}
+                                      </Tag>
+                                    )}
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0 }}>{item.summary}</Paragraph>
+                                  {item.next_step ? (
+                                    <Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                                      下一步：{item.next_step}
+                                    </Paragraph>
+                                  ) : null}
+                                </div>
+                              </List.Item>
+                            )}
+                          />
+                        ) : (
+                          <CardEmptyState title="当前没有明显基线偏移" description="流量和资源暂未观察到显著偏离常态的迹象。" />
+                        )}
+                      </Col>
+                    </Row>
+                  </Card>
+                ) : null}
 
                 {incidentEvidenceTimeline.length ? (
                   <Card

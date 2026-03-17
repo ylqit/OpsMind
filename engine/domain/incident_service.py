@@ -54,6 +54,14 @@ class IncidentService:
             related_asset_ids=related_asset_ids,
         )
         evidence_refs = list(correlated["evidence_refs"])
+        baseline_analysis = self._build_baseline_analysis(traffic_summary, resource_summary)
+        evidence_refs.extend(
+            self._build_baseline_evidence_refs(
+                baseline_analysis,
+                service_key=resolved_service_key,
+                related_asset_ids=related_asset_ids,
+            )
+        )
         evidence_refs.extend(self._build_log_evidence_refs(traffic_summary, resolved_service_key, related_asset_ids))
         evidence_refs.extend(self._build_alert_evidence_refs(active_alerts or [], resolved_service_key, related_asset_ids))
         if task_context:
@@ -96,6 +104,130 @@ class IncidentService:
             reasoning_tags=correlated["reasoning_tags"],
         )
         return self._normalize_incident(self.incident_repository.save(incident))
+
+    def _build_baseline_analysis(
+        self,
+        traffic_summary: Dict[str, object],
+        resource_summary: Dict[str, object],
+    ) -> Dict[str, object]:
+        traffic_baseline = traffic_summary.get("baseline_summary") if isinstance(traffic_summary.get("baseline_summary"), dict) else {}
+        resource_baseline = resource_summary.get("baseline_summary") if isinstance(resource_summary.get("baseline_summary"), dict) else {}
+
+        highlights: List[Dict[str, Any]] = []
+        source_modes: List[str] = []
+        for section in (traffic_baseline, resource_baseline):
+            if not isinstance(section, dict):
+                continue
+            source_mode = str(section.get("source") or "").strip()
+            if source_mode and source_mode not in source_modes:
+                source_modes.append(source_mode)
+            for item in section.get("highlights") or []:
+                if isinstance(item, dict):
+                    highlights.append(item)
+
+        highlights.sort(
+            key=lambda item: (
+                -self._baseline_severity_rank(str(item.get("severity") or "medium")),
+                -abs(self._coerce_float(item.get("delta_percent") or item.get("delta_value"))),
+                str(item.get("metric") or ""),
+            )
+        )
+        layer_counts: Dict[str, int] = {}
+        for item in highlights:
+            layer = str(item.get("layer") or "other")
+            layer_counts[layer] = layer_counts.get(layer, 0) + 1
+
+        if highlights:
+            top_highlight = highlights[0]
+            return {
+                "status": "ready",
+                "source_modes": source_modes,
+                "headline": str(top_highlight.get("title") or "已检测到基线偏移"),
+                "message": "已把流量历史趋势和资源安全阈值合并成同一份基线偏移视图，便于判断异常是否明显偏离常态。",
+                "layers": layer_counts,
+                "highlights": highlights[:6],
+                "next_step": str(top_highlight.get("next_step") or "继续结合证据链验证偏移原因。"),
+            }
+
+        fallback_messages = [
+            str(item.get("headline") or "").strip()
+            for item in (traffic_baseline, resource_baseline)
+            if isinstance(item, dict) and str(item.get("headline") or "").strip()
+        ]
+        return {
+            "status": "unavailable",
+            "source_modes": source_modes,
+            "headline": fallback_messages[0] if fallback_messages else "当前 incident 尚未形成可用的基线偏移信息。",
+            "message": "现有数据不足以形成稳定的偏移结论，可以继续补采流量趋势或资源信号后再判断。",
+            "layers": {},
+            "highlights": [],
+            "next_step": "继续补充趋势窗口和资源现场后再对照基线。",
+        }
+
+    def _build_baseline_evidence_refs(
+        self,
+        baseline_analysis: Dict[str, object],
+        *,
+        service_key: str,
+        related_asset_ids: List[str],
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(baseline_analysis, dict):
+            return []
+
+        evidence_refs: List[Dict[str, Any]] = []
+        highlights = [item for item in baseline_analysis.get("highlights") or [] if isinstance(item, dict)]
+        headline = str(baseline_analysis.get("headline") or "").strip()
+        next_step = str(baseline_analysis.get("next_step") or "").strip()
+        if headline:
+            evidence_refs.append(
+                normalize_incident_evidence(
+                    {
+                        "layer": "diagnosis",
+                        "type": "baseline_summary",
+                        "title": "基线偏移概览",
+                        "summary": headline,
+                        "metric": "baseline_deviation",
+                        "value": len(highlights),
+                        "unit": "项",
+                        "priority": 82 if highlights else 58,
+                        "signal_strength": "high" if highlights else "medium",
+                        "service_key": service_key,
+                        "tags": ["baseline", "deviation"],
+                        "next_step": next_step,
+                        "baseline": baseline_analysis,
+                        "reasoning_tags": ["baseline_deviation"],
+                    },
+                    default_service_key=service_key,
+                    default_asset_ids=related_asset_ids,
+                )
+            )
+
+        for item in highlights[:4]:
+            severity = str(item.get("severity") or "medium")
+            delta_percent = item.get("delta_percent")
+            delta_value = item.get("delta_value")
+            evidence_refs.append(
+                normalize_incident_evidence(
+                    {
+                        "layer": str(item.get("layer") or "diagnosis"),
+                        "type": "baseline_deviation",
+                        "title": str(item.get("title") or "基线偏移"),
+                        "summary": str(item.get("summary") or ""),
+                        "metric": str(item.get("metric") or "baseline"),
+                        "value": round(self._coerce_float(delta_percent), 2) if delta_percent is not None else delta_value,
+                        "unit": "%" if delta_percent is not None else str(item.get("unit") or ""),
+                        "priority": 92 if severity == "high" else 76,
+                        "signal_strength": "high" if severity == "high" else "medium",
+                        "service_key": service_key,
+                        "tags": ["baseline", "deviation", str(item.get("metric") or "baseline")],
+                        "next_step": str(item.get("next_step") or next_step),
+                        "baseline": item,
+                    },
+                    default_service_key=service_key,
+                    default_asset_ids=related_asset_ids,
+                )
+            )
+        return evidence_refs
 
     def _resolve_incident_service_key(
         self,
@@ -184,3 +316,16 @@ class IncidentService:
                 )
             )
         return evidence_refs
+
+    def _baseline_severity_rank(self, severity: str) -> int:
+        if severity == "high":
+            return 2
+        if severity == "medium":
+            return 1
+        return 0
+
+    def _coerce_float(self, value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
