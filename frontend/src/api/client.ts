@@ -612,12 +612,39 @@ export interface TaskArtifactListResponse {
   groups: TaskArtifactGroup[]
 }
 
+export interface TaskDiagnosisTimelineItem {
+  item_id: string
+  category: 'task' | 'incident' | 'recommendation' | 'trace' | 'executor' | 'artifact' | 'writeback' | 'approval' | 'failure' | string
+  title: string
+  summary: string
+  occurred_at: string
+  status: string
+  tags: string[]
+  links: {
+    task_id?: string
+    incident_id?: string
+    recommendation_id?: string
+    artifact_id?: string
+    execution_id?: string
+  }
+  meta: Record<string, unknown>
+}
+
+export interface TaskDiagnosisTimelineSummary {
+  total: number
+  categories: Record<string, number>
+  first_event_at: string
+  last_event_at: string
+}
+
 export interface TaskDetailResponse {
   task: TaskRecord
   trace_preview: Array<Record<string, unknown>>
   artifacts: TaskArtifact[]
   failure_diagnosis?: TaskFailureDiagnosis | null
   assistant_writebacks?: AIWritebackRecord[]
+  diagnosis_timeline: TaskDiagnosisTimelineItem[]
+  diagnosis_timeline_summary: TaskDiagnosisTimelineSummary
 }
 
 export type IncidentLogSample = LogSampleRecord

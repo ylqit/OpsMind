@@ -12,6 +12,7 @@ import {
   Space,
   Table,
   Tag,
+  Timeline,
   Typography,
   message,
 } from 'antd'
@@ -23,6 +24,7 @@ import {
   type TaskArtifactGroup,
   type TaskArtifactListResponse,
   type TaskDetailResponse,
+  type TaskDiagnosisTimelineItem,
   type TaskFailureDiagnosis,
   type TaskRecord,
 } from '@/api/client'
@@ -65,6 +67,46 @@ const formatDateTime = (value?: string | null) => {
     return value
   }
   return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const getTimelineItemColor = (item: TaskDiagnosisTimelineItem) => {
+  if (item.category === 'failure') {
+    return 'red'
+  }
+  if (item.category === 'executor') {
+    return item.status === 'success' ? 'green' : item.status === 'error' || item.status === 'timeout' ? 'red' : 'blue'
+  }
+  if (item.category === 'writeback') {
+    return 'purple'
+  }
+  if (item.category === 'incident') {
+    return item.status === 'critical' ? 'red' : 'orange'
+  }
+  if (item.category === 'recommendation') {
+    return 'cyan'
+  }
+  if (item.category === 'approval') {
+    return 'green'
+  }
+  if (item.category === 'artifact') {
+    return 'blue'
+  }
+  return 'gray'
+}
+
+const getTimelineItemLabel = (item: TaskDiagnosisTimelineItem) => {
+  const labelMap: Record<string, string> = {
+    task: '任务',
+    incident: '异常',
+    recommendation: '建议',
+    trace: 'Trace',
+    executor: '执行补证',
+    artifact: '产物',
+    writeback: 'AI 回写',
+    approval: '审批',
+    failure: '失败',
+  }
+  return labelMap[item.category] || item.category
 }
 
 const getApprovalMeta = (task: TaskRecord) => {
@@ -174,6 +216,8 @@ export const TaskCenter: React.FC = () => {
     [selectedTaskGuardrailSummary],
   )
   const selectedTaskWritebacks = useMemo(() => selectedTask?.assistant_writebacks || [], [selectedTask])
+  const selectedTaskTimeline = useMemo(() => selectedTask?.diagnosis_timeline || [], [selectedTask])
+  const selectedTaskTimelineSummary = useMemo(() => selectedTask?.diagnosis_timeline_summary || null, [selectedTask])
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
     try {
@@ -377,6 +421,27 @@ export const TaskCenter: React.FC = () => {
     link.remove()
   }
 
+  const openTimelineArtifact = async (artifactId: string) => {
+    if (!selectedTask) {
+      return
+    }
+    const artifact = selectedTask.artifacts.find((item) => item.artifact_id === artifactId)
+    if (!artifact) {
+      message.warning('未找到关联产物')
+      return
+    }
+    await previewArtifact(artifact)
+  }
+
+  const openTimelineExecution = (executionId: string) => {
+    const params = new URLSearchParams()
+    params.set('executionId', executionId)
+    if (selectedTask?.task.task_id) {
+      params.set('taskId', selectedTask.task.task_id)
+    }
+    navigate(`/executors?${params.toString()}`)
+  }
+
   const openRecommendationDraft = () => {
     if (!selectedTask) {
       return
@@ -575,19 +640,68 @@ export const TaskCenter: React.FC = () => {
                     </Space>
                   </Card>
                 ) : null}
-                <Card type="inner" title="Trace 预览" style={{ marginBottom: 16 }}>
-                  <List
-                    dataSource={selectedTask.trace_preview}
-                    locale={{ emptyText: '暂无 trace 记录' }}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <div>
-                          <Text strong>{String(item.step || '-')}</Text>
-                          <Paragraph style={{ marginBottom: 0 }}>{String((item.observation as { summary?: string } | undefined)?.summary || '-')}</Paragraph>
-                        </div>
-                      </List.Item>
-                    )}
-                  />
+                <Card type="inner" title="诊断时间轴" style={{ marginBottom: 16 }}>
+                  <Space wrap style={{ marginBottom: 12 }}>
+                    <Tag color="blue">事件 {selectedTaskTimelineSummary?.total || 0}</Tag>
+                    {Object.entries(selectedTaskTimelineSummary?.categories || {}).map(([key, count]) => (
+                      <Tag key={key}>{`${getTimelineItemLabel({ item_id: key, category: key, title: '', summary: '', occurred_at: '', status: '', tags: [], links: {}, meta: {} })} ${count}`}</Tag>
+                    ))}
+                  </Space>
+                  {selectedTaskTimeline.length ? (
+                    <Timeline
+                      items={selectedTaskTimeline.map((item) => ({
+                        color: getTimelineItemColor(item),
+                        children: (
+                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag color={getTimelineItemColor(item)}>{getTimelineItemLabel(item)}</Tag>
+                              <Text strong>{item.title}</Text>
+                              {item.status ? <Tag>{item.status}</Tag> : null}
+                              <Text type="secondary">{formatDateTime(item.occurred_at)}</Text>
+                            </Space>
+                            <Paragraph style={{ marginBottom: 0 }}>{item.summary || '-'}</Paragraph>
+                            <Space wrap>
+                              {item.tags.map((tag) => (
+                                <Tag key={`${item.item_id}-${tag}`}>{tag}</Tag>
+                              ))}
+                            </Space>
+                            <Space wrap>
+                              {item.links.incident_id ? (
+                                <Button
+                                  size="small"
+                                  type="link"
+                                  onClick={() => navigate(`/incidents?incidentId=${encodeURIComponent(item.links.incident_id as string)}`)}
+                                >
+                                  查看异常
+                                </Button>
+                              ) : null}
+                              {item.links.recommendation_id ? (
+                                <Button
+                                  size="small"
+                                  type="link"
+                                  onClick={() => navigate(`/recommendations?recommendationId=${encodeURIComponent(item.links.recommendation_id as string)}`)}
+                                >
+                                  查看建议
+                                </Button>
+                              ) : null}
+                              {item.links.artifact_id ? (
+                                <Button size="small" onClick={() => void openTimelineArtifact(item.links.artifact_id as string)}>
+                                  查看产物
+                                </Button>
+                              ) : null}
+                              {item.links.execution_id ? (
+                                <Button size="small" onClick={() => openTimelineExecution(item.links.execution_id as string)}>
+                                  打开执行记录
+                                </Button>
+                              ) : null}
+                            </Space>
+                          </Space>
+                        ),
+                      }))}
+                    />
+                  ) : (
+                    <CardEmptyState title="暂无时间轴事件" description="当前任务还没有可展示的诊断过程记录" />
+                  )}
                 </Card>
                 <AIWritebackList
                   items={selectedTaskWritebacks}
