@@ -55,21 +55,38 @@ class RecommendationService:
         requested_kinds = {item for item in allowed_kinds or []}
         kinds = [kind for kind in self._determine_kinds(incident) if not requested_kinds or kind.value in requested_kinds]
         app_name = incident.service_key.split("/")[-1].replace("_", "-")
+        evidence_gate = self._evaluate_incident_evidence(incident)
 
         for kind in kinds:
-            fallback_draft = self._build_fallback_draft(kind, incident)
+            fallback_draft = self._build_fallback_draft(kind, incident, evidence_gate=evidence_gate)
             draft, guardrail_meta = await self._build_guarded_draft(
                 incident=incident,
                 kind=kind,
                 fallback_draft=fallback_draft,
+                evidence_gate=evidence_gate,
                 llm_router=llm_router,
                 llm_provider=llm_provider,
             )
             constrained_draft, risk_rules = self._apply_risk_constraints(kind=kind, incident=incident, draft=draft)
-            guardrail_items.append({"kind": kind.value, "risk_rules": risk_rules, **guardrail_meta})
+            constrained_draft, evidence_rules = self._apply_evidence_constraints(
+                kind=kind,
+                incident=incident,
+                draft=constrained_draft,
+                evidence_gate=evidence_gate,
+            )
+            all_rules = [*risk_rules, *evidence_rules]
+            guardrail_items.append(
+                {
+                    "kind": kind.value,
+                    "risk_rules": all_rules,
+                    "evidence_status": evidence_gate["status"],
+                    "evidence_signal_count": evidence_gate["signal_count"],
+                    **guardrail_meta,
+                }
+            )
 
             artifact_refs = []
-            if kind == RecommendationKind.MANIFEST_DRAFT:
+            if kind == RecommendationKind.MANIFEST_DRAFT and "manifest_requires_evidence" not in evidence_rules:
                 artifact_refs.extend(
                     await self._build_manifest_artifacts(
                         task_id=task_id,
@@ -101,6 +118,7 @@ class RecommendationService:
         incident,
         kind: RecommendationKind,
         fallback_draft: dict[str, Any],
+        evidence_gate: dict[str, Any],
         llm_router: Any | None,
         llm_provider: str | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -134,8 +152,10 @@ class RecommendationService:
                     f"incident_summary: {incident.summary}\n"
                     f"reasoning_tags: {', '.join(incident.reasoning_tags) or '-'}\n"
                     f"recommended_actions: {', '.join(incident.recommended_actions) or '-'}\n"
+                    f"evidence_status: {evidence_gate['status']}\n"
+                    f"evidence_summary: {evidence_gate['summary']}\n"
                     f"fallback_suggestion: {fallback_draft['recommendation']}\n"
-                    "请输出可执行、可评审的建议。"
+                    "若证据不足，请输出保守建议，明确先补采样或补核验，不要直接给出强执行结论。"
                 ),
             },
         ]
@@ -614,6 +634,101 @@ class RecommendationService:
         constrained["risk_note"] = risk_note
         return constrained, rules
 
+    def _evaluate_incident_evidence(self, incident) -> dict[str, Any]:
+        """在生成建议前先判断 incident 是否具备足够的现场证据。"""
+        counts = {
+            "traffic": 0,
+            "resource": 0,
+            "alert": 0,
+            "task": 0,
+        }
+        for item in incident.evidence_refs:
+            if not isinstance(item, dict):
+                continue
+            layer = str(item.get("layer") or "").strip().lower()
+            item_kind = str(item.get("kind") or item.get("type") or "").strip().lower()
+            if layer == "traffic" or item_kind == "log":
+                counts["traffic"] += 1
+                continue
+            if layer == "resource" or item_kind == "metric":
+                counts["resource"] += 1
+                continue
+            if layer == "alert" or item_kind == "alert":
+                counts["alert"] += 1
+                continue
+            if layer == "task":
+                counts["task"] += 1
+
+        signal_count = counts["traffic"] + counts["resource"] + counts["alert"]
+        limitations: list[str] = []
+        if counts["traffic"] == 0:
+            limitations.append("缺少流量侧样本")
+        if counts["resource"] == 0:
+            limitations.append("缺少资源侧指标")
+        if signal_count == 0:
+            limitations.append("缺少可执行的现场信号")
+
+        return {
+            "counts": counts,
+            "signal_count": signal_count,
+            "status": "sufficient" if signal_count >= 2 else "insufficient",
+            "summary": (
+                f"traffic={counts['traffic']}, resource={counts['resource']}, "
+                f"alert={counts['alert']}, task={counts['task']}"
+            ),
+            "limitations": limitations,
+        }
+
+    def _apply_evidence_constraints(
+        self,
+        kind: RecommendationKind,
+        incident,
+        draft: dict[str, Any],
+        evidence_gate: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """证据不足时统一降级为保守建议，避免输出可直接执行的强结论。"""
+        counts = evidence_gate.get("counts") or {}
+        traffic_count = int(counts.get("traffic") or 0)
+        resource_count = int(counts.get("resource") or 0)
+        signal_count = int(evidence_gate.get("signal_count") or 0)
+
+        blocked_rule = ""
+        if kind == RecommendationKind.MANIFEST_DRAFT and signal_count < 2:
+            blocked_rule = "manifest_requires_evidence"
+        elif signal_count == 0:
+            blocked_rule = "evidence_required_before_action"
+        elif kind == RecommendationKind.RATE_LIMIT and traffic_count == 0:
+            blocked_rule = "rate_limit_requires_traffic_evidence"
+        elif kind in {RecommendationKind.SCALE, RecommendationKind.RESOURCE_TUNING} and resource_count == 0:
+            blocked_rule = "resource_action_requires_resource_evidence"
+
+        if not blocked_rule:
+            return draft, []
+
+        if kind == RecommendationKind.SCALE:
+            blocked_message = "当前缺少资源侧证据，暂不建议直接扩容。建议先补充 CPU、内存、重启或 OOM 指标，再评估是否需要扩容。"
+        elif kind == RecommendationKind.RATE_LIMIT:
+            blocked_message = "当前缺少流量侧证据，暂不建议直接限流。建议先补充 5xx 样本、热点路径和状态码分布，再决定是否启用限流。"
+        elif kind == RecommendationKind.RESOURCE_TUNING:
+            blocked_message = "当前缺少资源侧证据，暂不建议直接调整 requests/limits。建议先补充资源指标与重启记录，再决定是否修改配置。"
+        elif kind == RecommendationKind.MANIFEST_DRAFT:
+            blocked_message = "当前缺少足够现场证据，暂不建议直接导出执行型 YAML 草稿。建议先补充日志、指标和任务产物，再生成评审草稿。"
+        else:
+            blocked_message = "当前证据不足，建议先补充现场数据，再决定是否执行变更。"
+
+        constrained = dict(draft)
+        constrained["observation"] = self._append_sentence(
+            str(constrained.get("observation") or incident.summary or ""),
+            "当前仅具备有限证据，以下内容应视为保守提示而非直接执行建议。",
+        )
+        constrained["recommendation"] = blocked_message
+        constrained["risk_note"] = self._append_sentence(
+            str(constrained.get("risk_note") or ""),
+            "当前建议不能直接作为变更执行依据，需补采样和人工复核后再决定。",
+        )
+        constrained["confidence"] = min(float(constrained.get("confidence") or 0.5), 0.35)
+        return constrained, [blocked_rule]
+
     def _append_sentence(self, base_text: str, sentence: str) -> str:
         base = str(base_text or "").strip()
         addon = str(sentence or "").strip()
@@ -639,7 +754,14 @@ class RecommendationService:
             results.append(RecommendationKind.RESOURCE_TUNING)
         return results
 
-    def _build_fallback_draft(self, kind: RecommendationKind, incident) -> dict[str, Any]:
+    def _build_fallback_draft(self, kind: RecommendationKind, incident, evidence_gate: dict[str, Any] | None = None) -> dict[str, Any]:
+        if evidence_gate and evidence_gate.get("status") == "insufficient":
+            return {
+                "observation": self._append_sentence(incident.summary, "当前现场证据不足，需先补充日志、指标或任务产物。"),
+                "recommendation": "证据不足：建议先补采样与补核验，暂不直接执行扩容、限流或资源调优。",
+                "risk_note": "当前建议仅用于提示后续排查方向，不能直接作为生产变更依据。",
+                "confidence": min(0.35, float(incident.confidence or 0.35)),
+            }
         return {
             "observation": incident.summary,
             "recommendation": self._build_recommendation_text(kind, incident),
@@ -653,6 +775,15 @@ class RecommendationService:
         schema_error_count = len([item for item in guardrail_items if item.get("error_code") == "AI_OUTPUT_SCHEMA_INVALID"])
         risk_rule_total = sum(len(item.get("risk_rules") or []) for item in guardrail_items)
         risk_rule_covered = len([item for item in guardrail_items if item.get("risk_rules")])
+        evidence_blocked_count = len(
+            [
+                item
+                for item in guardrail_items
+                if item.get("evidence_status") == "insufficient"
+                or "manifest_requires_evidence" in (item.get("risk_rules") or [])
+                or "evidence_required_before_action" in (item.get("risk_rules") or [])
+            ]
+        )
         return {
             "total": len(guardrail_items),
             "fallback_count": fallback_count,
@@ -660,7 +791,8 @@ class RecommendationService:
             "schema_error_count": schema_error_count,
             "risk_rule_total": risk_rule_total,
             "risk_rule_covered": risk_rule_covered,
-            "has_degraded": fallback_count > 0,
+            "evidence_blocked_count": evidence_blocked_count,
+            "has_degraded": fallback_count > 0 or evidence_blocked_count > 0,
             "items": guardrail_items,
         }
 
