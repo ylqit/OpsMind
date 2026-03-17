@@ -72,7 +72,9 @@ opsMind/
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Deployment Guide](docs/deployment.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
+- [Release Guide](docs/release.md)
 - [Contributing](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security](SECURITY.md)
@@ -95,6 +97,7 @@ docker compose up -d --build
 
 - Frontend: `http://localhost:3000`
 - Backend: `http://localhost:8000`
+- See [docs/deployment.md](docs/deployment.md) for the full deployment guide
 
 ### Local Development
 
@@ -114,6 +117,8 @@ cd frontend
 npm install
 npm run dev
 ```
+
+See [docs/deployment.md](docs/deployment.md) for a fuller deployment and runtime guide.
 
 ## Configuration
 

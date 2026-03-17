@@ -73,7 +73,9 @@ opsMind/
 
 - [English README](README_EN.md)
 - [Architecture](docs/architecture.md)
+- [Deployment Guide](docs/deployment.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
+- [Release Guide](docs/release.md)
 - [Contributing](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security](SECURITY.md)
@@ -96,6 +98,7 @@ docker compose up -d --build
 
 - Frontend: `http://localhost:3000`
 - Backend: `http://localhost:8000`
+- 详细部署说明见 [docs/deployment.md](docs/deployment.md)
 
 ### Local Development
 
@@ -115,6 +118,8 @@ cd frontend
 npm install
 npm run dev
 ```
+
+更完整的部署与运行方式见 [docs/deployment.md](docs/deployment.md)。
 
 ## Configuration
 
