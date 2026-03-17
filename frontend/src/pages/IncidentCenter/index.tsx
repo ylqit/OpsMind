@@ -7,6 +7,7 @@ import {
   recommendationsApi,
   type AIAssistantStatusResponse,
   type ClaimRecord,
+  type DiagnosisReport,
   type IncidentEvidenceRef,
   type IncidentAISummaryResponse,
   type IncidentDetailResponse,
@@ -46,6 +47,13 @@ interface RecommendationTaskState {
   artifactReady: boolean
 }
 
+interface ClaimEvidenceViewItem {
+  claim: ClaimRecord
+  evidenceItems: EvidenceItem[]
+  unresolvedEvidenceIds: string[]
+  limitations: string[]
+}
+
 const layerMeta: Record<string, { title: string; color: string; order: number }> = {
   diagnosis: { title: '关联判断', color: 'purple', order: 0 },
   traffic: { title: '流量证据', color: 'blue', order: 1 },
@@ -68,7 +76,7 @@ const claimMeta: Record<string, { label: string; color: string }> = {
   risk: { label: '风险', color: 'orange' },
 }
 
-const getClaimMeta = (kind: string) => claimMeta[kind] || { label: '判断', color: 'default' }
+  const getClaimMeta = (kind: string) => claimMeta[kind] || { label: '判断', color: 'default' }
 
 const incidentEvidenceKindMeta: Record<string, { label: string; color: string }> = {
   artifact: { label: '任务产物', color: 'geekblue' },
@@ -252,6 +260,7 @@ export const IncidentCenter: React.FC = () => {
     if (!selectedIncident) {
       return null
     }
+    const diagnosisReport = selectedIncident.diagnosis_report
     const evidenceSummary = selectedIncident.evidence_summary
     const evidenceItems = (selectedIncident.incident.evidence_refs || []) as EvidenceItem[]
     const diagnosisItem = evidenceItems.find((item) => item.layer === 'diagnosis')
@@ -259,8 +268,8 @@ export const IncidentCenter: React.FC = () => {
       ? evidenceSummary.highlights
       : sortEvidenceItems(evidenceItems.filter((item) => item.layer !== 'diagnosis')).slice(0, 3)
     return {
-      conclusion: evidenceSummary?.headline || selectedIncident.incident.summary,
-      nextStep: String(evidenceSummary?.next_step || diagnosisItem?.next_step || selectedIncident.incident.recommended_actions[0] || '继续观察关键指标变化'),
+      conclusion: diagnosisReport?.summary || evidenceSummary?.headline || selectedIncident.incident.summary,
+      nextStep: String(diagnosisReport?.next_actions?.[0] || evidenceSummary?.next_step || diagnosisItem?.next_step || selectedIncident.incident.recommended_actions[0] || '继续观察关键指标变化'),
       highlights: topEvidence,
       summaryLines: evidenceSummary?.summary_lines || [],
       primaryLayer: evidenceSummary?.primary_layer || 'other',
@@ -268,10 +277,42 @@ export const IncidentCenter: React.FC = () => {
     }
   }, [selectedIncident])
 
-  const incidentClaims = useMemo<ClaimRecord[]>(() => selectedIncident?.claims || [], [selectedIncident])
+  const incidentDiagnosisReport = useMemo<DiagnosisReport | null>(() => selectedIncident?.diagnosis_report || null, [selectedIncident])
+  const incidentClaims = useMemo<ClaimRecord[]>(
+    () => incidentDiagnosisReport?.claims?.length ? incidentDiagnosisReport.claims : selectedIncident?.claims || [],
+    [incidentDiagnosisReport, selectedIncident],
+  )
   const aiSummaryClaims = useMemo<ClaimRecord[]>(() => aiSummary?.claims || [], [aiSummary])
   const evidenceHighlights = useMemo(() => diagnosisSummary?.highlights || [], [diagnosisSummary])
   const incidentWritebacks = useMemo(() => selectedIncident?.assistant_writebacks || [], [selectedIncident])
+  const incidentClaimEvidenceRows = useMemo<ClaimEvidenceViewItem[]>(() => {
+    if (!selectedIncident) {
+      return []
+    }
+
+    const reportEvidence = (incidentDiagnosisReport?.evidence_refs || []) as EvidenceItem[]
+    const baseEvidence = reportEvidence.length ? reportEvidence : ((selectedIncident.incident.evidence_refs || []) as EvidenceItem[])
+    const evidenceMap = new Map(baseEvidence.map((item) => [String(item.evidence_id || '').trim(), item] as const))
+    const reportLimitations = incidentDiagnosisReport?.limitations || []
+
+    return incidentClaims.map((claim) => {
+      const evidenceItems = claim.evidence_ids
+        .map((evidenceId) => evidenceMap.get(String(evidenceId || '').trim()))
+        .filter((item): item is EvidenceItem => Boolean(item))
+      const evidenceItemIds = new Set(evidenceItems.map((item) => String(item.evidence_id || '').trim()))
+      const unresolvedEvidenceIds = claim.evidence_ids.filter((evidenceId) => !evidenceItemIds.has(String(evidenceId || '').trim()))
+      const mergedLimitations = [...claim.limitations, ...reportLimitations].filter((item, index, array) => {
+        const normalized = String(item || '').trim()
+        return Boolean(normalized) && array.findIndex((value) => String(value || '').trim() === normalized) === index
+      })
+      return {
+        claim,
+        evidenceItems,
+        unresolvedEvidenceIds,
+        limitations: mergedLimitations,
+      }
+    })
+  }, [incidentClaims, incidentDiagnosisReport, selectedIncident])
 
   const visibleRecommendationTask = useMemo(() => {
     if (!selectedIncident || !recommendationTask) {
@@ -754,32 +795,87 @@ export const IncidentCenter: React.FC = () => {
                           renderItem={(item) => <List.Item style={{ paddingBlock: 4 }}>{item}</List.Item>}
                         />
                       ) : null}
-                      {incidentClaims.length ? (
-                        <List
+                      {incidentClaimEvidenceRows.length ? (
+                        <Card
+                          type="inner"
                           size="small"
-                          header={<Text strong>结论拆解</Text>}
-                          dataSource={incidentClaims}
+                          title="结论与证据对照"
+                          extra={<Button size="small" type="link" onClick={openEvidenceDrawer}>查看完整证据</Button>}
                           style={{ marginBottom: 12 }}
-                          renderItem={(item) => {
-                            const meta = getClaimMeta(item.kind)
-                            return (
-                              <List.Item>
-                                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                  <Space wrap>
-                                    <Tag color={meta.color}>{meta.label}</Tag>
-                                    {item.title ? <Text strong>{item.title}</Text> : null}
-                                    <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
-                                    <Tag>证据 {item.evidence_ids.length}</Tag>
-                                  </Space>
-                                  <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
-                                  {item.limitations.length ? (
-                                    <Text type="secondary">限制：{item.limitations.join('；')}</Text>
-                                  ) : null}
-                                </Space>
-                              </List.Item>
-                            )
-                          }}
-                        />
+                        >
+                          <List
+                            size="small"
+                            split={false}
+                            dataSource={incidentClaimEvidenceRows}
+                            renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
+                              const meta = getClaimMeta(claim.kind)
+                              return (
+                                <List.Item style={{ paddingInline: 0 }}>
+                                  <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
+                                    <Space wrap style={{ marginBottom: 8 }}>
+                                      <Tag color={meta.color}>{meta.label}</Tag>
+                                      {claim.title ? <Text strong>{claim.title}</Text> : null}
+                                      <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
+                                      <Tag>证据 {claim.evidence_ids.length}</Tag>
+                                      {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
+                                    </Space>
+                                    <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
+                                    <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
+                                      <Text strong>对应证据</Text>
+                                      {evidenceItems.length ? (
+                                        <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                                          {evidenceItems.map((evidence) => {
+                                            const evidenceMeta = getIncidentEvidenceKindMeta(evidence.kind)
+                                            return (
+                                              <div
+                                                key={String(evidence.evidence_id)}
+                                                style={{
+                                                  borderRadius: 10,
+                                                  padding: '10px 12px',
+                                                  background: 'rgba(248, 250, 252, 0.95)',
+                                                  border: '1px solid rgba(15, 23, 42, 0.06)',
+                                                }}
+                                              >
+                                                <Space wrap style={{ marginBottom: 6 }}>
+                                                  <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
+                                                  <Text strong>{String(evidence.title || evidence.metric || '证据项')}</Text>
+                                                  <Tag>{formatEvidenceValue(evidence)}</Tag>
+                                                </Space>
+                                                <Paragraph style={{ marginBottom: 0 }}>
+                                                  {String(evidence.summary || getIncidentEvidenceSnippet(evidence) || '暂无摘要')}
+                                                </Paragraph>
+                                              </div>
+                                            )
+                                          })}
+                                        </Space>
+                                      ) : (
+                                        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                          当前结论还没有可直接展示的映射证据，请打开证据抽屉查看完整现场。
+                                        </Paragraph>
+                                      )}
+                                    </div>
+                                    {limitations.length ? (
+                                      <div style={{ marginTop: 10 }}>
+                                        <Text strong>不确定点</Text>
+                                        <List
+                                          size="small"
+                                          split={false}
+                                          dataSource={limitations}
+                                          style={{ marginTop: 6 }}
+                                          renderItem={(item) => (
+                                            <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
+                                              <Text type="secondary">{item}</Text>
+                                            </List.Item>
+                                          )}
+                                        />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </List.Item>
+                              )
+                            }}
+                          />
+                        </Card>
                       ) : null}
                       <div className="ops-incident-brief__highlights">
                         {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
