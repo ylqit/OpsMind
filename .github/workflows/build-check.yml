@@ -6,10 +6,58 @@ on:
       - main
       - master
   pull_request:
+  workflow_dispatch:
 
 jobs:
+  docs-and-meta:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate open source metadata
+        working-directory: opsMind
+        run: |
+          # 发布前的最小仓库门面检查，避免关键文档或治理文件缺失。
+          required_files=(
+            "README.md"
+            "README_EN.md"
+            "LICENSE"
+            "CONTRIBUTING.md"
+            "CODE_OF_CONDUCT.md"
+            "SECURITY.md"
+            ".env.example"
+            "docker-compose.yml"
+            "docs/architecture.md"
+            "docs/demo-scenarios.md"
+            ".github/PULL_REQUEST_TEMPLATE.md"
+          )
+
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Missing required file: $file"
+              exit 1
+            fi
+          done
+
+          if ! grep -q "README_EN.md" README.md; then
+            echo "README.md must link to README_EN.md"
+            exit 1
+          fi
+
+          if ! grep -q "CONTRIBUTING.md" README.md; then
+            echo "README.md must link to CONTRIBUTING.md"
+            exit 1
+          fi
+
+          if ! grep -q "SECURITY.md" README.md; then
+            echo "README.md must link to SECURITY.md"
+            exit 1
+          fi
+
   backend:
     runs-on: ubuntu-latest
+    needs: docs-and-meta
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,12 +76,18 @@ jobs:
         run: python -c "import main; print(main.app.title)"
         working-directory: opsMind
 
+      - name: Backend route smoke
+        # 验证主产品路由可导入，避免聚合入口或依赖注入调整后在 CI 中静默失效。
+        run: python -c "import main; from api.routes import router; print(main.app.title, len(router.routes))"
+        working-directory: opsMind
+
       - name: Compile backend sources
         run: python -m compileall api engine main.py settings.py
         working-directory: opsMind
 
   frontend:
     runs-on: ubuntu-latest
+    needs: docs-and-meta
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -61,6 +61,7 @@
 - 本地验证结果
 
 默认模块归属规则见 [.github/CODEOWNERS](.github/CODEOWNERS)。如果改动跨越多个模块，建议在 PR 描述里明确说明影响范围。
+GitHub PR 默认会触发最小发布质量门，至少检查关键开源文档、后端导入和前端构建是否可用。
 
 ## Development Notes
 
