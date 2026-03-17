@@ -15,7 +15,7 @@
 - 异常中心，支持 incident 列表、证据链、摘要与分析入口
 - 建议中心，支持 baseline / recommended / diff 三视图、YAML 预览、复制、导出与反馈
 - 任务中心，支持任务状态、阶段、trace、artifact 与失败诊断
-- AI 助手与质量看板，支持模型调用状态、诊断问答和质量指标
+- AI 助手与 Metrics 面板，支持模型调用状态、诊断问答和质量指标
 - 只读执行插件，支持 Linux、Docker、Kubernetes 诊断命令
 
 ## Architecture
@@ -71,6 +71,7 @@ opsMind/
 
 - [Architecture](docs/architecture.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Quick Start
 
@@ -168,6 +169,14 @@ python scripts/demo_doctor.py --seed --write-report
 cd frontend
 npm run build
 ```
+
+## Contributing
+
+欢迎通过 Issue 和 Pull Request 参与改进。
+
+- 提交问题前，先查看 README、架构文档和演示文档
+- 提交 PR 时，请说明变更背景、主要改动和本地验证结果
+- 详细协作说明见 [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
