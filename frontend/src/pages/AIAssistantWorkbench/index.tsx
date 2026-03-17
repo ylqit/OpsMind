@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AutoComplete,
   Button,
@@ -67,6 +67,42 @@ const parseDelimitedIds = (value: string) => value
   .map((item) => item.trim())
   .filter(Boolean)
 
+const stringifyDelimitedIds = (values: string[]) => values.join(',')
+
+const hasSameIdList = (left: string[], right: string[]) => {
+  if (left.length !== right.length) {
+    return false
+  }
+  return left.every((item, index) => item === right[index])
+}
+
+const buildSessionSearchParams = (session: AnalysisSessionRecord) => {
+  const params = new URLSearchParams()
+  params.set('sessionId', session.session_id)
+  if (session.source && session.source !== 'manual') {
+    params.set('source', session.source)
+  }
+  if (session.incident_id) {
+    params.set('incidentId', session.incident_id)
+  }
+  if (session.recommendation_id) {
+    params.set('recommendationId', session.recommendation_id)
+  }
+  if (session.service_key) {
+    params.set('service_key', session.service_key)
+  }
+  if (session.time_range) {
+    params.set('time_range', session.time_range)
+  }
+  if (session.evidence_ids.length) {
+    params.set('evidenceIds', stringifyDelimitedIds(session.evidence_ids))
+  }
+  if (session.executor_result_ids.length) {
+    params.set('executorResultIds', stringifyDelimitedIds(session.executor_result_ids))
+  }
+  return params
+}
+
 const groupSuggestions = (items: AIAssistantCommandSuggestion[]) => {
   const grouped = new Map<string, { label: string; items: AIAssistantCommandSuggestion[] }>()
   for (const item of items) {
@@ -119,6 +155,8 @@ const AIAssistantWorkbench: React.FC = () => {
   const [sessionPayload, setSessionPayload] = useState<AnalysisSessionRecord | null>(null)
   const [prompt, setPrompt] = useState('')
   const [history, setHistory] = useState<AssistantConversationItem[]>([])
+  const sessionSyncTimeoutRef = useRef<number | null>(null)
+  const sessionContextDirtyRef = useRef(false)
 
   const entryContext = useMemo<AssistantEntryContext>(() => {
     const sourceValue = (searchParams.get('source') || '').trim()
@@ -138,6 +176,11 @@ const AIAssistantWorkbench: React.FC = () => {
       executorResultIds: parseDelimitedIds((searchParams.get('executorResultIds') || '').trim()),
     }
   }, [searchParams])
+  const entryEvidenceKey = useMemo(() => stringifyDelimitedIds(entryContext.evidenceIds), [entryContext.evidenceIds])
+  const entryExecutorResultKey = useMemo(
+    () => stringifyDelimitedIds(entryContext.executorResultIds),
+    [entryContext.executorResultIds],
+  )
 
   const serviceOptions = useMemo(() => {
     const values = new Set<string>()
@@ -147,8 +190,11 @@ const AIAssistantWorkbench: React.FC = () => {
     if (entryContext.serviceKey) {
       values.add(entryContext.serviceKey)
     }
+    if (sessionPayload?.service_key) {
+      values.add(sessionPayload.service_key)
+    }
     return Array.from(values).map((item) => ({ value: item, label: item }))
-  }, [entryContext.serviceKey, serviceKey])
+  }, [entryContext.serviceKey, serviceKey, sessionPayload?.service_key])
 
   const latestAssistantItem = useMemo(
     () => [...history].reverse().find((item) => item.role === 'assistant'),
@@ -165,6 +211,21 @@ const AIAssistantWorkbench: React.FC = () => {
     entryContext.incidentId || entryContext.recommendationId || entryContext.source !== 'manual' || entryContext.prompt || entryContext.sessionId,
   )
   const resolvedSession = sessionPayload
+  const hasPendingSessionContext = sessionContextDirtyRef.current
+  const activeSource = resolvedSession?.source || entryContext.source
+  const activeIncidentId = resolvedSession?.incident_id || entryContext.incidentId
+  const activeRecommendationId = resolvedSession?.recommendation_id || entryContext.recommendationId
+  const activePrompt = resolvedSession?.prompt || entryContext.prompt
+  const activeServiceKey = hasPendingSessionContext
+    ? serviceKey
+    : serviceKey || resolvedSession?.service_key || entryContext.serviceKey
+  const activeTimeRange = hasPendingSessionContext
+    ? timeRange
+    : ((resolvedSession?.time_range as '1h' | '6h' | '24h') || entryContext.timeRange || timeRange)
+  const activeEvidenceIds = resolvedSession?.evidence_ids?.length ? resolvedSession.evidence_ids : entryContext.evidenceIds
+  const activeExecutorResultIds = resolvedSession?.executor_result_ids?.length
+    ? resolvedSession.executor_result_ids
+    : entryContext.executorResultIds
 
   const loadAssistantStatus = async () => {
     setStatusLoading(true)
@@ -212,8 +273,10 @@ const AIAssistantWorkbench: React.FC = () => {
   }, [resolvedSession, serviceKey, setServiceKey, setTimeRange, timeRange])
 
   const persistSessionToUrl = (session: AnalysisSessionRecord) => {
-    const nextParams = new URLSearchParams(searchParams)
-    nextParams.set('sessionId', session.session_id)
+    const nextParams = buildSessionSearchParams(session)
+    if (nextParams.toString() === searchParams.toString()) {
+      return
+    }
     setSearchParams(nextParams, { replace: true })
   }
 
@@ -226,13 +289,14 @@ const AIAssistantWorkbench: React.FC = () => {
         }
         const existing = (await aiApi.getAssistantSession(entryContext.sessionId)) as AnalysisSessionRecord
         setSessionPayload(existing)
+        persistSessionToUrl(existing)
         return existing
       }
       const created = (await aiApi.createAssistantSession({
         source: entryContext.source,
         prompt: nextPrompt ?? entryContext.prompt,
         service_key: serviceKey || entryContext.serviceKey,
-        time_range: timeRange,
+        time_range: entryContext.timeRange || timeRange,
         incident_id: entryContext.incidentId || undefined,
         recommendation_id: entryContext.recommendationId || undefined,
         evidence_ids: entryContext.evidenceIds,
@@ -254,6 +318,8 @@ const AIAssistantWorkbench: React.FC = () => {
   useEffect(() => {
     void ensureAssistantSession()
   }, [
+    entryEvidenceKey,
+    entryExecutorResultKey,
     entryContext.incidentId,
     entryContext.prompt,
     entryContext.recommendationId,
@@ -262,6 +328,74 @@ const AIAssistantWorkbench: React.FC = () => {
     entryContext.source,
     entryContext.timeRange,
   ])
+
+  useEffect(() => {
+    if (!resolvedSession?.session_id || !sessionContextDirtyRef.current) {
+      return
+    }
+    const nextServiceKey = serviceKey.trim()
+    const nextTimeRange = timeRange
+    const nextEvidenceIds = activeEvidenceIds
+    const nextExecutorResultIds = activeExecutorResultIds
+    const hasContextChanged = (
+      (resolvedSession.service_key || '') !== nextServiceKey
+      || resolvedSession.time_range !== nextTimeRange
+      || !hasSameIdList(resolvedSession.evidence_ids, nextEvidenceIds)
+      || !hasSameIdList(resolvedSession.executor_result_ids, nextExecutorResultIds)
+    )
+    if (!hasContextChanged) {
+      sessionContextDirtyRef.current = false
+      return
+    }
+    if (sessionSyncTimeoutRef.current != null) {
+      window.clearTimeout(sessionSyncTimeoutRef.current)
+    }
+    // 筛选器变化后延迟回写会话，避免 service_key 输入过程频繁触发请求。
+    sessionSyncTimeoutRef.current = window.setTimeout(() => {
+      void (async () => {
+        setSessionLoading(true)
+        try {
+          const synced = (await aiApi.updateAssistantSession(resolvedSession.session_id, {
+            service_key: nextServiceKey,
+            time_range: nextTimeRange,
+            incident_id: activeIncidentId || undefined,
+            recommendation_id: activeRecommendationId || undefined,
+            evidence_ids: nextEvidenceIds,
+            executor_result_ids: nextExecutorResultIds,
+          })) as AnalysisSessionRecord
+          setSessionPayload(synced)
+          persistSessionToUrl(synced)
+          sessionContextDirtyRef.current = false
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : '分析会话同步失败'
+          setStatusError(errorMessage)
+          message.warning(errorMessage)
+        } finally {
+          setSessionLoading(false)
+        }
+      })()
+    }, 280)
+    return () => {
+      if (sessionSyncTimeoutRef.current != null) {
+        window.clearTimeout(sessionSyncTimeoutRef.current)
+        sessionSyncTimeoutRef.current = null
+      }
+    }
+  }, [
+    activeEvidenceIds,
+    activeExecutorResultIds,
+    activeIncidentId,
+    activeRecommendationId,
+    resolvedSession,
+    serviceKey,
+    timeRange,
+  ])
+
+  useEffect(() => () => {
+    if (sessionSyncTimeoutRef.current != null) {
+      window.clearTimeout(sessionSyncTimeoutRef.current)
+    }
+  }, [])
 
   const copyText = async (value: string, successText: string) => {
     try {
@@ -273,15 +407,27 @@ const AIAssistantWorkbench: React.FC = () => {
   }
 
   const openSourcePage = () => {
-    if (resolvedSession?.recommendation_id || entryContext.recommendationId || entryContext.source === 'recommendation') {
+    if (activeRecommendationId || activeSource === 'recommendation') {
       const params = new URLSearchParams()
-      if (resolvedSession?.incident_id || entryContext.incidentId) {
-        params.set('incidentId', String(resolvedSession?.incident_id || entryContext.incidentId))
+      if (activeIncidentId) {
+        params.set('incidentId', String(activeIncidentId))
       }
+      if (activeServiceKey) {
+        params.set('service_key', activeServiceKey)
+      }
+      params.set('time_range', activeTimeRange)
       navigate(`/recommendations${params.toString() ? `?${params.toString()}` : ''}`)
       return
     }
-    navigate('/incidents')
+    const params = new URLSearchParams()
+    if (activeServiceKey) {
+      params.set('service_key', activeServiceKey)
+    }
+    params.set('time_range', activeTimeRange)
+    if (activeIncidentId) {
+      params.set('incidentId', activeIncidentId)
+    }
+    navigate(`/incidents${params.toString() ? `?${params.toString()}` : ''}`)
   }
 
   const runDiagnose = async () => {
@@ -302,29 +448,31 @@ const AIAssistantWorkbench: React.FC = () => {
       const syncedSession = activeSession?.session_id
         ? (await aiApi.updateAssistantSession(activeSession.session_id, {
             prompt: normalizedPrompt,
-            service_key: serviceKey || entryContext.serviceKey,
-            time_range: timeRange,
-            incident_id: activeSession.incident_id || entryContext.incidentId || undefined,
-            recommendation_id: activeSession.recommendation_id || entryContext.recommendationId || undefined,
-            evidence_ids: activeSession.evidence_ids?.length ? activeSession.evidence_ids : entryContext.evidenceIds,
+            service_key: activeServiceKey,
+            time_range: activeTimeRange,
+            incident_id: activeSession.incident_id || activeIncidentId || undefined,
+            recommendation_id: activeSession.recommendation_id || activeRecommendationId || undefined,
+            evidence_ids: activeSession.evidence_ids?.length ? activeSession.evidence_ids : activeEvidenceIds,
             executor_result_ids: activeSession.executor_result_ids?.length
               ? activeSession.executor_result_ids
-              : entryContext.executorResultIds,
+              : activeExecutorResultIds,
           })) as AnalysisSessionRecord
         : activeSession
       if (syncedSession) {
         setSessionPayload(syncedSession)
+        persistSessionToUrl(syncedSession)
+        sessionContextDirtyRef.current = false
       }
       // AI 助手始终基于当前页面筛选上下文发起诊断，避免对话结果脱离主控台视角。
       const response = (await aiApi.diagnoseWithAssistant({
         message: normalizedPrompt,
         session_id: syncedSession?.session_id,
-        service_key: serviceKey || syncedSession?.service_key || entryContext.serviceKey || undefined,
-        time_range: timeRange,
-        incident_id: syncedSession?.incident_id || entryContext.incidentId || undefined,
-        recommendation_id: syncedSession?.recommendation_id || entryContext.recommendationId || undefined,
-        evidence_ids: syncedSession?.evidence_ids || entryContext.evidenceIds,
-        executor_result_ids: syncedSession?.executor_result_ids || entryContext.executorResultIds,
+        service_key: activeServiceKey || syncedSession?.service_key || undefined,
+        time_range: activeTimeRange,
+        incident_id: syncedSession?.incident_id || activeIncidentId || undefined,
+        recommendation_id: syncedSession?.recommendation_id || activeRecommendationId || undefined,
+        evidence_ids: syncedSession?.evidence_ids || activeEvidenceIds,
+        executor_result_ids: syncedSession?.executor_result_ids || activeExecutorResultIds,
         include_command_packs: true,
       })) as AIAssistantDiagnoseResponse
       const assistantItem: AssistantConversationItem = {
@@ -340,16 +488,18 @@ const AIAssistantWorkbench: React.FC = () => {
       // 对话历史只保留结构化后的结果，命令建议与降级信息都附着在同一条 assistant 消息上。
       setHistory((previous) => [...previous, assistantItem])
       if (syncedSession?.session_id && response.context.session_id === syncedSession.session_id) {
-        setSessionPayload((previous) => previous ? {
-          ...previous,
+        const mergedSession: AnalysisSessionRecord = {
+          ...syncedSession,
           service_key: response.context.service_key,
           time_range: response.context.time_range,
-          incident_id: response.context.incident_id || previous.incident_id,
-          recommendation_id: response.context.recommendation_id || previous.recommendation_id,
+          incident_id: response.context.incident_id || syncedSession.incident_id,
+          recommendation_id: response.context.recommendation_id || syncedSession.recommendation_id,
           evidence_ids: response.context.evidence_ids,
           executor_result_ids: response.context.executor_result_ids,
           prompt: normalizedPrompt,
-        } : previous)
+        }
+        setSessionPayload(mergedSession)
+        persistSessionToUrl(mergedSession)
       }
       if (response.status === 'degraded') {
         message.warning('AI 助手已降级到规则模式，建议先完成 Provider 配置')
@@ -372,11 +522,22 @@ const AIAssistantWorkbench: React.FC = () => {
           </Paragraph>
         </div>
         <Space wrap>
-          <Select value={timeRange} onChange={setTimeRange} options={timeRangeOptions} style={{ width: 140 }} />
+          <Select
+            value={activeTimeRange}
+            onChange={(value) => {
+              sessionContextDirtyRef.current = true
+              setTimeRange(value)
+            }}
+            options={timeRangeOptions}
+            style={{ width: 140 }}
+          />
           <AutoComplete
-            value={serviceKey}
+            value={activeServiceKey}
             options={serviceOptions}
-            onChange={setServiceKey}
+            onChange={(value) => {
+              sessionContextDirtyRef.current = true
+              setServiceKey(value)
+            }}
             placeholder="输入 service_key（可选）"
             style={{ width: 240 }}
             filterOption={(inputValue, option) => String(option?.value || '').toLowerCase().includes(inputValue.toLowerCase())}
@@ -405,26 +566,26 @@ const AIAssistantWorkbench: React.FC = () => {
         <Card title="当前诊断上下文" className="ops-surface-card" size="small" style={{ marginBottom: 16 }}>
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <Space wrap>
-              <Tag color="blue">{getContextLabel(resolvedSession?.source || entryContext.source)}</Tag>
+              <Tag color="blue">{getContextLabel(activeSource)}</Tag>
               {resolvedSession?.session_id ? <Tag color="cyan">session：{resolvedSession.session_id}</Tag> : null}
-              {resolvedSession?.incident_id || entryContext.incidentId ? (
-                <Tag>incident：{resolvedSession?.incident_id || entryContext.incidentId}</Tag>
+              {activeIncidentId ? (
+                <Tag>incident：{activeIncidentId}</Tag>
               ) : null}
-              {resolvedSession?.recommendation_id || entryContext.recommendationId ? (
-                <Tag color="purple">recommendation：{resolvedSession?.recommendation_id || entryContext.recommendationId}</Tag>
+              {activeRecommendationId ? (
+                <Tag color="purple">recommendation：{activeRecommendationId}</Tag>
               ) : null}
-              <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || resolvedSession?.service_key || entryContext.serviceKey || '全部'}</Tag>
-              <Tag>时间窗：{timeRange}</Tag>
-              {resolvedSession?.evidence_ids?.length ? <Tag color="gold">证据 {resolvedSession.evidence_ids.length}</Tag> : null}
-              {resolvedSession?.executor_result_ids?.length ? <Tag color="orange">执行结果 {resolvedSession.executor_result_ids.length}</Tag> : null}
+              <Tag color={activeServiceKey ? 'geekblue' : 'default'}>服务：{activeServiceKey || '全部'}</Tag>
+              <Tag>时间窗：{activeTimeRange}</Tag>
+              {activeEvidenceIds.length ? <Tag color="gold">证据 {activeEvidenceIds.length}</Tag> : null}
+              {activeExecutorResultIds.length ? <Tag color="orange">执行结果 {activeExecutorResultIds.length}</Tag> : null}
             </Space>
-            {resolvedSession?.prompt || entryContext.prompt ? (
+            {activePrompt ? (
               <Paragraph style={{ marginBottom: 0 }}>
-                预设问题：{resolvedSession?.prompt || entryContext.prompt}
+                预设问题：{activePrompt}
               </Paragraph>
             ) : null}
             <Space wrap>
-              <Button size="small" onClick={() => setPrompt(resolvedSession?.prompt || entryContext.prompt || prompt)}>
+              <Button size="small" onClick={() => setPrompt(activePrompt || prompt)}>
                 带入预设问题
               </Button>
               <Button size="small" onClick={openSourcePage}>
@@ -440,8 +601,8 @@ const AIAssistantWorkbench: React.FC = () => {
           <Card title="对话诊断" className="ops-surface-card">
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
               <Space wrap>
-                <Tag color="blue">时间窗：{timeRange}</Tag>
-                <Tag color={serviceKey ? 'geekblue' : 'default'}>服务：{serviceKey || resolvedSession?.service_key || '全部'}</Tag>
+                <Tag color="blue">时间窗：{activeTimeRange}</Tag>
+                <Tag color={activeServiceKey ? 'geekblue' : 'default'}>服务：{activeServiceKey || '全部'}</Tag>
                 <Tag color={statusPayload?.status === 'ready' ? 'green' : statusPayload?.status === 'degraded' ? 'gold' : 'red'}>
                   AI：{getStatusLabel(statusPayload?.status)}
                 </Tag>
