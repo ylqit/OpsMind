@@ -210,6 +210,54 @@ const getEvidenceSourceLabel = (sourceType: RecommendationEvidenceRef['source_ty
   return '异常上下文'
 }
 
+const recommendationEvidenceGroupMeta: Record<string, { label: string; color: string; order: number }> = {
+  artifact: { label: '任务产物', color: 'geekblue', order: 0 },
+  log_snippet: { label: '日志片段', color: 'blue', order: 1 },
+  metric_snapshot: { label: '指标快照', color: 'purple', order: 2 },
+  incident_evidence: { label: '异常上下文', color: 'gold', order: 3 },
+  other: { label: '其他证据', color: 'default', order: 4 },
+}
+
+const getRecommendationEvidenceGroupKey = (item: RecommendationEvidenceRef) => {
+  const sourceType = String(item.source_type || '').trim()
+  if (sourceType && recommendationEvidenceGroupMeta[sourceType]) {
+    return sourceType
+  }
+  return 'other'
+}
+
+const buildRecommendationEvidenceLocatorTags = (item: RecommendationEvidenceRef) => {
+  const locator = (item.locator || item.source_ref || {}) as Record<string, unknown>
+  const tags: Array<{ key: string; label: string }> = []
+  const serviceKey = String(locator.service_key || '').trim()
+  const path = String(locator.path || '').trim()
+  const timestamp = String(locator.timestamp || '').trim()
+  const taskId = String(locator.task_id || '').trim()
+  const artifactId = String(locator.artifact_id || item.artifact_id || '').trim()
+
+  if (serviceKey) {
+    tags.push({ key: `service-${serviceKey}`, label: `服务 ${serviceKey}` })
+  }
+  if (path) {
+    tags.push({ key: `path-${path}`, label: `路径 ${path}` })
+  }
+  if (timestamp) {
+    tags.push({ key: `time-${timestamp}`, label: timestamp })
+  }
+  if (taskId) {
+    tags.push({ key: `task-${taskId}`, label: `任务 ${taskId}` })
+  }
+  if (artifactId) {
+    tags.push({ key: `artifact-${artifactId}`, label: `产物 ${artifactId}` })
+  }
+  return tags
+}
+
+const getRecommendationEvidenceSnippet = (item: RecommendationEvidenceRef) => {
+  const snippet = String(item.snippet || item.quote || '').trim()
+  return snippet
+}
+
 const claimMeta: Record<string, { label: string; color: string }> = {
   summary: { label: '结论', color: 'blue' },
   cause: { label: '原因', color: 'purple' },
@@ -615,6 +663,21 @@ export const RecommendationCenter: React.FC = () => {
     () => activeRecommendationDetail?.artifact_views || null,
     [activeRecommendationDetail],
   )
+  const groupedRecommendationEvidence = useMemo(() => {
+    const groups: Record<string, RecommendationEvidenceRef[]> = {}
+    for (const item of activeRecommendationDetail?.evidence_refs || []) {
+      const groupKey = getRecommendationEvidenceGroupKey(item)
+      groups[groupKey] = groups[groupKey] || []
+      groups[groupKey].push(item)
+    }
+    return Object.entries(groups)
+      .sort((left, right) => {
+        const leftOrder = recommendationEvidenceGroupMeta[left[0]]?.order ?? 99
+        const rightOrder = recommendationEvidenceGroupMeta[right[0]]?.order ?? 99
+        return leftOrder - rightOrder
+      })
+      .map(([groupKey, items]) => [groupKey, items] as const)
+  }, [activeRecommendationDetail])
   const activeTaskContext = useMemo(
     () => activeRecommendationDetail?.task_context || null,
     [activeRecommendationDetail],
@@ -1056,17 +1119,30 @@ export const RecommendationCenter: React.FC = () => {
 
   const jumpToEvidence = async (evidence: RecommendationEvidenceRef) => {
     const jump = evidence.jump
-    if (!jump || jump.kind !== 'artifact' || !jump.task_id || !jump.artifact_id) {
-      return
-    }
+    const locator = (evidence.locator || evidence.source_ref || {}) as Record<string, unknown>
+    const taskId = String(jump?.task_id || locator.task_id || '').trim()
+    const artifactId = String(jump?.artifact_id || locator.artifact_id || evidence.artifact_id || '').trim()
     if (!selected || !activeRecommendation) {
       return
     }
+    if (!taskId || !artifactId) {
+      const serviceKey = String(locator.service_key || selected.incident.service_key || '').trim()
+      if (serviceKey) {
+        const params = new URLSearchParams()
+        params.set('time_range', inferTimeRangeFromIncident(selected.incident))
+        params.set('service_key', serviceKey)
+        setEvidenceDrawerOpen(false)
+        navigate(`/traffic?${params.toString()}`)
+        return
+      }
+      message.info('当前证据暂不支持直接跳转')
+      return
+    }
     const owner = selectedRecommendations.find((item) =>
-      item.artifact_refs.some((artifact) => artifact.artifact_id === jump.artifact_id && artifact.task_id === jump.task_id),
+      item.artifact_refs.some((artifact) => artifact.artifact_id === artifactId && artifact.task_id === taskId),
     )
     const targetArtifact = owner?.artifact_refs.find(
-      (artifact) => artifact.artifact_id === jump.artifact_id && artifact.task_id === jump.task_id,
+      (artifact) => artifact.artifact_id === artifactId && artifact.task_id === taskId,
     )
     if (!owner || !targetArtifact) {
       message.warning('引用产物不存在或已失效')
@@ -1949,38 +2025,62 @@ export const RecommendationCenter: React.FC = () => {
                 )}
               />
             </div>
-            <List
-              size="small"
-              dataSource={activeRecommendationDetail.evidence_refs}
-              locale={{ emptyText: '暂无可展示证据' }}
-              renderItem={(item) => (
-                <List.Item
-                  actions={
-                    item.jump?.kind === 'artifact' && item.jump.artifact_id && item.jump.task_id
-                      ? [
-                          <Button key={`jump-${item.evidence_id}`} size="small" onClick={() => void jumpToEvidence(item)}>
-                            跳转产物
-                          </Button>,
-                        ]
-                      : []
-                  }
-                >
-                  <div style={{ width: '100%' }}>
-                    <Space wrap style={{ marginBottom: 6 }}>
-                      <Tag color="geekblue">{getEvidenceSourceLabel(item.source_type)}</Tag>
-                      <Text strong>{item.title}</Text>
-                      {item.metric ? <Text code>{item.metric}</Text> : null}
-                    </Space>
-                    <Paragraph style={{ marginBottom: 4 }}>{item.summary}</Paragraph>
-                    {item.quote ? (
-                      <Paragraph type="secondary" style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
-                        {item.quote}
-                      </Paragraph>
-                    ) : null}
-                  </div>
-                </List.Item>
-              )}
-            />
+            {groupedRecommendationEvidence.length ? (
+              groupedRecommendationEvidence.map(([groupKey, items]) => {
+                const meta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
+                return (
+                  <Card
+                    key={`evidence-group-${groupKey}`}
+                    type="inner"
+                    size="small"
+                    title={meta.label}
+                    extra={<Tag color={meta.color}>{items.length} 条</Tag>}
+                  >
+                    <List
+                      size="small"
+                      dataSource={items}
+                      renderItem={(item) => {
+                        const snippet = getRecommendationEvidenceSnippet(item)
+                        const locatorTags = buildRecommendationEvidenceLocatorTags(item)
+                        return (
+                          <List.Item
+                            actions={[
+                              <Button key={`jump-${item.evidence_id}`} size="small" onClick={() => void jumpToEvidence(item)}>
+                                跳转定位
+                              </Button>,
+                            ]}
+                          >
+                            <div style={{ width: '100%' }}>
+                              <Space wrap style={{ marginBottom: 6 }}>
+                                <Tag color={meta.color}>{getEvidenceSourceLabel(item.source_type)}</Tag>
+                                <Text strong>{item.title}</Text>
+                                {item.metric ? <Text code>{item.metric}</Text> : null}
+                                {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                              </Space>
+                              <Paragraph style={{ marginBottom: 6 }}>{item.summary}</Paragraph>
+                              {snippet ? (
+                                <Paragraph type="secondary" style={{ marginBottom: 6, whiteSpace: 'pre-wrap' }}>
+                                  {snippet}
+                                </Paragraph>
+                              ) : null}
+                              {locatorTags.length ? (
+                                <Space wrap>
+                                  {locatorTags.map((tag) => (
+                                    <Tag key={tag.key}>{tag.label}</Tag>
+                                  ))}
+                                </Space>
+                              ) : null}
+                            </div>
+                          </List.Item>
+                        )
+                      }}
+                    />
+                  </Card>
+                )
+              })
+            ) : (
+              <Empty description="暂无可展示证据" />
+            )}
           </Space>
         )}
       </Drawer>

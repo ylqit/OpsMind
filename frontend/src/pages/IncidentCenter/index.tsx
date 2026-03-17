@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Input, List, Row, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Drawer, Empty, Input, List, Row, Space, Tag, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   aiApi,
@@ -69,6 +69,18 @@ const claimMeta: Record<string, { label: string; color: string }> = {
 
 const getClaimMeta = (kind: string) => claimMeta[kind] || { label: '判断', color: 'default' }
 
+const incidentEvidenceKindMeta: Record<string, { label: string; color: string }> = {
+  artifact: { label: '任务产物', color: 'geekblue' },
+  log: { label: '日志片段', color: 'blue' },
+  metric: { label: '指标快照', color: 'purple' },
+  alert: { label: '告警信号', color: 'red' },
+  task: { label: '任务上下文', color: 'cyan' },
+  analysis: { label: '关联判断', color: 'gold' },
+  other: { label: '其他证据', color: 'default' },
+}
+
+const getIncidentEvidenceKindMeta = (kind: string) => incidentEvidenceKindMeta[kind] || incidentEvidenceKindMeta.other
+
 const formatEvidenceValue = (item: EvidenceItem) => {
   if (item.value === undefined || item.value === null || item.value === '') {
     return '-'
@@ -100,6 +112,45 @@ const sortEvidenceItems = (items: EvidenceItem[]) => {
     }
     return String(left.title || left.metric || '').localeCompare(String(right.title || right.metric || ''))
   })
+}
+
+const getIncidentEvidenceLocator = (item: EvidenceItem) => {
+  return (item.locator || item.source_ref || {}) as Record<string, unknown>
+}
+
+const buildIncidentEvidenceLocatorTags = (item: EvidenceItem) => {
+  const locator = getIncidentEvidenceLocator(item)
+  const tags: Array<{ key: string; label: string }> = []
+  const timestamp = String(locator.timestamp || '').trim()
+  const path = String(locator.path || '').trim()
+  const clientIp = String(locator.client_ip || '').trim()
+  const namespace = String(locator.namespace || '').trim()
+  const serviceKey = String(locator.service_key || item.service_key || '').trim()
+
+  if (serviceKey) {
+    tags.push({ key: `service-${serviceKey}`, label: `服务 ${serviceKey}` })
+  }
+  if (path) {
+    tags.push({ key: `path-${path}`, label: `路径 ${path}` })
+  }
+  if (clientIp) {
+    tags.push({ key: `ip-${clientIp}`, label: `来源 ${clientIp}` })
+  }
+  if (namespace) {
+    tags.push({ key: `namespace-${namespace}`, label: `命名空间 ${namespace}` })
+  }
+  if (timestamp) {
+    tags.push({ key: `time-${timestamp}`, label: timestamp })
+  }
+  return tags
+}
+
+const getIncidentEvidenceSnippet = (item: EvidenceItem) => {
+  const snippet = String(item.snippet || item.quote || '').trim()
+  if (snippet) {
+    return snippet
+  }
+  return ''
 }
 
 const isProviderUnavailableError = (error: unknown) => {
@@ -168,6 +219,7 @@ export const IncidentCenter: React.FC = () => {
   const [aiProviderChecking, setAiProviderChecking] = useState(true)
   const [assistantStatus, setAssistantStatus] = useState<AIAssistantStatusResponse | null>(null)
   const [recommendationTask, setRecommendationTask] = useState<RecommendationTaskState | null>(null)
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [error, setError] = useState('')
 
   // 先在页面内完成证据分层，保持异常详情、摘要卡片和证据链展示口径一致。
@@ -217,6 +269,7 @@ export const IncidentCenter: React.FC = () => {
 
   const incidentClaims = useMemo<ClaimRecord[]>(() => selectedIncident?.claims || [], [selectedIncident])
   const aiSummaryClaims = useMemo<ClaimRecord[]>(() => aiSummary?.claims || [], [aiSummary])
+  const evidenceHighlights = useMemo(() => diagnosisSummary?.highlights || [], [diagnosisSummary])
 
   const visibleRecommendationTask = useMemo(() => {
     if (!selectedIncident || !recommendationTask) {
@@ -367,6 +420,61 @@ export const IncidentCenter: React.FC = () => {
     params.set('time_range', timeRange)
     params.set('service_key', selectedIncident.incident.service_key)
     navigate(`/traffic?${params.toString()}`)
+  }
+
+  const openEvidenceDrawer = () => {
+    if (!selectedIncident) {
+      return
+    }
+    setEvidenceDrawerOpen(true)
+  }
+
+  const jumpToIncidentEvidence = (item: EvidenceItem) => {
+    if (!selectedIncident) {
+      return
+    }
+    const locator = getIncidentEvidenceLocator(item)
+    const jump = item.jump
+    const taskId = String(jump?.task_id || locator.task_id || '').trim()
+    const artifactId = String(jump?.artifact_id || locator.artifact_id || item.artifact_id || '').trim()
+    const targetServiceKey = String(locator.service_key || selectedIncident.incident.service_key || '').trim()
+
+    // 优先复用任务中心的 artifact 跳转，避免不同页面各自维护一套产物定位逻辑。
+    if (taskId && artifactId) {
+      setEvidenceDrawerOpen(false)
+      navigate(`/tasks?taskId=${encodeURIComponent(taskId)}&artifactId=${encodeURIComponent(artifactId)}`)
+      return
+    }
+    if (taskId) {
+      setEvidenceDrawerOpen(false)
+      navigate(`/tasks?taskId=${encodeURIComponent(taskId)}`)
+      return
+    }
+
+    const hasTrafficContext = Boolean(locator.path || locator.client_ip || locator.geo_label || locator.status !== undefined)
+    if (hasTrafficContext && targetServiceKey) {
+      setServiceKey(targetServiceKey)
+      setEvidenceDrawerOpen(false)
+      navigate(`/traffic?time_range=${encodeURIComponent(timeRange)}&service_key=${encodeURIComponent(targetServiceKey)}`)
+      return
+    }
+
+    const assetIds = Array.isArray(locator.asset_ids) ? locator.asset_ids.filter(Boolean) : []
+    if ((item.layer === 'resource' || assetIds.length > 0) && targetServiceKey) {
+      setServiceKey(targetServiceKey)
+      setEvidenceDrawerOpen(false)
+      navigate(`/resources?time_range=${encodeURIComponent(timeRange)}&service_key=${encodeURIComponent(targetServiceKey)}`)
+      return
+    }
+
+    if (targetServiceKey) {
+      setServiceKey(targetServiceKey)
+      setEvidenceDrawerOpen(false)
+      navigate(`/traffic?time_range=${encodeURIComponent(timeRange)}&service_key=${encodeURIComponent(targetServiceKey)}`)
+      return
+    }
+
+    message.info('当前证据暂不支持直接跳转，请先查看证据摘要')
   }
 
   const generateRecommendationForIncident = async () => {
@@ -537,6 +645,9 @@ export const IncidentCenter: React.FC = () => {
                 >
                   AI 总结
                 </Button>
+                <Button onClick={openEvidenceDrawer} disabled={!selectedIncident}>
+                  查看证据
+                </Button>
                 <Button onClick={() => openRecommendationCenter()} disabled={!selectedIncident}>
                   打开建议中心
                 </Button>
@@ -660,6 +771,9 @@ export const IncidentCenter: React.FC = () => {
                               <Tag color={layerMeta[item.layer || 'other']?.color || layerMeta.other.color}>{layerMeta[item.layer || 'other']?.title || layerMeta.other.title}</Tag>
                               <Text strong>{String(item.title || item.metric || '关键证据')}</Text>
                               <Tag>{formatEvidenceValue(item)}</Tag>
+                              <Button size="small" type="link" onClick={() => openEvidenceDrawer()}>
+                                查看详情
+                              </Button>
                             </Space>
                             <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || '-')}</Paragraph>
                           </div>
@@ -721,11 +835,22 @@ export const IncidentCenter: React.FC = () => {
                           dataSource={items}
                           renderItem={(item) => {
                             const signalMeta = signalStrengthMeta[item.signal_strength || 'low'] || signalStrengthMeta.low
+                            const evidenceMeta = getIncidentEvidenceKindMeta(item.kind)
                             return (
-                              <List.Item>
+                              <List.Item
+                                actions={[
+                                  <Button key={`view-${item.evidence_id}`} size="small" type="link" onClick={() => openEvidenceDrawer()}>
+                                    查看证据
+                                  </Button>,
+                                  <Button key={`jump-${item.evidence_id}`} size="small" onClick={() => jumpToIncidentEvidence(item)}>
+                                    跳转定位
+                                  </Button>,
+                                ]}
+                              >
                                 <div style={{ width: '100%' }}>
                                   <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
                                     <Text strong>{String(item.title || item.name || item.metric || item.type || '证据项')}</Text>
+                                    <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
                                     <Tag>{String(item.metric || item.type || 'metric')}</Tag>
                                     <Tag color="default">{formatEvidenceValue(item)}</Tag>
                                     <Tag color={signalMeta.color}>{signalMeta.label}</Tag>
@@ -807,6 +932,123 @@ export const IncidentCenter: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Drawer
+        title="证据抽屉"
+        open={evidenceDrawerOpen}
+        width={600}
+        onClose={() => setEvidenceDrawerOpen(false)}
+        destroyOnClose={false}
+      >
+        {!selectedIncident ? (
+          <Empty description="请选择一个异常后查看证据详情" />
+        ) : (
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="证据链与跳转定位"
+              description={`当前异常共有 ${selectedIncident.evidence_summary.total} 条证据，可按层查看，并跳到任务产物、流量页或资源页继续排查。`}
+            />
+            <Space wrap>
+              <Tag color="blue">异常 {selectedIncident.incident.incident_id}</Tag>
+              <Tag color="purple">服务 {selectedIncident.incident.service_key}</Tag>
+              <Tag color="geekblue">高亮证据 {evidenceHighlights.length}</Tag>
+              {Object.entries(selectedIncident.evidence_summary.layers || {}).map(([layer, count]) => (
+                <Tag key={`drawer-layer-${layer}`} color={layerMeta[layer]?.color || layerMeta.other.color}>
+                  {layerMeta[layer]?.title || layerMeta.other.title} {count}
+                </Tag>
+              ))}
+            </Space>
+
+            <Card type="inner" title="现场日志样本" size="small">
+              <List
+                size="small"
+                dataSource={(selectedIncident.log_samples || []).slice(0, 5)}
+                locale={{ emptyText: '当前时间窗内没有可展示的访问样本' }}
+                renderItem={(item: IncidentLogSample) => (
+                  <List.Item>
+                    <div style={{ width: '100%' }}>
+                      <Space style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+                        <Tag color={item.status >= 500 ? 'red' : item.status >= 400 ? 'orange' : 'blue'}>{item.status}</Tag>
+                        <Tag>{item.method}</Tag>
+                        <Text code>{item.path}</Text>
+                        <Tag color="geekblue">{item.latency_ms} ms</Tag>
+                      </Space>
+                      <Paragraph style={{ marginBottom: 4 }}>
+                        {formatSampleTime(item.timestamp)} · {item.client_ip} · {item.geo_label}
+                      </Paragraph>
+                      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                        {item.browser} / {item.os} / {item.device}
+                      </Paragraph>
+                    </div>
+                  </List.Item>
+                )}
+              />
+            </Card>
+
+            {groupedEvidence.map(([layer, items]) => (
+              <Card
+                key={`drawer-group-${layer}`}
+                type="inner"
+                title={layerMeta[layer]?.title || layerMeta.other.title}
+                size="small"
+                extra={<Tag color={layerMeta[layer]?.color || layerMeta.other.color}>{items.length} 条</Tag>}
+              >
+                <List
+                  size="small"
+                  dataSource={items}
+                  renderItem={(item) => {
+                    const signalMeta = signalStrengthMeta[item.signal_strength || 'low'] || signalStrengthMeta.low
+                    const evidenceMeta = getIncidentEvidenceKindMeta(item.kind)
+                    const snippet = getIncidentEvidenceSnippet(item)
+                    const locatorTags = buildIncidentEvidenceLocatorTags(item)
+                    return (
+                      <List.Item
+                        actions={[
+                          <Button key={`jump-drawer-${item.evidence_id}`} size="small" onClick={() => jumpToIncidentEvidence(item)}>
+                            跳转定位
+                          </Button>,
+                        ]}
+                      >
+                        <div style={{ width: '100%' }}>
+                          <Space wrap style={{ marginBottom: 6 }}>
+                            <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
+                            <Text strong>{String(item.title || item.metric || item.type || '证据项')}</Text>
+                            <Tag>{String(item.metric || item.type || 'metric')}</Tag>
+                            <Tag color="default">{formatEvidenceValue(item)}</Tag>
+                            <Tag color={signalMeta.color}>{signalMeta.label}</Tag>
+                            <Tag color="geekblue">优先级 {item.priority || 0}</Tag>
+                            {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                          </Space>
+                          <Paragraph style={{ marginBottom: 6 }}>{String(item.summary || '-')}</Paragraph>
+                          {snippet ? (
+                            <Paragraph type="secondary" style={{ marginBottom: 6, whiteSpace: 'pre-wrap' }}>
+                              {snippet}
+                            </Paragraph>
+                          ) : null}
+                          {locatorTags.length ? (
+                            <Space wrap>
+                              {locatorTags.map((tag) => (
+                                <Tag key={tag.key}>{tag.label}</Tag>
+                              ))}
+                            </Space>
+                          ) : null}
+                          {item.next_step ? (
+                            <Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                              下一步：{String(item.next_step)}
+                            </Paragraph>
+                          ) : null}
+                        </div>
+                      </List.Item>
+                    )
+                  }}
+                />
+              </Card>
+            ))}
+          </Space>
+        )}
+      </Drawer>
     </div>
   )
 }
