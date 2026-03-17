@@ -381,6 +381,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.ai_writeback_repository = ai_writeback_repository
     app.state.llm_config_manager = llm_config_manager_instance
     app.state.llm_router = llm_router_instance
+    app.state.refresh_llm_router = refresh_llm_router_from_db
     app.state.executor_service = executor_service
 
     # 告警轮询与事件总线在应用生命周期内常驻，退出时统一停止。

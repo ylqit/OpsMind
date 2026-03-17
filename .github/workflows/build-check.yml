@@ -1,0 +1,54 @@
+name: Build Check
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+        working-directory: opsMind
+
+      - name: Backend import smoke
+        run: python -c "import main; print(main.app.title)"
+        working-directory: opsMind
+
+      - name: Compile backend sources
+        run: python -m compileall api engine main.py settings.py
+        working-directory: opsMind
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: opsMind/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: opsMind/frontend
+
+      - name: Frontend build
+        run: npm run build
+        working-directory: opsMind/frontend

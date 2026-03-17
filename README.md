@@ -2,6 +2,8 @@
 
 基于 FastAPI 与 React 的运维分析平台，用于统一查看流量、资源、异常、建议和任务追踪。
 
+简体中文 | [English](README_EN.md)
+
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19+-61dafb.svg)](https://react.dev/)
@@ -69,9 +71,11 @@ opsMind/
 
 ## Documentation
 
+- [English README](README_EN.md)
 - [Architecture](docs/architecture.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
 - [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
 
 ## Quick Start
 
