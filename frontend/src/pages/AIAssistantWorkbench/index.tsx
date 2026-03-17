@@ -420,6 +420,39 @@ const AIAssistantWorkbench: React.FC = () => {
     }
   }
 
+  const openExecutorWorkbench = (suggestion?: AIAssistantCommandSuggestion) => {
+    const params = new URLSearchParams()
+    const sessionId = resolvedSession?.session_id || entryContext.sessionId
+    if (sessionId) {
+      params.set('sessionId', sessionId)
+    }
+    if (activeIncidentId) {
+      params.set('incidentId', activeIncidentId)
+    }
+    if (activeRecommendationId) {
+      params.set('recommendationId', activeRecommendationId)
+    }
+    if (activeServiceKey) {
+      params.set('service_key', activeServiceKey)
+    }
+    if (activeTimeRange) {
+      params.set('time_range', activeTimeRange)
+    }
+    if (activeEvidenceIds.length) {
+      params.set('evidenceIds', stringifyDelimitedIds(activeEvidenceIds))
+    }
+    if (activeExecutorResultIds.length) {
+      params.set('executorResultIds', stringifyDelimitedIds(activeExecutorResultIds))
+    }
+    if (suggestion?.plugin_key) {
+      params.set('plugin_key', suggestion.plugin_key)
+    }
+    if (suggestion?.command) {
+      params.set('command', suggestion.command)
+    }
+    navigate(`/executors${params.toString() ? `?${params.toString()}` : ''}`)
+  }
+
   const saveWriteback = async (item: AssistantConversationItem, kind: AIWritebackKind) => {
     if (item.role !== 'assistant') {
       return
@@ -755,9 +788,14 @@ const AIAssistantWorkbench: React.FC = () => {
                             </Space>
                             <Text type="secondary">{item.description || '只读命令模板'}</Text>
                             <Text code style={{ whiteSpace: 'pre-wrap' }}>{item.command}</Text>
-                            <Button size="small" onClick={() => void copyText(item.command, '已复制命令')}>
-                              复制命令
-                            </Button>
+                            <Space wrap>
+                              <Button size="small" onClick={() => void copyText(item.command, '已复制命令')}>
+                                复制命令
+                              </Button>
+                              <Button size="small" type="primary" onClick={() => openExecutorWorkbench(item)}>
+                                去执行补证
+                              </Button>
+                            </Space>
                           </Space>
                         </Card>
                       ))}

@@ -975,6 +975,20 @@ export interface ExecutorReadonlyCommandPack {
   command: string
 }
 
+export interface ExecutorRecommendedCommandPack extends ExecutorReadonlyCommandPack {
+  score: number
+  reason: string
+  already_executed: boolean
+}
+
+export interface ExecutorRecommendedCommandGroup {
+  plugin_key: string
+  display_name: string
+  priority: number
+  reason: string
+  recommended_command_packs: ExecutorRecommendedCommandPack[]
+}
+
 export interface ExecutorPluginStatus {
   plugin_key: string
   display_name: string
@@ -1053,6 +1067,12 @@ export interface ExecutorRunResponse {
   execution: ExecutorAuditLog
   plugin: ExecutorPluginStatus
   execution_context?: ExecutorExecutionContext
+  evidence?: {
+    source: string
+    generated_at: string
+    summary: string
+    evidence_refs: EvidenceRef[]
+  }
   task_evidence?: {
     linked: boolean
     reason?: string
@@ -1060,6 +1080,15 @@ export interface ExecutorRunResponse {
     task_id?: string
     artifact_id?: string
     execution_id?: string
+  }
+  analysis_session?: {
+    linked: boolean
+    reason?: string
+    session_id?: string
+    execution_id?: string
+    executor_result_ids?: string[]
+    service_key?: string
+    time_range?: string
   }
 }
 
@@ -1070,6 +1099,24 @@ export interface ExecutorReadonlyCommandPackListResponse {
     readonly_categories: ExecutorReadonlyCategory[]
     readonly_command_packs: ExecutorReadonlyCommandPack[]
   }>
+  total: number
+}
+
+export interface ExecutorRecommendedCommandPackResponse {
+  context: {
+    session_id: string
+    incident_id: string
+    recommendation_id: string
+    service_key: string
+    time_range: string
+    recommendation_kind: string
+    reasoning_tags: string[]
+    evidence_layers: string[]
+    signals: string[]
+    executor_result_ids: string[]
+  }
+  items: ExecutorRecommendedCommandGroup[]
+  recommended_total: number
   total: number
 }
 
@@ -1223,6 +1270,13 @@ export const executorsApi = {
   getExecution: (executionId: string) => apiClient.get(`/executors/executions/${encodePathSegment(executionId)}`),
   listReadonlyCommandPacks: (params?: { plugin_key?: string }) =>
     apiClient.get('/executors/readonly-command-packs', { params }),
+  getRecommendedCommandPacks: (params?: {
+    session_id?: string
+    incident_id?: string
+    recommendation_id?: string
+    plugin_key?: string
+    limit?: number
+  }) => apiClient.get('/executors/recommended-command-packs', { params }),
   run: (payload: {
     plugin_key: string
     command: string

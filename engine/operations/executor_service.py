@@ -9,11 +9,14 @@ from datetime import timedelta
 from typing import Any, Sequence
 
 from engine.runtime.models import (
+    AnalysisSession,
     ExecutorAuditRecord,
     ExecutorHealthStatus,
     ExecutorPluginKey,
     ExecutorPluginRecord,
     ExecutorRunStatus,
+    Incident,
+    Recommendation,
 )
 from engine.runtime.time_utils import utc_now
 from engine.storage.repositories import ExecutorAuditLogRepository, ExecutorPluginRepository
@@ -676,6 +679,314 @@ class ExecutorService:
             )
         return {
             "items": items,
+            "total": len(items),
+        }
+
+    @staticmethod
+    def _append_weight(
+        score_bucket: dict[str, int],
+        reason_bucket: dict[str, list[str]],
+        key: str,
+        delta: int,
+        reason: str,
+    ) -> None:
+        normalized_key = str(key or "").strip()
+        normalized_reason = str(reason or "").strip()
+        if not normalized_key or delta <= 0 or not normalized_reason:
+            return
+        score_bucket[normalized_key] = score_bucket.get(normalized_key, 0) + delta
+        reason_bucket.setdefault(normalized_key, [])
+        if normalized_reason not in reason_bucket[normalized_key]:
+            reason_bucket[normalized_key].append(normalized_reason)
+
+    def _collect_executed_commands(self, execution_ids: Sequence[str]) -> set[str]:
+        executed_commands: set[str] = set()
+        for execution_id in execution_ids[:20]:
+            audit = self.audit_repository.get(str(execution_id or "").strip())
+            if not audit:
+                continue
+            command = str(audit.command or "").strip()
+            if command:
+                executed_commands.add(command)
+        return executed_commands
+
+    def _build_recommendation_signals(
+        self,
+        *,
+        session: AnalysisSession | None,
+        incident: Incident | None,
+        recommendation: Recommendation | None,
+        service_key: str,
+        time_range: str,
+    ) -> dict[str, Any]:
+        plugin_scores = {key: 8 for key in self._specs}
+        category_scores: dict[str, int] = {}
+        plugin_reasons: dict[str, list[str]] = {}
+        category_reasons: dict[str, list[str]] = {}
+
+        recommendation_kind = str(getattr(recommendation, "kind", "") or "").strip().lower()
+        reasoning_tags = [
+            str(item or "").strip().lower()
+            for item in getattr(incident, "reasoning_tags", [])
+            if str(item or "").strip()
+        ]
+        evidence_layers = [
+            str(item.get("layer") or "").strip().lower()
+            for item in getattr(incident, "evidence_refs", [])
+            if isinstance(item, dict) and str(item.get("layer") or "").strip()
+        ]
+        text_fragments = [
+            str(service_key or "").strip(),
+            str(time_range or "").strip(),
+            str(getattr(incident, "title", "") or "").strip(),
+            str(getattr(incident, "summary", "") or "").strip(),
+            " ".join(getattr(incident, "recommended_actions", []) or []),
+            str(getattr(recommendation, "observation", "") or "").strip(),
+            str(getattr(recommendation, "recommendation", "") or "").strip(),
+            str(getattr(recommendation, "risk_note", "") or "").strip(),
+            " ".join(reasoning_tags),
+            " ".join(evidence_layers),
+        ]
+        lowered_text = " ".join(part for part in text_fragments if part).lower()
+        signals: list[str] = []
+
+        if service_key:
+            signals.append(f"当前服务上下文：{service_key}")
+        if reasoning_tags:
+            signals.append(f"异常标签：{', '.join(reasoning_tags[:4])}")
+        if recommendation_kind:
+            signals.append(f"建议类型：{recommendation_kind}")
+        if evidence_layers:
+            signals.append(f"证据分层：{', '.join(dict.fromkeys(evidence_layers))}")
+        if session and session.executor_result_ids:
+            signals.append(f"当前会话已有 {len(session.executor_result_ids)} 条执行结果")
+
+        if recommendation_kind == "manifest_draft":
+            self._append_weight(plugin_scores, plugin_reasons, "k8s", 38, "当前建议偏向 K8s 配置草稿")
+            self._append_weight(category_scores, category_reasons, "workload", 26, "优先补工作负载与部署态证据")
+            self._append_weight(category_scores, category_reasons, "resource", 18, "需要核对资源配置与实时占用")
+            self._append_weight(category_scores, category_reasons, "diagnosis", 16, "需要补 Pod 详情与调度事件")
+        elif recommendation_kind == "scale":
+            self._append_weight(plugin_scores, plugin_reasons, "k8s", 22, "扩缩容建议更依赖集群侧资源证据")
+            self._append_weight(plugin_scores, plugin_reasons, "docker", 16, "扩缩容前应先核对容器运行态")
+            self._append_weight(category_scores, category_reasons, "resource", 24, "扩缩容前先核对资源压力")
+            self._append_weight(category_scores, category_reasons, "workload", 18, "扩缩容前先确认工作负载状态")
+        elif recommendation_kind == "resource_tuning":
+            self._append_weight(plugin_scores, plugin_reasons, "linux", 18, "资源调优前先核对主机基础负载")
+            self._append_weight(plugin_scores, plugin_reasons, "docker", 18, "资源调优前先核对容器资源使用")
+            self._append_weight(plugin_scores, plugin_reasons, "k8s", 16, "资源调优前先核对 Pod requests/limits")
+            self._append_weight(category_scores, category_reasons, "resource", 24, "调优类建议强依赖资源快照")
+            self._append_weight(category_scores, category_reasons, "memory", 18, "需要补内存侧证据")
+            self._append_weight(category_scores, category_reasons, "load", 14, "需要补系统负载证据")
+        elif recommendation_kind == "rate_limit":
+            self._append_weight(plugin_scores, plugin_reasons, "linux", 16, "限流前先核对网络与连接压力")
+            self._append_weight(plugin_scores, plugin_reasons, "k8s", 12, "限流前先核对入口与 Pod 日志")
+            self._append_weight(category_scores, category_reasons, "network", 22, "入口异常优先补网络与连接侧证据")
+            self._append_weight(category_scores, category_reasons, "logs", 18, "限流前先确认错误日志与热点请求")
+
+        for layer in evidence_layers:
+            if layer == "resource":
+                self._append_weight(category_scores, category_reasons, "resource", 16, "现场证据已出现资源层信号")
+            elif layer == "traffic":
+                self._append_weight(category_scores, category_reasons, "network", 14, "现场证据已出现流量层信号")
+                self._append_weight(category_scores, category_reasons, "logs", 12, "流量异常需结合日志片段补证")
+            elif layer == "log":
+                self._append_weight(category_scores, category_reasons, "logs", 14, "现场证据已包含日志片段")
+            elif layer == "task":
+                self._append_weight(category_scores, category_reasons, "diagnosis", 10, "任务证据提示继续补诊断上下文")
+
+        keyword_rules = [
+            (
+                ("traffic_spike", "traffic_error", "5xx", "error", "latency", "upstream", "config"),
+                [("linux", 12, "入口异常先补主机网络与进程侧证据"), ("k8s", 12, "入口异常需核对集群与 Pod 日志"), ("docker", 10, "入口异常可补容器日志与运行态")],
+                [("network", 18, "入口异常优先查看连接与网络摘要"), ("logs", 18, "入口异常优先查看日志"), ("diagnosis", 10, "需要补配置与依赖诊断")],
+            ),
+            (
+                ("resource_bottleneck", "resource_pressure", "cpu", "load"),
+                [("linux", 16, "资源瓶颈先核对主机负载"), ("docker", 12, "资源瓶颈需核对容器资源使用"), ("k8s", 12, "资源瓶颈需核对 Pod 资源占用")],
+                [("resource", 22, "资源瓶颈场景优先查看资源快照"), ("load", 18, "资源瓶颈场景优先查看负载"), ("process", 10, "必要时查看进程分布")],
+            ),
+            (
+                ("oom", "oom_killed", "memory", "memory_pressure"),
+                [("linux", 14, "内存问题先核对主机内存与负载"), ("docker", 14, "内存问题需核对容器 stats 与日志"), ("k8s", 14, "OOM 场景需核对 Pod 事件与日志")],
+                [("memory", 24, "内存问题优先查看内存快照"), ("resource", 18, "内存问题需核对资源实时占用"), ("logs", 12, "OOM 场景需补日志片段")],
+            ),
+            (
+                ("restart", "restarted", "restart_loop"),
+                [("docker", 16, "重启类异常先核对容器运行态"), ("k8s", 16, "重启类异常需核对 Pod 状态与事件")],
+                [("runtime", 22, "重启类异常优先查看运行态"), ("workload", 18, "重启类异常优先查看 Pod / workload 状态"), ("logs", 12, "重启类异常需补日志片段")],
+            ),
+            (
+                ("pod", "namespace", "cluster", "kubectl"),
+                [("k8s", 18, "当前上下文更偏向集群侧排查")],
+                [("workload", 18, "当前上下文更偏向工作负载排查"), ("node", 12, "必要时补节点状态"), ("cluster", 10, "必要时补集群信息")],
+            ),
+            (
+                ("container", "docker"),
+                [("docker", 18, "当前上下文更偏向容器侧排查")],
+                [("runtime", 18, "当前上下文更偏向容器运行态"), ("diagnosis", 12, "容器问题常需 inspect 诊断"), ("logs", 10, "容器问题常需日志片段")],
+            ),
+            (
+                ("disk", "storage", "filesystem"),
+                [("linux", 18, "存储问题优先核对主机磁盘情况")],
+                [("storage", 26, "存储问题优先查看磁盘占用")],
+            ),
+        ]
+
+        for keywords, plugin_weights, category_weights in keyword_rules:
+            if not any(keyword in lowered_text for keyword in keywords):
+                continue
+            for plugin_key, delta, reason in plugin_weights:
+                self._append_weight(plugin_scores, plugin_reasons, plugin_key, delta, reason)
+            for category_key, delta, reason in category_weights:
+                self._append_weight(category_scores, category_reasons, category_key, delta, reason)
+
+        if not signals:
+            signals.append("未命中明确异常上下文，回退为默认只读诊断模板")
+            self._append_weight(plugin_scores, plugin_reasons, "linux", 12, "默认先从主机基础快照开始")
+            self._append_weight(category_scores, category_reasons, "process", 12, "默认先看进程分布")
+            self._append_weight(category_scores, category_reasons, "network", 10, "默认补网络连接摘要")
+
+        return {
+            "service_key": service_key,
+            "time_range": time_range,
+            "recommendation_kind": recommendation_kind,
+            "reasoning_tags": reasoning_tags,
+            "evidence_layers": list(dict.fromkeys(evidence_layers)),
+            "plugin_scores": plugin_scores,
+            "plugin_reasons": plugin_reasons,
+            "category_scores": category_scores,
+            "category_reasons": category_reasons,
+            "signals": signals,
+        }
+
+    def recommend_readonly_command_packs(
+        self,
+        *,
+        session: AnalysisSession | None = None,
+        incident: Incident | None = None,
+        recommendation: Recommendation | None = None,
+        service_key: str = "",
+        time_range: str = "1h",
+        plugin_key: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        safe_limit = max(1, min(limit, 20))
+        executed_commands = self._collect_executed_commands(session.executor_result_ids if session else [])
+        signals = self._build_recommendation_signals(
+            session=session,
+            incident=incident,
+            recommendation=recommendation,
+            service_key=service_key,
+            time_range=time_range,
+        )
+        default_template_boost = {
+            "linux_proc_top": 14,
+            "linux_load": 12,
+            "linux_memory_usage": 14,
+            "linux_socket_summary": 12,
+            "k8s_pods_all": 14,
+            "k8s_top_pods": 16,
+            "k8s_describe_pod": 16,
+            "k8s_pod_logs": 16,
+            "docker_ps": 14,
+            "docker_stats": 14,
+            "docker_inspect": 12,
+            "docker_logs_tail": 16,
+        }
+
+        scored_items: list[dict[str, Any]] = []
+        for plugin in self.plugin_repository.list():
+            if plugin_key and plugin.plugin_key != plugin_key:
+                continue
+            if not plugin.enabled:
+                continue
+            serialized = self._serialize_plugin(plugin)
+            plugin_priority = int(signals["plugin_scores"].get(plugin.plugin_key, 0))
+            plugin_reason_items = signals["plugin_reasons"].get(plugin.plugin_key, [])
+            for pack in serialized["readonly_command_packs"]:
+                category_key = str(pack.get("category_key") or "").strip()
+                command = str(pack.get("command") or "").strip()
+                already_executed = bool(command and command in executed_commands)
+                score = (
+                    int(default_template_boost.get(str(pack.get("template_id") or "").strip(), 8))
+                    + plugin_priority
+                    + int(signals["category_scores"].get(category_key, 0))
+                )
+                reason_parts = [
+                    *plugin_reason_items[:2],
+                    *signals["category_reasons"].get(category_key, [])[:2],
+                ]
+                if already_executed:
+                    score = max(0, score - 18)
+                    reason_parts.append("当前分析会话里已执行过相同命令，已自动降权")
+                if score <= 0:
+                    continue
+                unique_reasons = list(dict.fromkeys(part for part in reason_parts if part))
+                scored_items.append(
+                    {
+                        **pack,
+                        "plugin_key": plugin.plugin_key,
+                        "display_name": serialized["display_name"],
+                        "score": score,
+                        "reason": "；".join(unique_reasons[:3]) or "基于当前上下文的默认只读诊断模板",
+                        "already_executed": already_executed,
+                    }
+                )
+
+        scored_items.sort(
+            key=lambda item: (
+                -int(item.get("score") or 0),
+                bool(item.get("already_executed")),
+                str(item.get("plugin_key") or ""),
+                str(item.get("template_id") or ""),
+            )
+        )
+        shortlisted = scored_items[:safe_limit]
+
+        grouped_items: dict[str, dict[str, Any]] = {}
+        for item in shortlisted:
+            plugin_group = grouped_items.setdefault(
+                str(item["plugin_key"]),
+                {
+                    "plugin_key": item["plugin_key"],
+                    "display_name": item["display_name"],
+                    "priority": int(item["score"]),
+                    "reason": item["reason"],
+                    "recommended_command_packs": [],
+                },
+            )
+            plugin_group["priority"] = max(int(plugin_group["priority"]), int(item["score"]))
+            plugin_group["recommended_command_packs"].append(
+                {
+                    "template_id": item["template_id"],
+                    "category_key": item["category_key"],
+                    "category_label": item["category_label"],
+                    "title": item["title"],
+                    "description": item["description"],
+                    "command": item["command"],
+                    "score": int(item["score"]),
+                    "reason": item["reason"],
+                    "already_executed": bool(item["already_executed"]),
+                }
+            )
+
+        items = sorted(grouped_items.values(), key=lambda item: (-int(item["priority"]), str(item["plugin_key"])))
+        return {
+            "context": {
+                "session_id": session.session_id if session else "",
+                "incident_id": incident.incident_id if incident else "",
+                "recommendation_id": recommendation.recommendation_id if recommendation else "",
+                "service_key": service_key,
+                "time_range": time_range,
+                "recommendation_kind": signals["recommendation_kind"],
+                "reasoning_tags": signals["reasoning_tags"],
+                "evidence_layers": signals["evidence_layers"],
+                "signals": signals["signals"],
+                "executor_result_ids": list(session.executor_result_ids) if session else [],
+            },
+            "items": items,
+            "recommended_total": len(shortlisted),
             "total": len(items),
         }
 

@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field
 
 from engine.runtime.models import ArtifactKind, TaskStatus
 
-from .deps import get_analysis_session_repository_dep, get_executor_service_dep, get_task_manager
+from .deps import (
+    get_analysis_session_repository_dep,
+    get_executor_service_dep,
+    get_incident_service,
+    get_recommendation_service,
+    get_task_manager,
+)
 
 router = APIRouter(prefix="/executors", tags=["executors"])
 
@@ -164,6 +170,48 @@ def _link_execution_to_analysis_session(
         "session_id": normalized_session_id,
         "execution_id": execution_id,
         "executor_result_ids": latest.executor_result_ids,
+        "service_key": latest.service_key,
+        "time_range": latest.time_range,
+    }
+
+
+def _resolve_recommended_command_context(
+    *,
+    analysis_session_repository,
+    incident_service,
+    recommendation_service,
+    session_id: str | None,
+    incident_id: str | None,
+    recommendation_id: str | None,
+) -> dict[str, Any]:
+    session = analysis_session_repository.get(session_id) if analysis_session_repository and session_id else None
+
+    resolved_recommendation_id = str(recommendation_id or (session.recommendation_id if session else "") or "").strip()
+    recommendation = None
+    if recommendation_service and resolved_recommendation_id:
+        recommendation = recommendation_service.repository.get(resolved_recommendation_id)
+
+    resolved_incident_id = str(
+        incident_id
+        or (session.incident_id if session else "")
+        or (recommendation.incident_id if recommendation else "")
+        or ""
+    ).strip()
+    incident = incident_service.get_incident(resolved_incident_id) if incident_service and resolved_incident_id else None
+
+    service_key = str(
+        (session.service_key if session else "")
+        or (incident.service_key if incident else "")
+        or ""
+    ).strip()
+    time_range = str((session.time_range if session else "") or "1h").strip() or "1h"
+
+    return {
+        "session": session,
+        "incident": incident,
+        "recommendation": recommendation,
+        "service_key": service_key,
+        "time_range": time_range,
     }
 
 
@@ -189,6 +237,45 @@ async def list_executor_readonly_command_packs(
 
     try:
         return executor_service.list_readonly_command_packs(plugin_key=plugin_key)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "不存在" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.get("/recommended-command-packs")
+async def list_executor_recommended_command_packs(
+    session_id: str | None = None,
+    incident_id: str | None = None,
+    recommendation_id: str | None = None,
+    plugin_key: str | None = None,
+    limit: int = 8,
+    executor_service=Depends(get_executor_service_dep),
+    analysis_session_repository=Depends(get_analysis_session_repository_dep),
+    incident_service=Depends(get_incident_service),
+    recommendation_service=Depends(get_recommendation_service),
+):
+    if not executor_service:
+        raise HTTPException(status_code=409, detail="执行插件服务未初始化")
+
+    try:
+        context = _resolve_recommended_command_context(
+            analysis_session_repository=analysis_session_repository,
+            incident_service=incident_service,
+            recommendation_service=recommendation_service,
+            session_id=session_id,
+            incident_id=incident_id,
+            recommendation_id=recommendation_id,
+        )
+        return executor_service.recommend_readonly_command_packs(
+            session=context["session"],
+            incident=context["incident"],
+            recommendation=context["recommendation"],
+            service_key=context["service_key"],
+            time_range=context["time_range"],
+            plugin_key=plugin_key,
+            limit=limit,
+        )
     except ValueError as exc:
         message = str(exc)
         status_code = 404 if "不存在" in message else 400
