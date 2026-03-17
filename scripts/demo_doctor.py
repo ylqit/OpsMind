@@ -71,6 +71,90 @@ def build_demo_walkthrough(frontend_base_url: str) -> list[dict[str, str]]:
     ]
 
 
+def build_demo_highlights(verification: dict[str, Any]) -> list[str]:
+    """输出适合 README 和演示准备阶段快速查看的高信号摘要。"""
+    counts = verification["counts"]
+    artifact_bundle = verification["artifact_bundle"]
+    coverage = verification["scenario_coverage"]
+    highlights = [
+        f"已准备 {counts['log_lines']} 行访问日志样本，可直接演示流量异常入口。",
+        f"演示场景覆盖 {coverage['ready_count']}/{coverage['total']}，当前状态为 {'完整' if coverage['all_ready'] else '部分可用'}。",
+        (
+            "建议三视图产物已完整。"
+            if artifact_bundle["complete"]
+            else "建议三视图产物未完全就绪，请先补齐 baseline / recommended / diff / metadata。"
+        ),
+        (
+            f"已写入 {counts['ai_call_logs']} 条 AI 调用样本和 {counts['usage_metrics']} 条质量指标样本。"
+            if counts["ai_call_logs"] > 0 and counts["usage_metrics"] > 0
+            else "AI 调用或质量指标样本不完整，质量看板演示会受影响。"
+        ),
+    ]
+    return highlights
+
+
+def build_recommended_sequence(
+    frontend_base_url: str,
+    verification: dict[str, Any],
+) -> list[dict[str, str]]:
+    """根据当前样本完整度输出更适合现场讲解的起手顺序。"""
+    base_url = frontend_base_url.rstrip("/")
+    coverage_items = {
+        item["scenario_key"]: item
+        for item in verification["scenario_coverage"]["items"]
+    }
+    sequence: list[dict[str, str]] = []
+
+    if coverage_items["traffic_incident_flow"]["ready"]:
+        sequence.append(
+            {
+                "step": "01",
+                "title": "从流量异常切入",
+                "url": f"{base_url}/traffic?time_range=1h",
+                "focus": "先讲最近一小时的请求趋势、5xx 样本和热点路径，再切入异常中心。",
+            }
+        )
+    if coverage_items["recommendation_task_flow"]["ready"]:
+        sequence.append(
+            {
+                "step": f"{len(sequence) + 1:02d}",
+                "title": "展示建议与任务闭环",
+                "url": f"{base_url}/recommendations?incidentId=incident_seed_001",
+                "focus": "重点讲三视图、风险提示、trace 和 artifact，体现可评审与可追踪。",
+            }
+        )
+    if coverage_items["ai_assistant_flow"]["ready"]:
+        sequence.append(
+            {
+                "step": f"{len(sequence) + 1:02d}",
+                "title": "接入 AI 助手上下文",
+                "url": f"{base_url}/assistant?source=incident&incidentId=incident_seed_001&service_key=seed%2Fdemo-service&time_range=1h",
+                "focus": "演示 AI 如何承接异常上下文、给出说明，并回写到异常、建议或任务。",
+            }
+        )
+    if coverage_items["quality_metrics_flow"]["ready"]:
+        sequence.append(
+            {
+                "step": f"{len(sequence) + 1:02d}",
+                "title": "质量看板与反馈收尾",
+                "url": f"{base_url}/quality",
+                "focus": "最后讲建议反馈、模型调用质量和只读执行边界，形成完整产品叙事。",
+            }
+        )
+
+    if not sequence:
+        sequence.append(
+            {
+                "step": "01",
+                "title": "先补齐演示数据",
+                "url": f"{base_url}/",
+                "focus": "当前样本不足，优先执行 seed 与 verify，再开始页面讲解。",
+            }
+        )
+
+    return sequence
+
+
 def collect_demo_doctor_report(
     config: RuntimeConfig,
     *,
@@ -80,7 +164,12 @@ def collect_demo_doctor_report(
     """汇总演示环境体检结果，便于本地联调和对外展示。"""
     verification = collect_demo_verification(config)
     walkthrough = build_demo_walkthrough(frontend_base_url.rstrip("/"))
+    recommended_sequence = build_recommended_sequence(frontend_base_url, verification)
     readiness = "ready" if verification["ok"] else "blocked"
+    scenario_coverage = verification["scenario_coverage"]
+    artifact_bundle = verification["artifact_bundle"]
+    counts = verification["counts"]
+    highlights = build_demo_highlights(verification)
     # 默认建议一条从总览到建议、再回到任务与质量看板的讲解路径。
     next_actions = [
         "先打开总览页确认页面数据已渲染。",
@@ -104,8 +193,27 @@ def collect_demo_doctor_report(
             "backend_health": f"{backend_base_url.rstrip('/')}/health",
             "dashboard_overview": f"{backend_base_url.rstrip('/')}/api/dashboard/overview",
         },
+        "entity_ids": verification["entity_ids"],
+        "summary": {
+            "service_key": verification["service_key"],
+            "log_lines": counts["log_lines"],
+            "artifact_total": counts["artifacts"],
+            "ai_call_log_total": counts["ai_call_logs"],
+            "usage_metrics_total": counts["usage_metrics"],
+            "ready_scenarios": scenario_coverage["ready_count"],
+            "total_scenarios": scenario_coverage["total"],
+            "artifact_bundle_complete": artifact_bundle["complete"],
+        },
+        "highlights": highlights,
+        "scenario_coverage": scenario_coverage,
+        "demo_assets": {
+            "artifact_bundle": artifact_bundle,
+            "artifact_kind_counts": verification["artifact_kind_counts"],
+        },
+        "blocking_issues": verification["issues"],
         "verification": verification,
         "walkthrough": walkthrough,
+        "recommended_sequence": recommended_sequence,
         "next_actions": next_actions,
     }
 

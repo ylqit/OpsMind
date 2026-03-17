@@ -70,6 +70,7 @@ opsMind/
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Demo Scenarios](docs/demo-scenarios.md)
 
 ## Quick Start
 
@@ -136,8 +137,10 @@ python scripts/demo_doctor.py --seed --write-report
 ```
 
 - `seed_demo_data.py`：初始化日志、异常、建议、任务和 artifact
-- `verify_demo_data.py`：检查演示数据是否完整
-- `demo_doctor.py`：输出演示环境报告，并写入 `data/demo/demo_report.json`
+- `verify_demo_data.py`：检查演示数据、场景覆盖和三视图产物是否完整
+- `demo_doctor.py`：输出演示环境报告、推荐讲解顺序和缺失项，并写入 `data/demo/demo_report.json`
+
+推荐演示路径见 [docs/demo-scenarios.md](docs/demo-scenarios.md)。
 
 ## API
 

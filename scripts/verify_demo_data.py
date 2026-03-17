@@ -38,6 +38,77 @@ def _read_line_count(path: Path) -> int:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
+def _build_artifact_bundle_summary(artifact_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    filenames = [Path(str(item["path"])).name for item in artifact_entries]
+    baseline_ready = any(name.endswith("-baseline.yaml") for name in filenames)
+    recommended_ready = any(name.endswith("-recommended.yaml") for name in filenames)
+    diff_ready = any(name.endswith(".diff") for name in filenames)
+    metadata_ready = any(name.endswith("-manifest-meta.json") for name in filenames)
+    return {
+        "baseline_ready": baseline_ready,
+        "recommended_ready": recommended_ready,
+        "diff_ready": diff_ready,
+        "metadata_ready": metadata_ready,
+        "complete": all([baseline_ready, recommended_ready, diff_ready, metadata_ready]),
+    }
+
+
+def _build_artifact_kind_counts(artifact_entries: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in artifact_entries:
+        kind = str(item.get("kind") or "unknown").strip() or "unknown"
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _build_scenario_coverage(
+    *,
+    checks: dict[str, bool],
+    counts: dict[str, int],
+    artifact_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    # 这些场景状态直接对应 README 和 demo 文档里的讲解路径，便于快速判断当前样本能演到哪一步。
+    items = [
+        {
+            "scenario_key": "traffic_incident_flow",
+            "title": "5xx 上升与高延迟样本",
+            "ready": bool(checks["seed_log_exists"] and counts["log_lines"] > 0 and checks["incident_exists"]),
+            "reason": "需要访问日志样本和 incident 记录。",
+        },
+        {
+            "scenario_key": "recommendation_task_flow",
+            "title": "建议草稿与任务闭环",
+            "ready": bool(
+                checks["task_exists"]
+                and checks["recommendation_exists"]
+                and checks["state_file_exists"]
+                and checks["trace_file_exists"]
+                and artifact_bundle["complete"]
+            ),
+            "reason": "需要 recommendation、task、trace 和完整三视图产物。",
+        },
+        {
+            "scenario_key": "ai_assistant_flow",
+            "title": "AI 助手接续异常上下文",
+            "ready": bool(checks["incident_exists"] and checks["ai_call_log_exists"]),
+            "reason": "需要 incident 上下文和 AI 调用样本。",
+        },
+        {
+            "scenario_key": "quality_metrics_flow",
+            "title": "质量看板与反馈闭环",
+            "ready": bool(checks["metrics_exists"] and counts["feedback_items"] > 0),
+            "reason": "需要 usage_metrics 和 recommendation feedback 样本。",
+        },
+    ]
+    ready_count = sum(1 for item in items if item["ready"])
+    return {
+        "ready_count": ready_count,
+        "total": len(items),
+        "all_ready": ready_count == len(items),
+        "items": items,
+    }
+
+
 def collect_demo_verification(config: RuntimeConfig) -> dict[str, Any]:
     """汇总当前演示数据是否完整，便于本地和 CI 做快速校验。"""
     config.ensure_directories()
@@ -135,22 +206,37 @@ def collect_demo_verification(config: RuntimeConfig) -> dict[str, Any]:
         issues.append("缺少 usage_metrics_daily 样本")
 
     ok = all(checks.values()) and not issues
+    artifact_bundle = _build_artifact_bundle_summary(artifact_entries)
+    counts = {
+        "log_lines": _read_line_count(seed_log_path),
+        "assets": len(assets),
+        "signals": len(signals),
+        "artifacts": len(artifacts),
+        "feedback_items": len(feedback_items),
+        "ai_call_logs": len(ai_calls),
+        "usage_metrics": len(metrics),
+    }
+    scenario_coverage = _build_scenario_coverage(
+        checks=checks,
+        counts=counts,
+        artifact_bundle=artifact_bundle,
+    )
     return {
         "ok": ok,
         "service_key": SERVICE_KEY,
+        "entity_ids": {
+            "task_id": TASK_ID,
+            "incident_id": INCIDENT_ID,
+            "recommendation_id": RECOMMENDATION_ID,
+        },
         "sqlite_path": str(sqlite_path),
         "seed_log_path": str(seed_log_path),
         "task_dir": str(task_dir),
         "checks": checks,
-        "counts": {
-            "log_lines": _read_line_count(seed_log_path),
-            "assets": len(assets),
-            "signals": len(signals),
-            "artifacts": len(artifacts),
-            "feedback_items": len(feedback_items),
-            "ai_call_logs": len(ai_calls),
-            "usage_metrics": len(metrics),
-        },
+        "counts": counts,
+        "artifact_bundle": artifact_bundle,
+        "artifact_kind_counts": _build_artifact_kind_counts(artifact_entries),
+        "scenario_coverage": scenario_coverage,
         "artifacts": artifact_entries,
         "issues": issues,
     }
