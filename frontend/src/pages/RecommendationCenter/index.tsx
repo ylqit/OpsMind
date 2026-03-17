@@ -5,6 +5,7 @@ import {
   aiApi,
   type AIAssistantStatusResponse,
   type ClaimRecord,
+  type DiagnosisReport,
   incidentsApi,
   recommendationsApi,
   tasksApi,
@@ -108,6 +109,13 @@ interface FeedbackDraft {
   action: RecommendationFeedbackAction
   reasonCode: string
   comment: string
+}
+
+interface ClaimEvidenceViewItem {
+  claim: ClaimRecord
+  evidenceItems: RecommendationEvidenceRef[]
+  unresolvedEvidenceIds: string[]
+  limitations: string[]
 }
 
 const feedbackActionLabel: Record<RecommendationFeedbackAction, string> = {
@@ -652,9 +660,13 @@ export const RecommendationCenter: React.FC = () => {
     () => (activeRecommendation ? detailByRecommendationId[activeRecommendation.recommendation_id] || null : null),
     [activeRecommendation, detailByRecommendationId],
   )
-  const activeRecommendationClaims = useMemo<ClaimRecord[]>(
-    () => activeRecommendationDetail?.claims || [],
+  const activeRecommendationDiagnosisReport = useMemo<DiagnosisReport | null>(
+    () => activeRecommendationDetail?.diagnosis_report || null,
     [activeRecommendationDetail],
+  )
+  const activeRecommendationClaims = useMemo<ClaimRecord[]>(
+    () => activeRecommendationDiagnosisReport?.claims?.length ? activeRecommendationDiagnosisReport.claims : activeRecommendationDetail?.claims || [],
+    [activeRecommendationDetail, activeRecommendationDiagnosisReport],
   )
   const activeAssistantWritebacks = useMemo(
     () => activeRecommendationDetail?.assistant_writebacks || [],
@@ -670,7 +682,10 @@ export const RecommendationCenter: React.FC = () => {
   )
   const groupedRecommendationEvidence = useMemo(() => {
     const groups: Record<string, RecommendationEvidenceRef[]> = {}
-    for (const item of activeRecommendationDetail?.evidence_refs || []) {
+    const evidenceItems = activeRecommendationDiagnosisReport?.evidence_refs?.length
+      ? activeRecommendationDiagnosisReport.evidence_refs
+      : activeRecommendationDetail?.evidence_refs || []
+    for (const item of evidenceItems) {
       const groupKey = getRecommendationEvidenceGroupKey(item)
       groups[groupKey] = groups[groupKey] || []
       groups[groupKey].push(item)
@@ -682,7 +697,52 @@ export const RecommendationCenter: React.FC = () => {
         return leftOrder - rightOrder
       })
       .map(([groupKey, items]) => [groupKey, items] as const)
-  }, [activeRecommendationDetail])
+  }, [activeRecommendationDetail, activeRecommendationDiagnosisReport])
+  const activeRecommendationClaimEvidenceRows = useMemo<ClaimEvidenceViewItem[]>(() => {
+    if (!activeRecommendationDetail) {
+      return []
+    }
+
+    const evidenceItems = activeRecommendationDiagnosisReport?.evidence_refs?.length
+      ? activeRecommendationDiagnosisReport.evidence_refs
+      : activeRecommendationDetail.evidence_refs || []
+    const evidenceMap = new Map(evidenceItems.map((item) => [String(item.evidence_id || '').trim(), item] as const))
+    const reportLimitations = activeRecommendationDiagnosisReport?.limitations || []
+
+    return activeRecommendationClaims.map((claim) => {
+      const relatedEvidence = claim.evidence_ids
+        .map((evidenceId) => evidenceMap.get(String(evidenceId || '').trim()))
+        .filter((item): item is RecommendationEvidenceRef => Boolean(item))
+      const relatedEvidenceIds = new Set(relatedEvidence.map((item) => String(item.evidence_id || '').trim()))
+      const unresolvedEvidenceIds = claim.evidence_ids.filter((evidenceId) => !relatedEvidenceIds.has(String(evidenceId || '').trim()))
+      const mergedLimitations = [...claim.limitations, ...reportLimitations].filter((item, index, array) => {
+        const normalized = String(item || '').trim()
+        return Boolean(normalized) && array.findIndex((value) => String(value || '').trim() === normalized) === index
+      })
+      return {
+        claim,
+        evidenceItems: relatedEvidence,
+        unresolvedEvidenceIds,
+        limitations: mergedLimitations,
+      }
+    })
+  }, [activeRecommendationClaims, activeRecommendationDetail, activeRecommendationDiagnosisReport])
+  const recommendationDiagnosisSummary = useMemo(() => {
+    if (!activeRecommendation || !activeRecommendationDetail) {
+      return null
+    }
+    return {
+      summary:
+        activeRecommendationDiagnosisReport?.summary
+        || activeRecommendationDetail.recommendation_effective
+        || activeRecommendation.recommendation,
+      riskLevel:
+        activeRecommendationDiagnosisReport?.risk_level
+        || (activeRecommendationDetail.confidence_effective >= 0.75 ? 'medium' : 'low'),
+      nextActions: activeRecommendationDiagnosisReport?.next_actions || [],
+      limitations: activeRecommendationDiagnosisReport?.limitations || [],
+    }
+  }, [activeRecommendation, activeRecommendationDetail, activeRecommendationDiagnosisReport])
   const activeTaskContext = useMemo(
     () => activeRecommendationDetail?.task_context || null,
     [activeRecommendationDetail],
@@ -1828,27 +1888,112 @@ export const RecommendationCenter: React.FC = () => {
                     </Card>
                   ) : null}
 
-                  {activeRecommendationClaims.length ? (
-                    <Card type="inner" title="结论拆解" size="small">
+                  {activeRecommendationClaimEvidenceRows.length ? (
+                    <Card
+                      type="inner"
+                      title="建议依据与证据对照"
+                      size="small"
+                      extra={
+                        <Space wrap size={8}>
+                          {recommendationDiagnosisSummary ? (
+                            <Tag color={getRiskLevelColor(String(recommendationDiagnosisSummary.riskLevel || 'medium'))}>
+                              风险 {String(recommendationDiagnosisSummary.riskLevel || 'medium')}
+                            </Tag>
+                          ) : null}
+                          <Button size="small" type="link" onClick={() => setEvidenceDrawerOpen(true)}>
+                            查看完整证据
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      {recommendationDiagnosisSummary ? (
+                        <div style={{ marginBottom: 14 }}>
+                          <Paragraph style={{ marginBottom: 8 }}>{recommendationDiagnosisSummary.summary}</Paragraph>
+                          {recommendationDiagnosisSummary.nextActions.length ? (
+                            <Space wrap style={{ marginBottom: recommendationDiagnosisSummary.limitations.length ? 8 : 0 }}>
+                              <Text type="secondary">下一步：</Text>
+                              {recommendationDiagnosisSummary.nextActions.map((item) => (
+                                <Tag key={`next-action-${item}`} color="blue">{item}</Tag>
+                              ))}
+                            </Space>
+                          ) : null}
+                          {recommendationDiagnosisSummary.limitations.length ? (
+                            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                              限制：{recommendationDiagnosisSummary.limitations.join('；')}
+                            </Paragraph>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <List
                         size="small"
-                        dataSource={activeRecommendationClaims}
-                        renderItem={(item) => {
-                          const meta = getClaimMeta(item.kind)
+                        split={false}
+                        dataSource={activeRecommendationClaimEvidenceRows}
+                        renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
+                          const meta = getClaimMeta(claim.kind)
                           return (
-                            <List.Item>
-                              <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                <Space wrap>
+                            <List.Item style={{ paddingInline: 0 }}>
+                              <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
+                                <Space wrap style={{ marginBottom: 8 }}>
                                   <Tag color={meta.color}>{meta.label}</Tag>
-                                  {item.title ? <Text strong>{item.title}</Text> : null}
-                                  <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
-                                  <Tag>证据 {item.evidence_ids.length}</Tag>
+                                  {claim.title ? <Text strong>{claim.title}</Text> : null}
+                                  <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
+                                  <Tag>证据 {claim.evidence_ids.length}</Tag>
+                                  {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
                                 </Space>
-                                <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
-                                {item.limitations.length ? (
-                                  <Text type="secondary">限制：{item.limitations.join('；')}</Text>
+                                <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
+                                <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
+                                  <Text strong>证据引用</Text>
+                                  {evidenceItems.length ? (
+                                    <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                                      {evidenceItems.map((item) => {
+                                        const groupKey = getRecommendationEvidenceGroupKey(item)
+                                        const groupMeta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
+                                        return (
+                                          <div
+                                            key={String(item.evidence_id)}
+                                            style={{
+                                              borderRadius: 10,
+                                              padding: '10px 12px',
+                                              background: 'rgba(248, 250, 252, 0.95)',
+                                              border: '1px solid rgba(15, 23, 42, 0.06)',
+                                            }}
+                                          >
+                                            <Space wrap style={{ marginBottom: 6 }}>
+                                              <Tag color={groupMeta.color}>{getEvidenceSourceLabel(item.source_type)}</Tag>
+                                              <Text strong>{item.title}</Text>
+                                              {item.metric ? <Text code>{item.metric}</Text> : null}
+                                              {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                                            </Space>
+                                            <Paragraph style={{ marginBottom: 0 }}>
+                                              {item.summary || getRecommendationEvidenceSnippet(item) || '暂无证据摘要'}
+                                            </Paragraph>
+                                          </div>
+                                        )
+                                      })}
+                                    </Space>
+                                  ) : (
+                                    <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                      当前结论还没有可直接展开的证据卡片，请打开证据抽屉查看完整现场。
+                                    </Paragraph>
+                                  )}
+                                </div>
+                                {limitations.length ? (
+                                  <div style={{ marginTop: 10 }}>
+                                    <Text strong>风险说明与限制项</Text>
+                                    <List
+                                      size="small"
+                                      split={false}
+                                      dataSource={limitations}
+                                      style={{ marginTop: 6 }}
+                                      renderItem={(item) => (
+                                        <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
+                                          <Text type="secondary">{item}</Text>
+                                        </List.Item>
+                                      )}
+                                    />
+                                  </div>
                                 ) : null}
-                              </Space>
+                              </div>
                             </List.Item>
                           )
                         }}
