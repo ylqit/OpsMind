@@ -21,17 +21,23 @@ jobs:
           required_files=(
             "README.md"
             "README_EN.md"
+            "CHANGELOG.md"
             "LICENSE"
             "CONTRIBUTING.md"
             "CODE_OF_CONDUCT.md"
             "SECURITY.md"
+            ".editorconfig"
             ".env.example"
             "docker-compose.yml"
+            "docs/docs-index.md"
             "docs/architecture.md"
+            "docs/architecture.en.md"
             "docs/api-overview.md"
             "docs/deployment.md"
             "docs/project-scope.md"
+            "docs/project-scope.en.md"
             "docs/demo-scenarios.md"
+            "docs/verification.md"
             "docs/release.md"
             ".github/PULL_REQUEST_TEMPLATE.md"
           )
@@ -55,6 +61,31 @@ jobs:
 
           if ! grep -q "SECURITY.md" README.md; then
             echo "README.md must link to SECURITY.md"
+            exit 1
+          fi
+
+          if ! grep -q "docs/docs-index.md" README.md; then
+            echo "README.md must link to docs/docs-index.md"
+            exit 1
+          fi
+
+          if ! grep -q "docs/docs-index.md" README_EN.md; then
+            echo "README_EN.md must link to docs/docs-index.md"
+            exit 1
+          fi
+
+          if ! grep -q "verification.md" docs/docs-index.md; then
+            echo "docs/docs-index.md must link to verification.md"
+            exit 1
+          fi
+
+          if ! grep -q "architecture.md" docs/docs-index.md; then
+            echo "docs/docs-index.md must link to architecture.md"
+            exit 1
+          fi
+
+          if ! grep -q "release.md" docs/docs-index.md; then
+            echo "docs/docs-index.md must link to release.md"
             exit 1
           fi
 

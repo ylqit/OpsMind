@@ -31,7 +31,7 @@ logs / metrics / assets
   -> ai assistant / quality metrics
 ```
 
-详细模块说明见 [docs/architecture.md](docs/architecture.md)。
+详细模块说明见 [docs/architecture.md](docs/architecture.md)，推荐阅读顺序见 [docs/docs-index.md](docs/docs-index.md)。
 
 ## Tech Stack
 
@@ -71,16 +71,25 @@ opsMind/
 
 ## Documentation
 
+- [Documentation Index](docs/docs-index.md)
 - [English README](README_EN.md)
 - [Architecture](docs/architecture.md)
+- [Architecture (EN)](docs/architecture.en.md)
 - [API Overview](docs/api-overview.md)
 - [Deployment Guide](docs/deployment.md)
 - [Project Scope](docs/project-scope.md)
+- [Project Scope (EN)](docs/project-scope.en.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
+- [Verification Matrix](docs/verification.md)
 - [Release Guide](docs/release.md)
-- [Contributing](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+
+## Community
+
+- 贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 社区协作规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- 安全问题披露见 [SECURITY.md](SECURITY.md)
+- 默认模块归属见 [.github/CODEOWNERS](.github/CODEOWNERS)
 
 ## Quick Start
 
@@ -188,12 +197,7 @@ npm run build
 
 ## Contributing
 
-欢迎通过 Issue 和 Pull Request 参与改进。
-
-- 提交问题前，先查看 README、架构文档和演示文档
-- 提交 PR 时，请说明变更背景、主要改动和本地验证结果
-- 详细协作说明见 [CONTRIBUTING.md](CONTRIBUTING.md)
-- 社区协作行为规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+欢迎通过 Issue 和 Pull Request 参与改进。详细协作流程、模块归属和提交期望见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## License
 

@@ -31,7 +31,8 @@ logs / metrics / assets
   -> ai assistant / quality metrics
 ```
 
-For a detailed module walkthrough, see [docs/architecture.md](docs/architecture.md).
+For a detailed module walkthrough, see [docs/architecture.en.md](docs/architecture.en.md).
+For a recommended reading order, start with [docs/docs-index.md](docs/docs-index.md).
 
 ## Tech Stack
 
@@ -71,15 +72,24 @@ opsMind/
 
 ## Documentation
 
+- [Documentation Index](docs/docs-index.md)
+- [Architecture (EN)](docs/architecture.en.md)
 - [Architecture](docs/architecture.md)
 - [API Overview](docs/api-overview.md)
 - [Deployment Guide](docs/deployment.md)
+- [Project Scope (EN)](docs/project-scope.en.md)
 - [Project Scope](docs/project-scope.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
+- [Verification Matrix](docs/verification.md)
 - [Release Guide](docs/release.md)
-- [Contributing](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+
+## Community
+
+- Contribution process: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Participation standards: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Security disclosure: [SECURITY.md](SECURITY.md)
+- Default review ownership: [.github/CODEOWNERS](.github/CODEOWNERS)
 
 ## Quick Start
 
@@ -187,12 +197,7 @@ npm run build
 
 ## Contributing
 
-Contributions through Issues and Pull Requests are welcome.
-
-- Review the README, architecture doc, and demo scenarios before opening a new issue
-- When submitting a PR, explain the background, key changes, and local verification steps
-- See [CONTRIBUTING.md](CONTRIBUTING.md) for the detailed collaboration guide
-- See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community participation standards
+Contributions through Issues and Pull Requests are welcome. For the contribution flow, ownership rules, and review expectations, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

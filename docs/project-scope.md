@@ -1,5 +1,7 @@
 # Project Scope
 
+English version: [project-scope.en.md](./project-scope.en.md)
+
 本文档用于说明 `opsMind` 当前版本的产品边界、可演进方向，以及涉及执行与修复能力时应遵循的安全前提。
 
 ## Current Focus

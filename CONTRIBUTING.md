@@ -9,7 +9,8 @@
 ## Before You Start
 
 - 先阅读 [README.md](README.md)
-- 再阅读 [docs/architecture.md](docs/architecture.md) 和 [docs/demo-scenarios.md](docs/demo-scenarios.md)
+- 再查看 [docs/docs-index.md](docs/docs-index.md) 了解文档阅读顺序
+- 如需本地运行、构建或最小验证命令，优先查看 [docs/deployment.md](docs/deployment.md) 与 [docs/verification.md](docs/verification.md)
 - 优先在现有模块内扩展能力，避免引入与当前主链路无关的新页面或新子系统
 
 ## Contribution Scope
@@ -61,45 +62,18 @@
 - 本地验证结果
 
 默认模块归属规则见 [.github/CODEOWNERS](.github/CODEOWNERS)。如果改动跨越多个模块，建议在 PR 描述里明确说明影响范围。
+
 GitHub PR 默认会触发最小发布质量门，至少检查关键开源文档、后端导入和前端构建是否可用。
 
 ## Development Notes
 
-### Backend
+- Backend：Python 3.10+、FastAPI、SQLite
+- Frontend：Node.js 18+、React 19、Vite
 
-- Python 3.10+
-- FastAPI
-- SQLite
+本地启动、构建检查和公开版最小 smoke，请直接参考：
 
-本地启动：
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
-```
-
-### Frontend
-
-- Node.js 18+
-- React 19
-- Vite
-
-本地启动：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-构建检查：
-
-```bash
-cd frontend
-npm run build
-```
+- [docs/deployment.md](docs/deployment.md)
+- [docs/verification.md](docs/verification.md)
 
 ## Code Style
 

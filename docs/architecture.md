@@ -1,5 +1,7 @@
 # opsMind Architecture
 
+English version: [architecture.en.md](./architecture.en.md)
+
 ## Overview
 
 `opsMind` 是一个面向运维分析场景的全栈应用，核心目标是把流量、资源、异常、建议、任务和 AI 辅助诊断放到同一条产品链路里。
