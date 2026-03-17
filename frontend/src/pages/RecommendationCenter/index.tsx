@@ -118,6 +118,24 @@ interface ClaimEvidenceViewItem {
   limitations: string[]
 }
 
+interface RecommendationEvidenceTimelineItem {
+  item: RecommendationEvidenceRef
+  groupKey: string
+  title: string
+  timestamp: string | null
+  timeLabel: string
+  hasTimestamp: boolean
+  snippet: string
+  sortValue: number
+}
+
+interface RecommendationEvidenceGroupSummaryItem {
+  groupKey: string
+  count: number
+  highConfidenceCount: number
+  latestTimeLabel: string
+}
+
 const feedbackActionLabel: Record<RecommendationFeedbackAction, string> = {
   adopt: '采纳',
   reject: '拒绝',
@@ -265,6 +283,48 @@ const buildRecommendationEvidenceLocatorTags = (item: RecommendationEvidenceRef)
 const getRecommendationEvidenceSnippet = (item: RecommendationEvidenceRef) => {
   const snippet = String(item.snippet || item.quote || '').trim()
   return snippet
+}
+
+const getRecommendationEvidenceTitle = (item: RecommendationEvidenceRef) => {
+  return String(item.title || item.metric || item.source || '证据项')
+}
+
+const getRecommendationEvidenceTimestamp = (item: RecommendationEvidenceRef) => {
+  const locator = (item.locator || item.source_ref || {}) as Record<string, unknown>
+  const timestamp = String(
+    locator.timestamp
+    || item.time_range?.end
+    || item.time_range?.start
+    || '',
+  ).trim()
+  return timestamp || null
+}
+
+const formatRecommendationEvidenceTime = (timestamp: string | null) => {
+  if (!timestamp) {
+    return '未标记时间'
+  }
+  const parsed = new Date(timestamp)
+  if (Number.isNaN(parsed.getTime())) {
+    return timestamp
+  }
+  return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+const buildRecommendationEvidenceTimelineItem = (item: RecommendationEvidenceRef): RecommendationEvidenceTimelineItem => {
+  const timestamp = getRecommendationEvidenceTimestamp(item)
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN
+  const hasTimestamp = Boolean(timestamp && !Number.isNaN(parsed))
+  return {
+    item,
+    groupKey: getRecommendationEvidenceGroupKey(item),
+    title: getRecommendationEvidenceTitle(item),
+    timestamp,
+    timeLabel: formatRecommendationEvidenceTime(timestamp),
+    hasTimestamp,
+    snippet: getRecommendationEvidenceSnippet(item),
+    sortValue: hasTimestamp ? parsed : -1,
+  }
 }
 
 const claimMeta: Record<string, { label: string; color: string }> = {
@@ -668,6 +728,14 @@ export const RecommendationCenter: React.FC = () => {
     () => activeRecommendationDiagnosisReport?.claims?.length ? activeRecommendationDiagnosisReport.claims : activeRecommendationDetail?.claims || [],
     [activeRecommendationDetail, activeRecommendationDiagnosisReport],
   )
+  const activeRecommendationEvidenceItems = useMemo(() => {
+    if (!activeRecommendationDetail) {
+      return [] as RecommendationEvidenceRef[]
+    }
+    return activeRecommendationDiagnosisReport?.evidence_refs?.length
+      ? activeRecommendationDiagnosisReport.evidence_refs
+      : activeRecommendationDetail.evidence_refs || []
+  }, [activeRecommendationDetail, activeRecommendationDiagnosisReport])
   const activeAssistantWritebacks = useMemo(
     () => activeRecommendationDetail?.assistant_writebacks || [],
     [activeRecommendationDetail],
@@ -682,10 +750,7 @@ export const RecommendationCenter: React.FC = () => {
   )
   const groupedRecommendationEvidence = useMemo(() => {
     const groups: Record<string, RecommendationEvidenceRef[]> = {}
-    const evidenceItems = activeRecommendationDiagnosisReport?.evidence_refs?.length
-      ? activeRecommendationDiagnosisReport.evidence_refs
-      : activeRecommendationDetail?.evidence_refs || []
-    for (const item of evidenceItems) {
+    for (const item of activeRecommendationEvidenceItems) {
       const groupKey = getRecommendationEvidenceGroupKey(item)
       groups[groupKey] = groups[groupKey] || []
       groups[groupKey].push(item)
@@ -697,16 +762,13 @@ export const RecommendationCenter: React.FC = () => {
         return leftOrder - rightOrder
       })
       .map(([groupKey, items]) => [groupKey, items] as const)
-  }, [activeRecommendationDetail, activeRecommendationDiagnosisReport])
+  }, [activeRecommendationEvidenceItems])
   const activeRecommendationClaimEvidenceRows = useMemo<ClaimEvidenceViewItem[]>(() => {
     if (!activeRecommendationDetail) {
       return []
     }
 
-    const evidenceItems = activeRecommendationDiagnosisReport?.evidence_refs?.length
-      ? activeRecommendationDiagnosisReport.evidence_refs
-      : activeRecommendationDetail.evidence_refs || []
-    const evidenceMap = new Map(evidenceItems.map((item) => [String(item.evidence_id || '').trim(), item] as const))
+    const evidenceMap = new Map(activeRecommendationEvidenceItems.map((item) => [String(item.evidence_id || '').trim(), item] as const))
     const reportLimitations = activeRecommendationDiagnosisReport?.limitations || []
 
     return activeRecommendationClaims.map((claim) => {
@@ -726,7 +788,35 @@ export const RecommendationCenter: React.FC = () => {
         limitations: mergedLimitations,
       }
     })
-  }, [activeRecommendationClaims, activeRecommendationDetail, activeRecommendationDiagnosisReport])
+  }, [activeRecommendationClaims, activeRecommendationDetail, activeRecommendationDiagnosisReport, activeRecommendationEvidenceItems])
+  const recommendationEvidenceTimeline = useMemo<RecommendationEvidenceTimelineItem[]>(() => {
+    return activeRecommendationEvidenceItems
+      .map((item) => buildRecommendationEvidenceTimelineItem(item))
+      .sort((left, right) => {
+        if (left.sortValue !== right.sortValue) {
+          return right.sortValue - left.sortValue
+        }
+        const leftConfidence = typeof left.item.confidence === 'number' ? left.item.confidence : 0
+        const rightConfidence = typeof right.item.confidence === 'number' ? right.item.confidence : 0
+        if (leftConfidence !== rightConfidence) {
+          return rightConfidence - leftConfidence
+        }
+        return left.title.localeCompare(right.title)
+      })
+  }, [activeRecommendationEvidenceItems])
+  const recommendationEvidenceGroupSummary = useMemo<RecommendationEvidenceGroupSummaryItem[]>(() => {
+    return groupedRecommendationEvidence.map(([groupKey, items]) => {
+      const latestTimedEvidence = items
+        .map((item) => buildRecommendationEvidenceTimelineItem(item))
+        .find((timelineItem) => timelineItem.hasTimestamp)
+      return {
+        groupKey,
+        count: items.length,
+        highConfidenceCount: items.filter((item) => (item.confidence || 0) >= 0.75).length,
+        latestTimeLabel: latestTimedEvidence?.timeLabel || '未标记时间',
+      }
+    })
+  }, [groupedRecommendationEvidence])
   const recommendationDiagnosisSummary = useMemo(() => {
     if (!activeRecommendation || !activeRecommendationDetail) {
       return null
@@ -1860,6 +1950,98 @@ export const RecommendationCenter: React.FC = () => {
                     onOpenTask={(taskId) => jumpToTaskCenter(taskId)}
                   />
 
+                  {recommendationEvidenceTimeline.length ? (
+                    <Card
+                      type="inner"
+                      title="证据时间线与分层摘要"
+                      size="small"
+                      style={{ marginBottom: 16 }}
+                      extra={
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => activeRecommendation && void openEvidenceDrawer(activeRecommendation)}
+                        >
+                          查看完整证据
+                        </Button>
+                      }
+                    >
+                      <Row gutter={[16, 16]}>
+                        <Col xs={24} lg={9}>
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Alert
+                              type={activeRecommendationDetail?.evidence_status === 'sufficient' ? 'info' : 'warning'}
+                              showIcon
+                              message={`共 ${activeRecommendationEvidenceItems.length} 条证据，已按时间倒序整理`}
+                              description={
+                                recommendationEvidenceTimeline[0]?.hasTimestamp
+                                  ? `最近现场时间：${recommendationEvidenceTimeline[0].timeLabel}`
+                                  : '当前证据缺少统一时间戳，已按置信度补位展示。'
+                              }
+                            />
+                            <List
+                              size="small"
+                              dataSource={recommendationEvidenceGroupSummary}
+                              renderItem={(item) => {
+                                const meta = recommendationEvidenceGroupMeta[item.groupKey] || recommendationEvidenceGroupMeta.other
+                                return (
+                                  <List.Item style={{ paddingInline: 0 }}>
+                                    <div style={{ width: '100%' }}>
+                                      <Space wrap style={{ marginBottom: 6 }}>
+                                        <Tag color={meta.color}>{meta.label}</Tag>
+                                        <Tag>{item.count} 条</Tag>
+                                        {item.highConfidenceCount ? <Tag color="blue">高置信度 {item.highConfidenceCount}</Tag> : null}
+                                      </Space>
+                                      <Text type="secondary">最近时间：{item.latestTimeLabel}</Text>
+                                    </div>
+                                  </List.Item>
+                                )
+                              }}
+                            />
+                          </Space>
+                        </Col>
+                        <Col xs={24} lg={15}>
+                          <List
+                            size="small"
+                            dataSource={recommendationEvidenceTimeline.slice(0, 8)}
+                            renderItem={({ item, groupKey, title, timeLabel, snippet, hasTimestamp }) => {
+                              const meta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
+                              return (
+                                <List.Item
+                                  actions={[
+                                    <Button
+                                      key={`view-timeline-${item.evidence_id}`}
+                                      size="small"
+                                      type="link"
+                                      onClick={() => activeRecommendation && void openEvidenceDrawer(activeRecommendation)}
+                                    >
+                                      查看证据
+                                    </Button>,
+                                    <Button key={`jump-timeline-${item.evidence_id}`} size="small" onClick={() => void jumpToEvidence(item)}>
+                                      跳转定位
+                                    </Button>,
+                                  ]}
+                                >
+                                  <div style={{ width: '100%' }}>
+                                    <Space wrap style={{ marginBottom: 6 }}>
+                                      <Tag color={meta.color}>{meta.label}</Tag>
+                                      <Text strong>{title}</Text>
+                                      <Tag color={hasTimestamp ? 'default' : 'warning'}>{timeLabel}</Tag>
+                                      {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                                    </Space>
+                                    <Paragraph style={{ marginBottom: 0 }}>
+                                      {item.summary || snippet || '暂无证据摘要'}
+                                    </Paragraph>
+                                  </div>
+                                </List.Item>
+                              )
+                            }}
+                          />
+                        </Col>
+                      </Row>
+                    </Card>
+                  ) : null}
+
                   {activeFeedbackPayload ? (
                     <Card type="inner" title="反馈闭环" size="small" loading={Boolean(activeRecommendation) && feedbackLoadingId === activeRecommendation?.recommendation_id}>
                       <Space wrap style={{ marginBottom: 10 }}>
@@ -2172,6 +2354,37 @@ export const RecommendationCenter: React.FC = () => {
               <Text strong>建议结论：</Text>
               {activeRecommendationDetail.recommendation_effective}
             </Paragraph>
+            <Card type="inner" title="证据时间线" size="small">
+              <List
+                size="small"
+                dataSource={recommendationEvidenceTimeline}
+                locale={{ emptyText: '暂无可展示的证据时间线' }}
+                renderItem={({ item, groupKey, title, timeLabel, snippet, hasTimestamp }) => {
+                  const meta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
+                  return (
+                    <List.Item
+                      actions={[
+                        <Button key={`drawer-timeline-${item.evidence_id}`} size="small" onClick={() => void jumpToEvidence(item)}>
+                          跳转定位
+                        </Button>,
+                      ]}
+                    >
+                      <div style={{ width: '100%' }}>
+                        <Space wrap style={{ marginBottom: 6 }}>
+                          <Tag color={meta.color}>{meta.label}</Tag>
+                          <Text strong>{title}</Text>
+                          <Tag color={hasTimestamp ? 'default' : 'warning'}>{timeLabel}</Tag>
+                          {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                        </Space>
+                        <Paragraph style={{ marginBottom: 0 }}>
+                          {item.summary || snippet || '暂无证据摘要'}
+                        </Paragraph>
+                      </div>
+                    </List.Item>
+                  )
+                }}
+              />
+            </Card>
             <div>
               <Text strong style={{ display: 'block', marginBottom: 8 }}>现场日志样本</Text>
               <List

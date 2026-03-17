@@ -54,6 +54,24 @@ interface ClaimEvidenceViewItem {
   limitations: string[]
 }
 
+interface EvidenceTimelineItem {
+  item: EvidenceItem
+  title: string
+  layer: string
+  timestamp: string | null
+  timeLabel: string
+  hasTimestamp: boolean
+  snippet: string
+  sortValue: number
+}
+
+interface EvidenceLayerSummaryItem {
+  layer: string
+  count: number
+  highPriorityCount: number
+  latestTimeLabel: string
+}
+
 const layerMeta: Record<string, { title: string; color: string; order: number }> = {
   diagnosis: { title: '关联判断', color: 'purple', order: 0 },
   traffic: { title: '流量证据', color: 'blue', order: 1 },
@@ -162,6 +180,38 @@ const getIncidentEvidenceSnippet = (item: EvidenceItem) => {
   return ''
 }
 
+const getIncidentEvidenceTitle = (item: EvidenceItem) => {
+  return String(item.title || item.name || item.metric || item.type || '证据项')
+}
+
+const getIncidentEvidenceTimestamp = (item: EvidenceItem) => {
+  const locator = getIncidentEvidenceLocator(item)
+  const timestamp = String(
+    locator.timestamp
+    || item.time_range?.end
+    || item.time_range?.start
+    || item.source_ref?.timestamp
+    || '',
+  ).trim()
+  return timestamp || null
+}
+
+const buildIncidentEvidenceTimelineItem = (item: EvidenceItem): EvidenceTimelineItem => {
+  const timestamp = getIncidentEvidenceTimestamp(item)
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN
+  const hasTimestamp = Boolean(timestamp && !Number.isNaN(parsed))
+  return {
+    item,
+    title: getIncidentEvidenceTitle(item),
+    layer: typeof item.layer === 'string' && item.layer.trim() ? item.layer : 'other',
+    timestamp,
+    timeLabel: hasTimestamp ? formatSampleTime(timestamp as string) : '未标记时间',
+    hasTimestamp,
+    snippet: getIncidentEvidenceSnippet(item),
+    sortValue: hasTimestamp ? parsed : -1,
+  }
+}
+
 const isProviderUnavailableError = (error: unknown) => {
   if (!(error instanceof Error)) {
     return false
@@ -231,10 +281,19 @@ export const IncidentCenter: React.FC = () => {
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
   const [error, setError] = useState('')
 
+  // 证据统一优先消费诊断报告，避免详情页和抽屉各自使用不同口径。
+  const incidentEvidenceItems = useMemo(() => {
+    const reportEvidence = (selectedIncident?.diagnosis_report?.evidence_refs || []) as EvidenceItem[]
+    if (reportEvidence.length) {
+      return reportEvidence
+    }
+    return (selectedIncident?.incident.evidence_refs || []) as EvidenceItem[]
+  }, [selectedIncident])
+
   // 先在页面内完成证据分层，保持异常详情、摘要卡片和证据链展示口径一致。
   const groupedEvidence = useMemo(() => {
     const groups: Record<string, EvidenceItem[]> = {}
-    const items = (selectedIncident?.incident.evidence_refs || []) as EvidenceItem[]
+    const items = incidentEvidenceItems
     for (const item of items) {
       const layer = typeof item.layer === 'string'
         ? item.layer
@@ -253,7 +312,7 @@ export const IncidentCenter: React.FC = () => {
     return Object.entries(groups)
       .sort((left, right) => (layerMeta[left[0]]?.order || 99) - (layerMeta[right[0]]?.order || 99))
       .map(([layer, items]) => [layer, sortEvidenceItems(items)] as const)
-  }, [selectedIncident])
+  }, [incidentEvidenceItems])
 
   // 优先展示后端汇总出的诊断摘要，缺失时再回退到证据链和异常本身的摘要字段。
   const diagnosisSummary = useMemo(() => {
@@ -313,6 +372,37 @@ export const IncidentCenter: React.FC = () => {
       }
     })
   }, [incidentClaims, incidentDiagnosisReport, selectedIncident])
+
+  // 时间线按现场时间倒序展示，缺少时间戳的证据会保留在末尾，避免直接丢失上下文。
+  const incidentEvidenceTimeline = useMemo<EvidenceTimelineItem[]>(() => {
+    return incidentEvidenceItems
+      .map((item) => buildIncidentEvidenceTimelineItem(item))
+      .sort((left, right) => {
+        if (left.sortValue !== right.sortValue) {
+          return right.sortValue - left.sortValue
+        }
+        const leftPriority = typeof left.item.priority === 'number' ? left.item.priority : 0
+        const rightPriority = typeof right.item.priority === 'number' ? right.item.priority : 0
+        if (leftPriority !== rightPriority) {
+          return rightPriority - leftPriority
+        }
+        return left.title.localeCompare(right.title)
+      })
+  }, [incidentEvidenceItems])
+
+  const incidentEvidenceLayerSummary = useMemo<EvidenceLayerSummaryItem[]>(() => {
+    return groupedEvidence.map(([layer, items]) => {
+      const latestTimedEvidence = items
+        .map((item) => buildIncidentEvidenceTimelineItem(item))
+        .find((timelineItem) => timelineItem.hasTimestamp)
+      return {
+        layer,
+        count: items.length,
+        highPriorityCount: items.filter((item) => (item.signal_strength || 'low') === 'high').length,
+        latestTimeLabel: latestTimedEvidence?.timeLabel || '未标记时间',
+      }
+    })
+  }, [groupedEvidence])
 
   const visibleRecommendationTask = useMemo(() => {
     if (!selectedIncident || !recommendationTask) {
@@ -947,6 +1037,87 @@ export const IncidentCenter: React.FC = () => {
                   onOpenTask={(taskId) => navigate(`/tasks?taskId=${encodeURIComponent(taskId)}`)}
                 />
 
+                {incidentEvidenceTimeline.length ? (
+                  <Card
+                    type="inner"
+                    title="证据时间线与分层摘要"
+                    extra={<Button size="small" type="link" onClick={openEvidenceDrawer}>查看完整证据</Button>}
+                    style={{ marginBottom: 16 }}
+                  >
+                    <Row gutter={[16, 16]}>
+                      <Col xs={24} lg={9}>
+                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                          <Alert
+                            type="info"
+                            showIcon
+                            message={`共 ${incidentEvidenceItems.length} 条证据，已按时间倒序整理`}
+                            description={
+                              incidentEvidenceTimeline[0]?.hasTimestamp
+                                ? `最近现场时间：${incidentEvidenceTimeline[0].timeLabel}`
+                                : '当前证据缺少统一时间戳，已按优先级补位展示。'
+                            }
+                          />
+                          <List
+                            size="small"
+                            dataSource={incidentEvidenceLayerSummary}
+                            renderItem={(item) => (
+                              <List.Item style={{ paddingInline: 0 }}>
+                                <div style={{ width: '100%' }}>
+                                  <Space wrap style={{ marginBottom: 6 }}>
+                                    <Tag color={layerMeta[item.layer]?.color || layerMeta.other.color}>
+                                      {layerMeta[item.layer]?.title || layerMeta.other.title}
+                                    </Tag>
+                                    <Tag>{item.count} 条</Tag>
+                                    {item.highPriorityCount ? <Tag color="red">高优先 {item.highPriorityCount}</Tag> : null}
+                                  </Space>
+                                  <Text type="secondary">最近时间：{item.latestTimeLabel}</Text>
+                                </div>
+                              </List.Item>
+                            )}
+                          />
+                        </Space>
+                      </Col>
+                      <Col xs={24} lg={15}>
+                        <List
+                          size="small"
+                          dataSource={incidentEvidenceTimeline.slice(0, 8)}
+                          renderItem={({ item, title, layer, timeLabel, snippet, hasTimestamp }) => {
+                            const evidenceMeta = getIncidentEvidenceKindMeta(item.kind)
+                            const signalMeta = signalStrengthMeta[item.signal_strength || 'low'] || signalStrengthMeta.low
+                            return (
+                              <List.Item
+                                actions={[
+                                  <Button key={`timeline-view-${item.evidence_id}`} size="small" type="link" onClick={openEvidenceDrawer}>
+                                    查看证据
+                                  </Button>,
+                                  <Button key={`timeline-jump-${item.evidence_id}`} size="small" onClick={() => jumpToIncidentEvidence(item)}>
+                                    跳转定位
+                                  </Button>,
+                                ]}
+                              >
+                                <div style={{ width: '100%' }}>
+                                  <Space wrap style={{ marginBottom: 6 }}>
+                                    <Tag color={layerMeta[layer]?.color || layerMeta.other.color}>
+                                      {layerMeta[layer]?.title || layerMeta.other.title}
+                                    </Tag>
+                                    <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
+                                    <Text strong>{title}</Text>
+                                    <Tag color={hasTimestamp ? 'default' : 'warning'}>{timeLabel}</Tag>
+                                    <Tag color={signalMeta.color}>{signalMeta.label}</Tag>
+                                  </Space>
+                                  <Paragraph style={{ marginBottom: 0 }}>
+                                    {String(item.summary || snippet || '-')}
+                                  </Paragraph>
+                                </div>
+                              </List.Item>
+                            )
+                          }}
+                        />
+                      </Col>
+                    </Row>
+                  </Card>
+                ) : null}
+
                 <Card type="inner" title="证据链分层" style={{ marginBottom: 16 }}>
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     {groupedEvidence.map(([layer, items]) => (
@@ -1081,6 +1252,40 @@ export const IncidentCenter: React.FC = () => {
                 </Tag>
               ))}
             </Space>
+
+            <Card type="inner" title="证据时间线" size="small">
+              <List
+                size="small"
+                dataSource={incidentEvidenceTimeline}
+                locale={{ emptyText: '暂无可展示的证据时间线' }}
+                renderItem={({ item, title, layer, timeLabel, snippet, hasTimestamp }) => {
+                  const evidenceMeta = getIncidentEvidenceKindMeta(item.kind)
+                  return (
+                    <List.Item
+                      actions={[
+                        <Button key={`drawer-timeline-jump-${item.evidence_id}`} size="small" onClick={() => jumpToIncidentEvidence(item)}>
+                          跳转定位
+                        </Button>,
+                      ]}
+                    >
+                      <div style={{ width: '100%' }}>
+                        <Space wrap style={{ marginBottom: 6 }}>
+                          <Tag color={layerMeta[layer]?.color || layerMeta.other.color}>
+                            {layerMeta[layer]?.title || layerMeta.other.title}
+                          </Tag>
+                          <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
+                          <Text strong>{title}</Text>
+                          <Tag color={hasTimestamp ? 'default' : 'warning'}>{timeLabel}</Tag>
+                        </Space>
+                        <Paragraph style={{ marginBottom: 0 }}>
+                          {String(item.summary || snippet || '-')}
+                        </Paragraph>
+                      </div>
+                    </List.Item>
+                  )
+                }}
+              />
+            </Card>
 
             <Card type="inner" title="现场日志样本" size="small">
               <List
