@@ -1258,6 +1258,21 @@ export const RecommendationCenter: React.FC = () => {
     params.set('incidentId', selected.incident.incident_id)
     params.set('time_range', timeRange)
     params.set('prompt', buildRecommendationAssistantPrompt(selected.incident, recommendation))
+    const evidenceIds = (activeRecommendationDetail?.evidence_refs || [])
+      .map((item) => String(item.evidence_id || '').trim())
+      .filter(Boolean)
+    if (evidenceIds.length) {
+      params.set('evidenceIds', evidenceIds.join(','))
+    }
+    const executorResultIds = (activeRecommendationDetail?.evidence_refs || [])
+      .map((item) => {
+        const locator = (item.locator || item.source_ref || {}) as Record<string, unknown>
+        return String(locator.execution_id || '').trim()
+      })
+      .filter(Boolean)
+    if (executorResultIds.length) {
+      params.set('executorResultIds', executorResultIds.join(','))
+    }
     if (selected.incident.service_key) {
       params.set('service_key', selected.incident.service_key)
     }

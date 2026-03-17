@@ -397,6 +397,21 @@ export const IncidentCenter: React.FC = () => {
     params.set('incidentId', selectedIncident.incident.incident_id)
     params.set('time_range', timeRange)
     params.set('prompt', buildAssistantPrompt(selectedIncident.incident))
+    const evidenceIds = (selectedIncident.incident.evidence_refs || [])
+      .map((item) => String(item.evidence_id || '').trim())
+      .filter(Boolean)
+    if (evidenceIds.length) {
+      params.set('evidenceIds', evidenceIds.join(','))
+    }
+    const executorResultIds = (selectedIncident.incident.evidence_refs || [])
+      .map((item) => {
+        const locator = (item.locator || item.source_ref || {}) as Record<string, unknown>
+        return String(locator.execution_id || '').trim()
+      })
+      .filter(Boolean)
+    if (executorResultIds.length) {
+      params.set('executorResultIds', executorResultIds.join(','))
+    }
     if (selectedIncident.incident.service_key) {
       setServiceKey(selectedIncident.incident.service_key)
       params.set('service_key', selectedIncident.incident.service_key)

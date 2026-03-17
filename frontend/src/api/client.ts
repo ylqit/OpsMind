@@ -656,6 +656,23 @@ export interface AIAssistantCommandSuggestion {
   command: string
 }
 
+export type AnalysisSessionSource = 'manual' | 'incident' | 'recommendation'
+
+export interface AnalysisSessionRecord {
+  session_id: string
+  source: AnalysisSessionSource
+  title: string
+  prompt: string
+  service_key: string
+  time_range: string
+  incident_id?: string | null
+  recommendation_id?: string | null
+  evidence_ids: string[]
+  executor_result_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
 export type AIAssistantProviderStatus = 'ready' | 'degraded' | 'unavailable'
 
 export interface AIAssistantStatusResponse {
@@ -682,9 +699,13 @@ export interface AIAssistantDiagnoseResponse {
   latency_ms: number
   command_suggestions: AIAssistantCommandSuggestion[]
   context: {
+    session_id: string
     service_key: string
     time_range: string
     incident_id: string
+    recommendation_id: string
+    evidence_ids: string[]
+    executor_result_ids: string[]
   }
 }
 
@@ -1219,11 +1240,42 @@ export const aiApi = {
   ) => apiClient.patch(`/ai/providers/${encodePathSegment(providerId)}`, payload),
   deleteProvider: (providerId: string) => apiClient.delete(`/ai/providers/${encodePathSegment(providerId)}`),
   getAssistantStatus: () => apiClient.get('/ai/assistant/status'),
-  diagnoseWithAssistant: (payload: {
-    message: string
+  createAssistantSession: (payload: {
+    session_id?: string
+    source?: AnalysisSessionSource
+    title?: string
+    prompt?: string
     service_key?: string
     time_range?: string
     incident_id?: string
+    recommendation_id?: string
+    evidence_ids?: string[]
+    executor_result_ids?: string[]
+  }) => apiClient.post('/ai/assistant/sessions', payload),
+  getAssistantSession: (sessionId: string) => apiClient.get(`/ai/assistant/sessions/${encodePathSegment(sessionId)}`),
+  updateAssistantSession: (
+    sessionId: string,
+    payload: {
+      source?: AnalysisSessionSource
+      title?: string
+      prompt?: string
+      service_key?: string
+      time_range?: string
+      incident_id?: string
+      recommendation_id?: string
+      evidence_ids?: string[]
+      executor_result_ids?: string[]
+    },
+  ) => apiClient.patch(`/ai/assistant/sessions/${encodePathSegment(sessionId)}`, payload),
+  diagnoseWithAssistant: (payload: {
+    message: string
+    session_id?: string
+    service_key?: string
+    time_range?: string
+    incident_id?: string
+    recommendation_id?: string
+    evidence_ids?: string[]
+    executor_result_ids?: string[]
     provider?: string
     temperature?: number
     max_tokens?: number

@@ -159,6 +159,21 @@ class SQLiteDatabase:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS analysis_sessions (
+                session_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                title TEXT,
+                prompt TEXT,
+                service_key TEXT,
+                time_range TEXT NOT NULL,
+                incident_id TEXT,
+                recommendation_id TEXT,
+                evidence_ids_json TEXT NOT NULL,
+                executor_result_ids_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS usage_metrics_daily (
                 metric_date TEXT NOT NULL,
                 service_key TEXT NOT NULL,
@@ -216,6 +231,9 @@ class SQLiteDatabase:
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created_at ON ai_call_logs(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ai_call_logs_provider ON ai_call_logs(provider_name);
             CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_default ON ai_provider_configs(is_default);
+            CREATE INDEX IF NOT EXISTS idx_analysis_sessions_updated_at ON analysis_sessions(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_analysis_sessions_incident_id ON analysis_sessions(incident_id);
+            CREATE INDEX IF NOT EXISTS idx_analysis_sessions_recommendation_id ON analysis_sessions(recommendation_id);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_service ON usage_metrics_daily(service_key);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_model ON usage_metrics_daily(model);
 

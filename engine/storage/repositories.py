@@ -12,6 +12,7 @@ from typing import Any, List, Optional
 from engine.runtime.models import (
     AICallLog,
     AIProviderConfigRecord,
+    AnalysisSession,
     ArtifactRef,
     Asset,
     ExecutorAuditRecord,
@@ -896,6 +897,65 @@ class AIProviderConfigRepository:
             if fallback:
                 self.set_default(str(fallback["provider_id"]))
         return True
+
+
+class AnalysisSessionRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    def save(self, session: AnalysisSession) -> AnalysisSession:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO analysis_sessions (
+                session_id, source, title, prompt, service_key, time_range,
+                incident_id, recommendation_id, evidence_ids_json, executor_result_ids_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session.session_id,
+                session.source.value,
+                session.title,
+                session.prompt,
+                session.service_key,
+                session.time_range,
+                session.incident_id,
+                session.recommendation_id,
+                _to_json(session.evidence_ids),
+                _to_json(session.executor_result_ids),
+                session.created_at.isoformat(),
+                session.updated_at.isoformat(),
+            ),
+        )
+        latest = self.get(session.session_id)
+        return latest if latest else session
+
+    def get(self, session_id: str) -> Optional[AnalysisSession]:
+        row = self.db.fetchone("SELECT * FROM analysis_sessions WHERE session_id = ?", (session_id,))
+        if not row:
+            return None
+        return AnalysisSession(
+            session_id=row["session_id"],
+            source=row["source"],
+            title=row["title"] or "",
+            prompt=row["prompt"] or "",
+            service_key=row["service_key"] or "",
+            time_range=row["time_range"] or "1h",
+            incident_id=row["incident_id"],
+            recommendation_id=row["recommendation_id"],
+            evidence_ids=_from_json(row["evidence_ids_json"], []),
+            executor_result_ids=_from_json(row["executor_result_ids_json"], []),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
+        )
+
+    def update(self, session_id: str, updates: dict[str, Any]) -> Optional[AnalysisSession]:
+        current = self.get(session_id)
+        if not current:
+            return None
+        merged = current.model_copy(update=updates)
+        merged.updated_at = utc_now()
+        return self.save(merged)
 
 
 class ExecutorPluginRepository:

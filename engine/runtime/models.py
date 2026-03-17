@@ -217,6 +217,29 @@ class AICallLogStatus(str, Enum):
     ERROR = "error"
 
 
+class AnalysisSessionSource(str, Enum):
+    MANUAL = "manual"
+    INCIDENT = "incident"
+    RECOMMENDATION = "recommendation"
+
+
+class AnalysisSession(BaseModel):
+    """AI 助手统一分析会话。"""
+
+    session_id: str = Field(default_factory=lambda: f"analysis_{uuid4().hex[:12]}")
+    source: AnalysisSessionSource = AnalysisSessionSource.MANUAL
+    title: str = ""
+    prompt: str = ""
+    service_key: str = ""
+    time_range: str = "1h"
+    incident_id: Optional[str] = None
+    recommendation_id: Optional[str] = None
+    evidence_ids: List[str] = Field(default_factory=list)
+    executor_result_ids: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AIProviderConfigRecord(BaseModel):
     provider_id: str = Field(default_factory=lambda: f"provider_{uuid4().hex[:12]}")
     name: str

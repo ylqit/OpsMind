@@ -16,11 +16,12 @@ from engine.llm.config import (
     resolve_provider_base_url,
     serialize_provider_record,
 )
-from engine.runtime.models import AIProviderConfigRecord
+from engine.runtime.models import AIProviderConfigRecord, AnalysisSession, AnalysisSessionSource
 
 from .deps import (
     get_ai_call_log_repository_dep,
     get_ai_provider_config_repository_dep,
+    get_analysis_session_repository_dep,
     get_executor_service_dep,
     get_llm_router_dep,
     get_refresh_llm_router_dep,
@@ -90,14 +91,47 @@ class AIAssistantDiagnoseRequest(BaseModel):
     """AI 助手诊断请求。"""
 
     message: str = Field(..., min_length=1, description="用户输入的问题描述")
+    session_id: str | None = Field(default=None, description="分析会话 ID，可选")
     service_key: str | None = Field(default=None, description="服务标识，可选")
-    time_range: str = Field(default="1h", description="时间窗")
+    time_range: str | None = Field(default=None, description="时间窗")
     incident_id: str | None = Field(default=None, description="关联异常 ID，可选")
+    recommendation_id: str | None = Field(default=None, description="关联建议 ID，可选")
+    evidence_ids: list[str] = Field(default_factory=list, description="当前会话证据 ID 列表")
+    executor_result_ids: list[str] = Field(default_factory=list, description="执行结果 ID 列表")
     provider: str | None = Field(default=None, description="指定 Provider，可选")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="采样温度")
     max_tokens: int = Field(default=1200, ge=1, le=8192, description="最大输出 token")
     task_id: str | None = Field(default=None, description="关联任务 ID，可选")
     include_command_packs: bool = Field(default=True, description="是否附带只读命令建议")
+
+
+class AnalysisSessionUpsertRequest(BaseModel):
+    """创建或更新 AI 分析会话。"""
+
+    session_id: str | None = Field(default=None, description="会话 ID，可选")
+    source: AnalysisSessionSource = Field(default=AnalysisSessionSource.MANUAL, description="会话来源")
+    title: str = Field(default="", description="会话标题")
+    prompt: str = Field(default="", description="入口提示词")
+    service_key: str = Field(default="", description="服务键")
+    time_range: str = Field(default="1h", description="时间窗")
+    incident_id: str | None = Field(default=None, description="异常 ID")
+    recommendation_id: str | None = Field(default=None, description="建议 ID")
+    evidence_ids: list[str] = Field(default_factory=list, description="证据 ID 列表")
+    executor_result_ids: list[str] = Field(default_factory=list, description="执行结果 ID 列表")
+
+
+class AnalysisSessionPatchRequest(BaseModel):
+    """增量更新 AI 分析会话。"""
+
+    source: AnalysisSessionSource | None = Field(default=None, description="会话来源")
+    title: str | None = Field(default=None, description="会话标题")
+    prompt: str | None = Field(default=None, description="入口提示词")
+    service_key: str | None = Field(default=None, description="服务键")
+    time_range: str | None = Field(default=None, description="时间窗")
+    incident_id: str | None = Field(default=None, description="异常 ID")
+    recommendation_id: str | None = Field(default=None, description="建议 ID")
+    evidence_ids: list[str] | None = Field(default=None, description="证据 ID 列表")
+    executor_result_ids: list[str] | None = Field(default=None, description="执行结果 ID 列表")
 
 
 def _normalize_error_code(error: Exception) -> str:
@@ -162,17 +196,93 @@ def _collect_command_suggestions(executor_service, limit: int = 8) -> list[dict[
     return suggestions
 
 
+def _normalize_id_list(values: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in values or []:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _build_analysis_session_title(
+    source: AnalysisSessionSource,
+    *,
+    service_key: str,
+    incident_id: str,
+    recommendation_id: str,
+) -> str:
+    if source == AnalysisSessionSource.RECOMMENDATION and recommendation_id:
+        return f"建议诊断 · {recommendation_id}"
+    if source == AnalysisSessionSource.INCIDENT and incident_id:
+        return f"异常诊断 · {incident_id}"
+    if service_key:
+        return f"AI 诊断 · {service_key}"
+    return "AI 诊断会话"
+
+
+def _merge_analysis_session_payload(
+    current: AnalysisSession | None,
+    payload: AnalysisSessionUpsertRequest | AnalysisSessionPatchRequest,
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if getattr(payload, "source", None) is not None:
+        updates["source"] = payload.source
+    if getattr(payload, "title", None) is not None:
+        updates["title"] = str(payload.title or "").strip()
+    if getattr(payload, "prompt", None) is not None:
+        updates["prompt"] = str(payload.prompt or "").strip()
+    if getattr(payload, "service_key", None) is not None:
+        updates["service_key"] = str(payload.service_key or "").strip()
+    if getattr(payload, "time_range", None) is not None:
+        updates["time_range"] = str(payload.time_range or "").strip() or "1h"
+    if getattr(payload, "incident_id", None) is not None:
+        updates["incident_id"] = str(payload.incident_id or "").strip() or None
+    if getattr(payload, "recommendation_id", None) is not None:
+        updates["recommendation_id"] = str(payload.recommendation_id or "").strip() or None
+    if getattr(payload, "evidence_ids", None) is not None:
+        updates["evidence_ids"] = _normalize_id_list(payload.evidence_ids)
+    if getattr(payload, "executor_result_ids", None) is not None:
+        updates["executor_result_ids"] = _normalize_id_list(payload.executor_result_ids)
+
+    source = updates.get("source") or (current.source if current else AnalysisSessionSource.MANUAL)
+    service_key = updates.get("service_key") if "service_key" in updates else (current.service_key if current else "")
+    incident_id = updates.get("incident_id") if "incident_id" in updates else (current.incident_id if current else "")
+    recommendation_id = (
+        updates.get("recommendation_id") if "recommendation_id" in updates else (current.recommendation_id if current else "")
+    )
+    title = updates.get("title")
+    if not title:
+        updates["title"] = _build_analysis_session_title(
+            source,
+            service_key=str(service_key or ""),
+            incident_id=str(incident_id or ""),
+            recommendation_id=str(recommendation_id or ""),
+        )
+    return updates
+
+
 def _build_assistant_system_prompt(
     service_key: str,
     time_range: str,
     incident_id: str,
+    recommendation_id: str,
+    evidence_ids: list[str],
+    executor_result_ids: list[str],
     command_suggestions: list[dict[str, str]],
 ) -> str:
     lines = [
         "你是 opsMind 的运维诊断助手。",
         "请先给出结论，再给出证据与风险，最后给出可执行的下一步。",
         "你只能建议只读诊断动作，不得建议直接执行高风险写操作。",
-        f"当前上下文：service_key={service_key or 'all'}，time_range={time_range or '1h'}，incident_id={incident_id or 'none'}。",
+        (
+            f"当前上下文：service_key={service_key or 'all'}，time_range={time_range or '1h'}，"
+            f"incident_id={incident_id or 'none'}，recommendation_id={recommendation_id or 'none'}。"
+        ),
+        f"当前关联证据数：{len(evidence_ids)}，执行结果数：{len(executor_result_ids)}。",
     ]
     if command_suggestions:
         lines.append("可引用的只读命令模板如下：")
@@ -254,6 +364,74 @@ def _build_assistant_status_payload(
     }
 
 
+@router.post("/assistant/sessions")
+async def create_or_update_analysis_session(
+    payload: AnalysisSessionUpsertRequest,
+    session_repository=Depends(get_analysis_session_repository_dep),
+):
+    """创建或更新 AI 助手分析会话。"""
+    if not session_repository:
+        raise HTTPException(status_code=409, detail="分析会话仓储未初始化")
+
+    current = session_repository.get(payload.session_id) if payload.session_id else None
+    if current:
+        updates = _merge_analysis_session_payload(current, payload)
+        updated = session_repository.update(current.session_id, updates)
+        if not updated:
+            raise HTTPException(status_code=500, detail="分析会话更新失败")
+        return updated.model_dump(mode="json")
+
+    session = AnalysisSession(
+        session_id=(payload.session_id or "").strip() or AnalysisSession().session_id,
+        source=payload.source,
+        title=str(payload.title or "").strip(),
+        prompt=str(payload.prompt or "").strip(),
+        service_key=str(payload.service_key or "").strip(),
+        time_range=str(payload.time_range or "").strip() or "1h",
+        incident_id=str(payload.incident_id or "").strip() or None,
+        recommendation_id=str(payload.recommendation_id or "").strip() or None,
+        evidence_ids=_normalize_id_list(payload.evidence_ids),
+        executor_result_ids=_normalize_id_list(payload.executor_result_ids),
+    )
+    updates = _merge_analysis_session_payload(None, payload)
+    session = session.model_copy(update=updates)
+    saved = session_repository.save(session)
+    return saved.model_dump(mode="json")
+
+
+@router.get("/assistant/sessions/{session_id}")
+async def get_analysis_session(
+    session_id: str,
+    session_repository=Depends(get_analysis_session_repository_dep),
+):
+    """读取 AI 助手分析会话。"""
+    if not session_repository:
+        raise HTTPException(status_code=409, detail="分析会话仓储未初始化")
+    session = session_repository.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="分析会话不存在")
+    return session.model_dump(mode="json")
+
+
+@router.patch("/assistant/sessions/{session_id}")
+async def patch_analysis_session(
+    session_id: str,
+    payload: AnalysisSessionPatchRequest,
+    session_repository=Depends(get_analysis_session_repository_dep),
+):
+    """增量更新 AI 助手分析会话。"""
+    if not session_repository:
+        raise HTTPException(status_code=409, detail="分析会话仓储未初始化")
+    current = session_repository.get(session_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="分析会话不存在")
+    updates = _merge_analysis_session_payload(current, payload)
+    updated = session_repository.update(session_id, updates)
+    if not updated:
+        raise HTTPException(status_code=500, detail="分析会话更新失败")
+    return updated.model_dump(mode="json")
+
+
 @router.get("/assistant/status")
 async def get_ai_assistant_status(
     llm_router=Depends(get_llm_router_dep),
@@ -273,12 +451,37 @@ async def diagnose_with_ai_assistant(
     payload: AIAssistantDiagnoseRequest,
     llm_router=Depends(get_llm_router_dep),
     executor_service=Depends(get_executor_service_dep),
+    session_repository=Depends(get_analysis_session_repository_dep),
 ):
     """对话式只读诊断入口。"""
     started = time.perf_counter()
-    service_key = (payload.service_key or "").strip()
-    incident_id = (payload.incident_id or "").strip()
+    session = None
+    if payload.session_id and session_repository:
+        session = session_repository.get(payload.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="分析会话不存在")
+
+    service_key = (payload.service_key or (session.service_key if session else "") or "").strip()
+    time_range = (payload.time_range or (session.time_range if session else "1h") or "1h").strip() or "1h"
+    incident_id = (payload.incident_id or (session.incident_id if session else "") or "").strip()
+    recommendation_id = (payload.recommendation_id or (session.recommendation_id if session else "") or "").strip()
+    evidence_ids = _normalize_id_list(payload.evidence_ids or (session.evidence_ids if session else []))
+    executor_result_ids = _normalize_id_list(payload.executor_result_ids or (session.executor_result_ids if session else []))
     command_suggestions = _collect_command_suggestions(executor_service, limit=8) if payload.include_command_packs else []
+
+    if session_repository and session:
+        session_repository.update(
+            session.session_id,
+            {
+                "service_key": service_key,
+                "time_range": time_range,
+                "incident_id": incident_id or None,
+                "recommendation_id": recommendation_id or None,
+                "evidence_ids": evidence_ids,
+                "executor_result_ids": executor_result_ids,
+                "prompt": payload.message,
+            },
+        )
 
     if payload.provider and llm_router and payload.provider not in llm_router.clients:
         raise HTTPException(status_code=404, detail="Provider 不存在")
@@ -287,22 +490,29 @@ async def diagnose_with_ai_assistant(
         reason = "NO_PROVIDER"
         return {
             "status": "degraded",
-            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, payload.time_range),
+            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range),
             "provider": "",
             "degraded_reason": reason,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "command_suggestions": command_suggestions,
             "context": {
+                "session_id": session.session_id if session else "",
                 "service_key": service_key,
-                "time_range": payload.time_range,
+                "time_range": time_range,
                 "incident_id": incident_id,
+                "recommendation_id": recommendation_id,
+                "evidence_ids": evidence_ids,
+                "executor_result_ids": executor_result_ids,
             },
         }
 
     system_prompt = _build_assistant_system_prompt(
         service_key=service_key,
-        time_range=payload.time_range,
+        time_range=time_range,
         incident_id=incident_id,
+        recommendation_id=recommendation_id,
+        evidence_ids=evidence_ids,
+        executor_result_ids=executor_result_ids,
         command_suggestions=command_suggestions,
     )
     messages = [
@@ -323,15 +533,19 @@ async def diagnose_with_ai_assistant(
         reason = _normalize_error_code(exc)
         return {
             "status": "degraded",
-            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, payload.time_range),
+            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range),
             "provider": payload.provider or getattr(llm_router, "default_client_name", ""),
             "degraded_reason": reason,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "command_suggestions": command_suggestions,
             "context": {
+                "session_id": session.session_id if session else "",
                 "service_key": service_key,
-                "time_range": payload.time_range,
+                "time_range": time_range,
                 "incident_id": incident_id,
+                "recommendation_id": recommendation_id,
+                "evidence_ids": evidence_ids,
+                "executor_result_ids": executor_result_ids,
             },
         }
 
@@ -343,9 +557,13 @@ async def diagnose_with_ai_assistant(
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "command_suggestions": command_suggestions,
         "context": {
+            "session_id": session.session_id if session else "",
             "service_key": service_key,
-            "time_range": payload.time_range,
+            "time_range": time_range,
             "incident_id": incident_id,
+            "recommendation_id": recommendation_id,
+            "evidence_ids": evidence_ids,
+            "executor_result_ids": executor_result_ids,
         },
     }
 

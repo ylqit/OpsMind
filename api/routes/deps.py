@@ -98,6 +98,11 @@ def get_ai_provider_config_repository_dep():
     return ai_provider_config_repository
 
 
+def get_analysis_session_repository_dep():
+    from main import analysis_session_repository
+    return analysis_session_repository
+
+
 def get_refresh_llm_router_dep():
     from main import refresh_llm_router_from_db
     return refresh_llm_router_from_db
