@@ -163,6 +163,54 @@ def _build_claim_limitations(
     return deduplicated[:3]
 
 
+def _extract_incident_reasoning_evidence(evidence_refs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """优先提取 correlation engine 写入的诊断证据。"""
+
+    for item in evidence_refs:
+        if not isinstance(item, dict):
+            continue
+        evidence_type = str(item.get("type") or item.get("source_type") or "").strip().lower()
+        if evidence_type == "diagnosis":
+            return item
+    return None
+
+
+def _describe_reasoning_tag(raw_tag: str) -> str:
+    normalized = str(raw_tag or "").strip().lower()
+    tag_mapping = {
+        "traffic_spike": "入口流量已经明显放大了现场压力，当前异常更像热点请求推动的容量瓶颈。",
+        "resource_bottleneck": "资源瓶颈已经成为当前异常的主放大因素，需要把容量和热点路径一起排查。",
+        "error_without_resource_pressure": "错误率抬升但资源没有同步打满，更像依赖失败、入口路由或配置失衡问题。",
+        "upstream_or_config_issue": "建议优先排查 upstream 依赖、网关配置和外部接口可用性，而不是直接扩容。",
+        "latency_without_resource_pressure": "延迟升高但资源侧平稳，瓶颈更可能在下游依赖、网络抖动或慢查询。",
+        "dependency_or_network_latency": "可以先核对下游响应时间、网络链路和数据库慢查询，再决定是否需要扩容。",
+        "traffic_growth_without_resource_pressure": "流量已经偏离历史基线，但实例余量仍在，当前更像流量结构变化而不是资源耗尽。",
+        "traffic_pattern_shift": "优先检查热点路径、来源 IP、地区分布和业务活动，不要先默认扩容。",
+        "resource_pressure_without_traffic_growth": "资源压力升高与入口流量不匹配，更像后台任务、缓存堆积或服务内部异常负载。",
+        "background_load_or_leak": "建议优先排查后台作业、批处理、缓存和应用内部泄漏，再决定是否加机器。",
+        "oom_killed": "OOM 已经是明确的失稳信号，需要优先处理内存 limits 和对象堆积问题。",
+        "memory_pressure": "内存压力正在主导当前风险，建议先核查峰值分配、缓存和应用进程内存占用。",
+        "latency_increase": "延迟已经进入异常区间，需要继续确认是热点路径放大还是下游响应拖慢。",
+        "resource_pressure": "资源压力已经进入高位，若继续放量会明显提高故障扩散风险。",
+    }
+    return tag_mapping.get(normalized, f"当前异常与“{normalized.replace('_', ' ')}”信号相关，需要继续交叉验证。")
+
+
+def _build_incident_reasoning_statements(
+    *,
+    evidence_refs: list[dict[str, Any]],
+    reasoning_tags: list[str],
+    limit: int = 3,
+) -> list[str]:
+    diagnosis_evidence = _extract_incident_reasoning_evidence(evidence_refs)
+    reasoning_details = []
+    if isinstance(diagnosis_evidence, dict):
+        reasoning_details = _to_string_list(diagnosis_evidence.get("reasoning_details"), limit=limit)
+    if reasoning_details:
+        return reasoning_details
+    return [_describe_reasoning_tag(tag) for tag in reasoning_tags[:limit] if str(tag).strip()]
+
+
 def _build_incident_claims(incident_payload: dict[str, Any], evidence_summary: dict[str, Any]) -> list[dict[str, Any]]:
     evidence_refs = [item for item in incident_payload.get("evidence_refs") or [] if isinstance(item, dict)]
     highlight_ids = _collect_evidence_ids(evidence_summary.get("highlights") or [], limit=3)
@@ -190,8 +238,13 @@ def _build_incident_claims(incident_payload: dict[str, Any], evidence_summary: d
     if summary_claim:
         claims.append(summary_claim)
 
-    for index, raw_cause in enumerate(_to_string_list(incident_payload.get("reasoning_tags"), limit=3), start=1):
-        statement = f"当前异常与“{raw_cause.replace('_', ' ')}”信号相关，需要继续交叉验证。"
+    reasoning_statements = _build_incident_reasoning_statements(
+        evidence_refs=evidence_refs,
+        reasoning_tags=_to_string_list(incident_payload.get("reasoning_tags"), limit=3),
+        limit=3,
+    )
+
+    for index, statement in enumerate(reasoning_statements, start=1):
         cause_claim = _build_claim(
             claim_id=f"{incident_payload.get('incident_id')}_cause_{index}",
             kind="cause",
