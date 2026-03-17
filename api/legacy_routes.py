@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["legacy-debug"])
@@ -26,11 +27,25 @@ class DispatchRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict, description="能力参数")
 
 
-def get_registry():
-    """获取能力注册表（依赖注入）。"""
-    from main import capability_registry
+def _read_main_capability_registry() -> Any | None:
+    """兼容旧测试与脚本，必要时回退到 main 模块读取全局注册表。"""
 
-    return capability_registry
+    try:
+        main_module = import_module("main")
+    except Exception:  # noqa: BLE001
+        return None
+    return getattr(main_module, "capability_registry", None)
+
+
+def get_registry(request: Request):
+    """获取能力注册表（优先 app.state，保留 main 回退兼容）。"""
+
+    state = getattr(request.app, "state", None)
+    if state is not None and hasattr(state, "capability_registry"):
+        registry = getattr(state, "capability_registry")
+        if registry is not None:
+            return registry
+    return _read_main_capability_registry()
 
 
 @router.get("/capabilities")

@@ -16,6 +16,13 @@ Security review and responsible disclosure are especially relevant to:
 
 If you believe you have found a security issue, please do not open a public issue first.
 
+Preferred private reporting channels:
+
+- GitHub Security Advisories: `https://github.com/ylqit/OpsMind/security/advisories/new`
+- GitHub private vulnerability reporting, if it is enabled for the repository
+
+If the advisory form is temporarily unavailable, open a minimal public issue without exploit details and clearly mark it as a security-sensitive report.
+
 Please provide a private report that includes:
 
 - A clear summary of the issue
@@ -23,8 +30,6 @@ Please provide a private report that includes:
 - Reproduction steps or proof of concept
 - Affected files, modules, or endpoints
 - Suggested mitigation, if available
-
-If direct private contact is not available, open a minimal public issue without exploit details and clearly state that it is a security-sensitive report.
 
 ## Response Expectations
 

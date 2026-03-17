@@ -16,7 +16,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate open source metadata
-        working-directory: opsMind
         run: |
           # 发布前的最小仓库门面检查，避免关键文档或治理文件缺失。
           required_files=(
@@ -74,20 +73,16 @@ jobs:
 
       - name: Install backend dependencies
         run: pip install -r requirements.txt
-        working-directory: opsMind
 
       - name: Backend import smoke
         run: python -c "import main; print(main.app.title)"
-        working-directory: opsMind
 
       - name: Backend route smoke
         # 验证主产品路由可导入，避免聚合入口或依赖注入调整后在 CI 中静默失效。
         run: python -c "import main; from api.routes import router; print(main.app.title, len(router.routes))"
-        working-directory: opsMind
 
       - name: Compile backend sources
         run: python -m compileall api engine main.py settings.py
-        working-directory: opsMind
 
   frontend:
     runs-on: ubuntu-latest
@@ -101,12 +96,12 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: opsMind/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
-        working-directory: opsMind/frontend
+        working-directory: frontend
 
       - name: Frontend build
         run: npm run build
-        working-directory: opsMind/frontend
+        working-directory: frontend
