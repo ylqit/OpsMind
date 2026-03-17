@@ -18,7 +18,7 @@ import {
   type TaskArtifact,
   type TaskRecord,
 } from '@/api/client'
-import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
+import AIInlineAssistantCard from '@/components/ai/AIInlineAssistantCard'
 import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 import AIWritebackList from '@/components/ai/AIWritebackList'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
@@ -822,220 +822,205 @@ export const IncidentCenter: React.FC = () => {
                   ))}
                 </Space>
 
-                {visibleRecommendationTask ? (
-                  <Alert
-                    showIcon
-                    type={getTaskAlertMeta(visibleRecommendationTask).type}
-                    message={getTaskAlertMeta(visibleRecommendationTask).title}
-                    description={
-                      <div>
-                        <Paragraph style={{ marginBottom: 8 }}>
-                          当前阶段：{visibleRecommendationTask.currentStage} · 进度 {visibleRecommendationTask.progress}% · {visibleRecommendationTask.progressMessage || '等待任务更新'}
-                        </Paragraph>
-                        <Space wrap>
-                          <Tag color={taskEventConnected ? 'green' : 'default'}>{taskEventConnected ? '事件流已连接' : '事件流重连中'}</Tag>
-                          <Tag color={visibleRecommendationTask.artifactReady ? 'cyan' : 'default'}>{visibleRecommendationTask.artifactReady ? '草稿已产出' : '草稿生成中'}</Tag>
-                          <Tag color={visibleRecommendationTask.status === 'FAILED' ? 'red' : visibleRecommendationTask.status === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{visibleRecommendationTask.status}</Tag>
-                        </Space>
-                        {visibleRecommendationTask.errorMessage ? (
-                          <Paragraph type="danger" style={{ marginTop: 8, marginBottom: 0 }}>
-                            失败原因：{visibleRecommendationTask.errorMessage}
-                          </Paragraph>
-                        ) : null}
-                      </div>
-                    }
-                    action={
-                      <Space direction="vertical" size={8}>
-                        <Button size="small" onClick={openRecommendationTaskCenter}>
-                          打开任务中心
-                        </Button>
-                        <Button size="small" onClick={openLatestRecommendationDraft} disabled={!latestRecommendation}>
-                          打开最新草稿
-                        </Button>
-                      </Space>
-                    }
-                    style={{ marginBottom: 16 }}
-                  />
-                ) : null}
-
-                {diagnosisSummary ? (
-                  <Card type="inner" title="诊断摘要" style={{ marginBottom: 16 }}>
-                    <div className="ops-incident-brief">
-                      <Paragraph className="ops-incident-brief__headline">{diagnosisSummary.conclusion}</Paragraph>
-                      <div className="ops-incident-brief__next-step">
-                        <Text strong>建议先做：</Text>
-                        <Text>{diagnosisSummary.nextStep}</Text>
-                      </div>
-                      <Space wrap style={{ marginBottom: 12 }}>
-                        <Tag color={layerMeta[diagnosisSummary.primaryLayer]?.color || layerMeta.other.color}>
-                          主要证据层：{layerMeta[diagnosisSummary.primaryLayer]?.title || layerMeta.other.title}
-                        </Tag>
-                        {Object.entries(diagnosisSummary.layerCounts).map(([layer, count]) => (
-                          <Tag key={layer}>
-                            {layerMeta[layer]?.title || layerMeta.other.title} {count}
-                          </Tag>
-                        ))}
-                      </Space>
-                      {diagnosisSummary.summaryLines.length ? (
-                        <List
-                          size="small"
-                          dataSource={diagnosisSummary.summaryLines}
-                          split={false}
-                          style={{ marginBottom: 12 }}
-                          renderItem={(item) => <List.Item style={{ paddingBlock: 4 }}>{item}</List.Item>}
-                        />
-                      ) : null}
-                      {incidentClaimEvidenceRows.length ? (
-                        <Card
-                          type="inner"
-                          size="small"
-                          title="结论与证据对照"
-                          extra={<Button size="small" type="link" onClick={openEvidenceDrawer}>查看完整证据</Button>}
-                          style={{ marginBottom: 12 }}
-                        >
-                          <List
-                            size="small"
-                            split={false}
-                            dataSource={incidentClaimEvidenceRows}
-                            renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
-                              const meta = getClaimMeta(claim.kind)
-                              return (
-                                <List.Item style={{ paddingInline: 0 }}>
-                                  <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
-                                    <Space wrap style={{ marginBottom: 8 }}>
-                                      <Tag color={meta.color}>{meta.label}</Tag>
-                                      {claim.title ? <Text strong>{claim.title}</Text> : null}
-                                      <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
-                                      <Tag>证据 {claim.evidence_ids.length}</Tag>
-                                      {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
-                                    </Space>
-                                    <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
-                                    <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
-                                      <Text strong>对应证据</Text>
-                                      {evidenceItems.length ? (
-                                        <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
-                                          {evidenceItems.map((evidence) => {
-                                            const evidenceMeta = getIncidentEvidenceKindMeta(evidence.kind)
-                                            return (
-                                              <div
-                                                key={String(evidence.evidence_id)}
-                                                style={{
-                                                  borderRadius: 10,
-                                                  padding: '10px 12px',
-                                                  background: 'rgba(248, 250, 252, 0.95)',
-                                                  border: '1px solid rgba(15, 23, 42, 0.06)',
-                                                }}
-                                              >
-                                                <Space wrap style={{ marginBottom: 6 }}>
-                                                  <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
-                                                  <Text strong>{String(evidence.title || evidence.metric || '证据项')}</Text>
-                                                  <Tag>{formatEvidenceValue(evidence)}</Tag>
-                                                </Space>
-                                                <Paragraph style={{ marginBottom: 0 }}>
-                                                  {String(evidence.summary || getIncidentEvidenceSnippet(evidence) || '暂无摘要')}
-                                                </Paragraph>
-                                              </div>
-                                            )
-                                          })}
-                                        </Space>
-                                      ) : (
-                                        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                                          当前结论还没有可直接展示的映射证据，请打开证据抽屉查看完整现场。
-                                        </Paragraph>
-                                      )}
-                                    </div>
-                                    {limitations.length ? (
-                                      <div style={{ marginTop: 10 }}>
-                                        <Text strong>不确定点</Text>
-                                        <List
-                                          size="small"
-                                          split={false}
-                                          dataSource={limitations}
-                                          style={{ marginTop: 6 }}
-                                          renderItem={(item) => (
-                                            <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
-                                              <Text type="secondary">{item}</Text>
-                                            </List.Item>
-                                          )}
-                                        />
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                </List.Item>
-                              )
-                            }}
-                          />
-                        </Card>
-                      ) : null}
-                      <div className="ops-incident-brief__highlights">
-                        {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
-                          <div key={`${item.layer}-${item.metric}-${item.title}`} className="ops-incident-brief__highlight">
-                            <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
-                              <Tag color={layerMeta[item.layer || 'other']?.color || layerMeta.other.color}>{layerMeta[item.layer || 'other']?.title || layerMeta.other.title}</Tag>
-                              <Text strong>{String(item.title || item.metric || '关键证据')}</Text>
-                              <Tag>{formatEvidenceValue(item)}</Tag>
-                              <Button size="small" type="link" onClick={() => openEvidenceDrawer()}>
-                                查看详情
-                              </Button>
+                <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                  <Col xs={24} xl={16}>
+                    {visibleRecommendationTask ? (
+                      <Alert
+                        showIcon
+                        type={getTaskAlertMeta(visibleRecommendationTask).type}
+                        message={getTaskAlertMeta(visibleRecommendationTask).title}
+                        description={
+                          <div>
+                            <Paragraph style={{ marginBottom: 8 }}>
+                              当前阶段：{visibleRecommendationTask.currentStage} · 进度 {visibleRecommendationTask.progress}% · {visibleRecommendationTask.progressMessage || '等待任务更新'}
+                            </Paragraph>
+                            <Space wrap>
+                              <Tag color={taskEventConnected ? 'green' : 'default'}>{taskEventConnected ? '事件流已连接' : '事件流重连中'}</Tag>
+                              <Tag color={visibleRecommendationTask.artifactReady ? 'cyan' : 'default'}>{visibleRecommendationTask.artifactReady ? '草稿已产出' : '草稿生成中'}</Tag>
+                              <Tag color={visibleRecommendationTask.status === 'FAILED' ? 'red' : visibleRecommendationTask.status === 'WAITING_CONFIRM' ? 'gold' : 'blue'}>{visibleRecommendationTask.status}</Tag>
                             </Space>
-                            <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || '-')}</Paragraph>
+                            {visibleRecommendationTask.errorMessage ? (
+                              <Paragraph type="danger" style={{ marginTop: 8, marginBottom: 0 }}>
+                                失败原因：{visibleRecommendationTask.errorMessage}
+                              </Paragraph>
+                            ) : null}
                           </div>
-                        )) : <CardEmptyState title="暂无高优先证据" />}
-                      </div>
-                    </div>
-                  </Card>
-                ) : null}
-
-                {aiSummary ? (
-                  <Card type="inner" title="AI 异常总结" style={{ marginBottom: 16 }}>
-                    <AIDiagnosisCard
-                      summary={aiSummary.summary}
-                      riskLevel={aiSummary.risk_level}
-                      confidence={aiSummary.confidence}
-                      provider={aiSummary.provider}
-                      parseMode={aiSummary.parse_mode}
-                      primaryCauses={aiSummary.primary_causes}
-                      recommendedActions={aiSummary.recommended_actions}
-                      evidenceCitations={aiSummary.evidence_citations}
-                      roleViews={aiSummary.role_views}
-                    />
-                    {aiSummaryClaims.length ? (
-                      <List
-                        size="small"
-                        header={<Text strong>AI 结论拆解</Text>}
-                        dataSource={aiSummaryClaims}
-                        style={{ marginTop: 12 }}
-                        renderItem={(item) => {
-                          const meta = getClaimMeta(item.kind)
-                          return (
-                            <List.Item>
-                              <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                <Space wrap>
-                                  <Tag color={meta.color}>{meta.label}</Tag>
-                                  {item.title ? <Text strong>{item.title}</Text> : null}
-                                  <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
-                                  <Tag>证据 {item.evidence_ids.length}</Tag>
-                                </Space>
-                                <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
-                                {item.limitations.length ? (
-                                  <Text type="secondary">限制：{item.limitations.join('；')}</Text>
-                                ) : null}
-                              </Space>
-                            </List.Item>
-                          )
-                        }}
+                        }
+                        action={
+                          <Space direction="vertical" size={8}>
+                            <Button size="small" onClick={openRecommendationTaskCenter}>
+                              打开任务中心
+                            </Button>
+                            <Button size="small" onClick={openLatestRecommendationDraft} disabled={!latestRecommendation}>
+                              打开最新草稿
+                            </Button>
+                          </Space>
+                        }
+                        style={{ marginBottom: diagnosisSummary ? 16 : 0 }}
                       />
                     ) : null}
-                  </Card>
-                ) : null}
 
-                <AIWritebackList
-                  items={incidentWritebacks}
-                  title="AI 回写记录"
-                  emptyDescription="当前异常还没有沉淀下来的 AI 回写内容"
-                  style={{ marginBottom: 16 }}
-                  onOpenTask={(taskId) => navigate(`/tasks?taskId=${encodeURIComponent(taskId)}`)}
-                />
+                    {diagnosisSummary ? (
+                      <Card type="inner" title="诊断摘要" style={{ marginBottom: 0 }}>
+                        <div className="ops-incident-brief">
+                          <Paragraph className="ops-incident-brief__headline">{diagnosisSummary.conclusion}</Paragraph>
+                          <div className="ops-incident-brief__next-step">
+                            <Text strong>建议先做：</Text>
+                            <Text>{diagnosisSummary.nextStep}</Text>
+                          </div>
+                          <Space wrap style={{ marginBottom: 12 }}>
+                            <Tag color={layerMeta[diagnosisSummary.primaryLayer]?.color || layerMeta.other.color}>
+                              主要证据层：{layerMeta[diagnosisSummary.primaryLayer]?.title || layerMeta.other.title}
+                            </Tag>
+                            {Object.entries(diagnosisSummary.layerCounts).map(([layer, count]) => (
+                              <Tag key={layer}>
+                                {layerMeta[layer]?.title || layerMeta.other.title} {count}
+                              </Tag>
+                            ))}
+                          </Space>
+                          {diagnosisSummary.summaryLines.length ? (
+                            <List
+                              size="small"
+                              dataSource={diagnosisSummary.summaryLines}
+                              split={false}
+                              style={{ marginBottom: 12 }}
+                              renderItem={(item) => <List.Item style={{ paddingBlock: 4 }}>{item}</List.Item>}
+                            />
+                          ) : null}
+                          {incidentClaimEvidenceRows.length ? (
+                            <Card
+                              type="inner"
+                              size="small"
+                              title="结论与证据对照"
+                              extra={<Button size="small" type="link" onClick={openEvidenceDrawer}>查看完整证据</Button>}
+                              style={{ marginBottom: 12 }}
+                            >
+                              <List
+                                size="small"
+                                split={false}
+                                dataSource={incidentClaimEvidenceRows}
+                                renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
+                                  const meta = getClaimMeta(claim.kind)
+                                  return (
+                                    <List.Item style={{ paddingInline: 0 }}>
+                                      <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
+                                        <Space wrap style={{ marginBottom: 8 }}>
+                                          <Tag color={meta.color}>{meta.label}</Tag>
+                                          {claim.title ? <Text strong>{claim.title}</Text> : null}
+                                          <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
+                                          <Tag>证据 {claim.evidence_ids.length}</Tag>
+                                          {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
+                                        </Space>
+                                        <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
+                                        <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
+                                          <Text strong>对应证据</Text>
+                                          {evidenceItems.length ? (
+                                            <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                                              {evidenceItems.map((evidence) => {
+                                                const evidenceMeta = getIncidentEvidenceKindMeta(evidence.kind)
+                                                return (
+                                                  <div
+                                                    key={String(evidence.evidence_id)}
+                                                    style={{
+                                                      borderRadius: 10,
+                                                      padding: '10px 12px',
+                                                      background: 'rgba(248, 250, 252, 0.95)',
+                                                      border: '1px solid rgba(15, 23, 42, 0.06)',
+                                                    }}
+                                                  >
+                                                    <Space wrap style={{ marginBottom: 6 }}>
+                                                      <Tag color={evidenceMeta.color}>{evidenceMeta.label}</Tag>
+                                                      <Text strong>{String(evidence.title || evidence.metric || '证据项')}</Text>
+                                                      <Tag>{formatEvidenceValue(evidence)}</Tag>
+                                                    </Space>
+                                                    <Paragraph style={{ marginBottom: 0 }}>
+                                                      {String(evidence.summary || getIncidentEvidenceSnippet(evidence) || '暂无摘要')}
+                                                    </Paragraph>
+                                                  </div>
+                                                )
+                                              })}
+                                            </Space>
+                                          ) : (
+                                            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                              当前结论还没有可直接展示的映射证据，请打开证据抽屉查看完整现场。
+                                            </Paragraph>
+                                          )}
+                                        </div>
+                                        {limitations.length ? (
+                                          <div style={{ marginTop: 10 }}>
+                                            <Text strong>不确定点</Text>
+                                            <List
+                                              size="small"
+                                              split={false}
+                                              dataSource={limitations}
+                                              style={{ marginTop: 6 }}
+                                              renderItem={(item) => (
+                                                <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
+                                                  <Text type="secondary">{item}</Text>
+                                                </List.Item>
+                                              )}
+                                            />
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </List.Item>
+                                  )
+                                }}
+                              />
+                            </Card>
+                          ) : null}
+                          <div className="ops-incident-brief__highlights">
+                            {diagnosisSummary.highlights.length > 0 ? diagnosisSummary.highlights.map((item) => (
+                              <div key={`${item.layer}-${item.metric}-${item.title}`} className="ops-incident-brief__highlight">
+                                <Space style={{ marginBottom: 6, flexWrap: 'wrap' }}>
+                                  <Tag color={layerMeta[item.layer || 'other']?.color || layerMeta.other.color}>{layerMeta[item.layer || 'other']?.title || layerMeta.other.title}</Tag>
+                                  <Text strong>{String(item.title || item.metric || '关键证据')}</Text>
+                                  <Tag>{formatEvidenceValue(item)}</Tag>
+                                  <Button size="small" type="link" onClick={() => openEvidenceDrawer()}>
+                                    查看详情
+                                  </Button>
+                                </Space>
+                                <Paragraph style={{ marginBottom: 0 }}>{String(item.summary || '-')}</Paragraph>
+                              </div>
+                            )) : <CardEmptyState title="暂无高优先证据" />}
+                          </div>
+                        </div>
+                      </Card>
+                    ) : null}
+                  </Col>
+                  <Col xs={24} xl={8}>
+                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      <AIInlineAssistantCard
+                        title="AI 诊断侧栏"
+                        description="可以直接在当前异常上下文内生成 AI 总结，必要时再进入完整 AI 助手继续排查。"
+                        status={assistantStatus}
+                        runLabel={aiSummary ? '刷新 AI 总结' : '生成 AI 总结'}
+                        onRun={() => void generateAiSummaryForIncident()}
+                        runLoading={aiSummaryLoading || aiProviderChecking}
+                        runDisabled={!selectedIncident || aiProviderReady === false || aiProviderChecking}
+                        onOpenAssistant={openAssistantWorkbench}
+                        summary={aiSummary?.summary}
+                        riskLevel={aiSummary?.risk_level}
+                        confidence={aiSummary?.confidence}
+                        provider={aiSummary?.provider}
+                        parseMode={aiSummary?.parse_mode}
+                        nextActions={aiSummary?.diagnosis_report?.next_actions || aiSummary?.recommended_actions || []}
+                        limitations={aiSummary?.diagnosis_report?.limitations || []}
+                        citations={aiSummary?.evidence_citations || []}
+                        claimsCount={aiSummaryClaims.length}
+                        writebackCount={incidentWritebacks.length}
+                        emptyDescription="当前还没有 AI 总结，可以先在这里发起一次页内诊断。"
+                      />
+                      <AIWritebackList
+                        items={incidentWritebacks}
+                        title="AI 回写记录"
+                        emptyDescription="当前异常还没有沉淀下来的 AI 回写内容"
+                        style={{ marginBottom: 0 }}
+                        onOpenTask={(taskId) => navigate(`/tasks?taskId=${encodeURIComponent(taskId)}`)}
+                      />
+                    </Space>
+                  </Col>
+                </Row>
 
                 {incidentEvidenceTimeline.length ? (
                   <Card

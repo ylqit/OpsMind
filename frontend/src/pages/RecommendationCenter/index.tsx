@@ -25,7 +25,7 @@ import {
   type RecommendationRecord,
   type TaskArtifact,
 } from '@/api/client'
-import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
+import AIInlineAssistantCard from '@/components/ai/AIInlineAssistantCard'
 import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 import AIWritebackList from '@/components/ai/AIWritebackList'
 
@@ -1942,13 +1942,154 @@ export const RecommendationCenter: React.FC = () => {
                     </Card>
                   ) : null}
 
-                  <AIWritebackList
-                    items={activeAssistantWritebacks}
-                    title="AI 回写记录"
-                    emptyDescription="当前建议还没有沉淀下来的 AI 回写内容"
-                    style={{ marginBottom: 16 }}
-                    onOpenTask={(taskId) => jumpToTaskCenter(taskId)}
-                  />
+                  <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                    <Col xs={24} xl={16}>
+                      {activeRecommendationClaimEvidenceRows.length ? (
+                        <Card
+                          type="inner"
+                          title="建议依据与证据对照"
+                          size="small"
+                          extra={
+                            <Space wrap size={8}>
+                              {recommendationDiagnosisSummary ? (
+                                <Tag color={getRiskLevelColor(String(recommendationDiagnosisSummary.riskLevel || 'medium'))}>
+                                  风险 {String(recommendationDiagnosisSummary.riskLevel || 'medium')}
+                                </Tag>
+                              ) : null}
+                              <Button size="small" type="link" onClick={() => setEvidenceDrawerOpen(true)}>
+                                查看完整证据
+                              </Button>
+                            </Space>
+                          }
+                        >
+                          {recommendationDiagnosisSummary ? (
+                            <div style={{ marginBottom: 14 }}>
+                              <Paragraph style={{ marginBottom: 8 }}>{recommendationDiagnosisSummary.summary}</Paragraph>
+                              {recommendationDiagnosisSummary.nextActions.length ? (
+                                <Space wrap style={{ marginBottom: recommendationDiagnosisSummary.limitations.length ? 8 : 0 }}>
+                                  <Text type="secondary">下一步：</Text>
+                                  {recommendationDiagnosisSummary.nextActions.map((item) => (
+                                    <Tag key={`next-action-${item}`} color="blue">{item}</Tag>
+                                  ))}
+                                </Space>
+                              ) : null}
+                              {recommendationDiagnosisSummary.limitations.length ? (
+                                <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                                  限制：{recommendationDiagnosisSummary.limitations.join('；')}
+                                </Paragraph>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <List
+                            size="small"
+                            split={false}
+                            dataSource={activeRecommendationClaimEvidenceRows}
+                            renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
+                              const meta = getClaimMeta(claim.kind)
+                              return (
+                                <List.Item style={{ paddingInline: 0 }}>
+                                  <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
+                                    <Space wrap style={{ marginBottom: 8 }}>
+                                      <Tag color={meta.color}>{meta.label}</Tag>
+                                      {claim.title ? <Text strong>{claim.title}</Text> : null}
+                                      <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
+                                      <Tag>证据 {claim.evidence_ids.length}</Tag>
+                                      {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
+                                    </Space>
+                                    <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
+                                    <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
+                                      <Text strong>证据引用</Text>
+                                      {evidenceItems.length ? (
+                                        <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+                                          {evidenceItems.map((item) => {
+                                            const groupKey = getRecommendationEvidenceGroupKey(item)
+                                            const groupMeta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
+                                            return (
+                                              <div
+                                                key={String(item.evidence_id)}
+                                                style={{
+                                                  borderRadius: 10,
+                                                  padding: '10px 12px',
+                                                  background: 'rgba(248, 250, 252, 0.95)',
+                                                  border: '1px solid rgba(15, 23, 42, 0.06)',
+                                                }}
+                                              >
+                                                <Space wrap style={{ marginBottom: 6 }}>
+                                                  <Tag color={groupMeta.color}>{getEvidenceSourceLabel(item.source_type)}</Tag>
+                                                  <Text strong>{item.title}</Text>
+                                                  {item.metric ? <Text code>{item.metric}</Text> : null}
+                                                  {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
+                                                </Space>
+                                                <Paragraph style={{ marginBottom: 0 }}>
+                                                  {item.summary || getRecommendationEvidenceSnippet(item) || '暂无证据摘要'}
+                                                </Paragraph>
+                                              </div>
+                                            )
+                                          })}
+                                        </Space>
+                                      ) : (
+                                        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                          当前结论还没有可直接展开的证据卡片，请打开证据抽屉查看完整现场。
+                                        </Paragraph>
+                                      )}
+                                    </div>
+                                    {limitations.length ? (
+                                      <div style={{ marginTop: 10 }}>
+                                        <Text strong>风险说明与限制项</Text>
+                                        <List
+                                          size="small"
+                                          split={false}
+                                          dataSource={limitations}
+                                          style={{ marginTop: 6 }}
+                                          renderItem={(item) => (
+                                            <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
+                                              <Text type="secondary">{item}</Text>
+                                            </List.Item>
+                                          )}
+                                        />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </List.Item>
+                              )
+                            }}
+                          />
+                        </Card>
+                      ) : null}
+                    </Col>
+                    <Col xs={24} xl={8}>
+                      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                        <AIInlineAssistantCard
+                          title="AI 复核侧栏"
+                          description="可以直接在当前建议上下文内发起 AI 复核，确认风险、限制项和下一步只读验证动作。"
+                          status={assistantStatus}
+                          runLabel={activeAiReview ? '刷新 AI 复核' : '发起 AI 复核'}
+                          onRun={() => activeRecommendation && void reviewRecommendationWithAi(activeRecommendation)}
+                          runLoading={Boolean(activeRecommendation) && (aiReviewLoadingId === activeRecommendation.recommendation_id || aiProviderChecking)}
+                          runDisabled={!activeRecommendation || aiProviderReady === false || aiProviderChecking}
+                          onOpenAssistant={() => openAssistantWorkbench(activeRecommendation || null)}
+                          summary={activeAiReview?.summary}
+                          riskLevel={activeAiReview?.risk_level}
+                          confidence={activeAiReview?.confidence}
+                          provider={activeAiReview?.provider}
+                          parseMode={activeAiReview?.parse_mode}
+                          nextActions={activeAiReview?.diagnosis_report?.next_actions || activeAiReview?.validation_checks || []}
+                          limitations={activeAiReview?.diagnosis_report?.limitations || []}
+                          citations={activeAiReview?.evidence_citations || []}
+                          claimsCount={activeAiReviewClaims.length}
+                          writebackCount={activeAssistantWritebacks.length}
+                          emptyDescription="当前还没有 AI 复核结果，可以先在这里发起一次页内复核。"
+                        />
+                        <AIWritebackList
+                          items={activeAssistantWritebacks}
+                          title="AI 回写记录"
+                          emptyDescription="当前建议还没有沉淀下来的 AI 回写内容"
+                          style={{ marginBottom: 0 }}
+                          onOpenTask={(taskId) => jumpToTaskCenter(taskId)}
+                        />
+                      </Space>
+                    </Col>
+                  </Row>
 
                   {recommendationEvidenceTimeline.length ? (
                     <Card
@@ -2067,163 +2208,6 @@ export const RecommendationCenter: React.FC = () => {
                           </List.Item>
                         )}
                       />
-                    </Card>
-                  ) : null}
-
-                  {activeRecommendationClaimEvidenceRows.length ? (
-                    <Card
-                      type="inner"
-                      title="建议依据与证据对照"
-                      size="small"
-                      extra={
-                        <Space wrap size={8}>
-                          {recommendationDiagnosisSummary ? (
-                            <Tag color={getRiskLevelColor(String(recommendationDiagnosisSummary.riskLevel || 'medium'))}>
-                              风险 {String(recommendationDiagnosisSummary.riskLevel || 'medium')}
-                            </Tag>
-                          ) : null}
-                          <Button size="small" type="link" onClick={() => setEvidenceDrawerOpen(true)}>
-                            查看完整证据
-                          </Button>
-                        </Space>
-                      }
-                    >
-                      {recommendationDiagnosisSummary ? (
-                        <div style={{ marginBottom: 14 }}>
-                          <Paragraph style={{ marginBottom: 8 }}>{recommendationDiagnosisSummary.summary}</Paragraph>
-                          {recommendationDiagnosisSummary.nextActions.length ? (
-                            <Space wrap style={{ marginBottom: recommendationDiagnosisSummary.limitations.length ? 8 : 0 }}>
-                              <Text type="secondary">下一步：</Text>
-                              {recommendationDiagnosisSummary.nextActions.map((item) => (
-                                <Tag key={`next-action-${item}`} color="blue">{item}</Tag>
-                              ))}
-                            </Space>
-                          ) : null}
-                          {recommendationDiagnosisSummary.limitations.length ? (
-                            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                              限制：{recommendationDiagnosisSummary.limitations.join('；')}
-                            </Paragraph>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <List
-                        size="small"
-                        split={false}
-                        dataSource={activeRecommendationClaimEvidenceRows}
-                        renderItem={({ claim, evidenceItems, unresolvedEvidenceIds, limitations }) => {
-                          const meta = getClaimMeta(claim.kind)
-                          return (
-                            <List.Item style={{ paddingInline: 0 }}>
-                              <div style={{ width: '100%', padding: '12px 14px', border: '1px solid rgba(15, 23, 42, 0.08)', borderRadius: 12 }}>
-                                <Space wrap style={{ marginBottom: 8 }}>
-                                  <Tag color={meta.color}>{meta.label}</Tag>
-                                  {claim.title ? <Text strong>{claim.title}</Text> : null}
-                                  <Tag color="blue">置信度 {Math.round((claim.confidence || 0) * 100)}%</Tag>
-                                  <Tag>证据 {claim.evidence_ids.length}</Tag>
-                                  {unresolvedEvidenceIds.length ? <Tag color="warning">未映射 {unresolvedEvidenceIds.length}</Tag> : null}
-                                </Space>
-                                <Paragraph style={{ marginBottom: 10 }}>{claim.statement}</Paragraph>
-                                <div style={{ marginBottom: limitations.length ? 10 : 0 }}>
-                                  <Text strong>证据引用</Text>
-                                  {evidenceItems.length ? (
-                                    <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
-                                      {evidenceItems.map((item) => {
-                                        const groupKey = getRecommendationEvidenceGroupKey(item)
-                                        const groupMeta = recommendationEvidenceGroupMeta[groupKey] || recommendationEvidenceGroupMeta.other
-                                        return (
-                                          <div
-                                            key={String(item.evidence_id)}
-                                            style={{
-                                              borderRadius: 10,
-                                              padding: '10px 12px',
-                                              background: 'rgba(248, 250, 252, 0.95)',
-                                              border: '1px solid rgba(15, 23, 42, 0.06)',
-                                            }}
-                                          >
-                                            <Space wrap style={{ marginBottom: 6 }}>
-                                              <Tag color={groupMeta.color}>{getEvidenceSourceLabel(item.source_type)}</Tag>
-                                              <Text strong>{item.title}</Text>
-                                              {item.metric ? <Text code>{item.metric}</Text> : null}
-                                              {item.confidence ? <Tag color="blue">置信度 {Math.round(item.confidence * 100)}%</Tag> : null}
-                                            </Space>
-                                            <Paragraph style={{ marginBottom: 0 }}>
-                                              {item.summary || getRecommendationEvidenceSnippet(item) || '暂无证据摘要'}
-                                            </Paragraph>
-                                          </div>
-                                        )
-                                      })}
-                                    </Space>
-                                  ) : (
-                                    <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                                      当前结论还没有可直接展开的证据卡片，请打开证据抽屉查看完整现场。
-                                    </Paragraph>
-                                  )}
-                                </div>
-                                {limitations.length ? (
-                                  <div style={{ marginTop: 10 }}>
-                                    <Text strong>风险说明与限制项</Text>
-                                    <List
-                                      size="small"
-                                      split={false}
-                                      dataSource={limitations}
-                                      style={{ marginTop: 6 }}
-                                      renderItem={(item) => (
-                                        <List.Item style={{ paddingInline: 0, paddingBlock: 2 }}>
-                                          <Text type="secondary">{item}</Text>
-                                        </List.Item>
-                                      )}
-                                    />
-                                  </div>
-                                ) : null}
-                              </div>
-                            </List.Item>
-                          )
-                        }}
-                      />
-                    </Card>
-                  ) : null}
-
-                  {activeAiReview ? (
-                    <Card type="inner" title="AI 复核" size="small">
-                      <AIDiagnosisCard
-                        summary={activeAiReview.summary}
-                        riskLevel={activeAiReview.risk_level}
-                        confidence={activeAiReview.confidence}
-                        provider={activeAiReview.provider}
-                        parseMode={activeAiReview.parse_mode}
-                        supportingText={activeAiReview.risk_assessment}
-                        validationChecks={activeAiReview.validation_checks}
-                        rollbackPlan={activeAiReview.rollback_plan}
-                        evidenceCitations={activeAiReview.evidence_citations}
-                        roleViews={activeAiReview.role_views}
-                      />
-                      {activeAiReviewClaims.length ? (
-                        <List
-                          size="small"
-                          header={<Text strong>AI 复核拆解</Text>}
-                          dataSource={activeAiReviewClaims}
-                          style={{ marginTop: 12 }}
-                          renderItem={(item) => {
-                            const meta = getClaimMeta(item.kind)
-                            return (
-                              <List.Item>
-                                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                  <Space wrap>
-                                    <Tag color={meta.color}>{meta.label}</Tag>
-                                    {item.title ? <Text strong>{item.title}</Text> : null}
-                                    <Tag color="blue">置信度 {Math.round((item.confidence || 0) * 100)}%</Tag>
-                                    <Tag>证据 {item.evidence_ids.length}</Tag>
-                                  </Space>
-                                  <Paragraph style={{ marginBottom: 0 }}>{item.statement}</Paragraph>
-                                  {item.limitations.length ? (
-                                    <Text type="secondary">限制：{item.limitations.join('；')}</Text>
-                                  ) : null}
-                                </Space>
-                              </List.Item>
-                            )
-                          }}
-                        />
-                      ) : null}
                     </Card>
                   ) : null}
 
