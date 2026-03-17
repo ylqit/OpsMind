@@ -641,12 +641,17 @@ class RecommendationService:
             "resource": 0,
             "alert": 0,
             "task": 0,
+            "executor": 0,
         }
         for item in incident.evidence_refs:
             if not isinstance(item, dict):
                 continue
             layer = str(item.get("layer") or "").strip().lower()
             item_kind = str(item.get("kind") or item.get("type") or "").strip().lower()
+            source = str(item.get("source") or item.get("source_type") or "").strip().lower()
+            locator = item.get("locator") if isinstance(item.get("locator"), dict) else {}
+            source_ref = item.get("source_ref") if isinstance(item.get("source_ref"), dict) else {}
+            execution_id = str(locator.get("execution_id") or source_ref.get("execution_id") or "").strip()
             if layer == "traffic" or item_kind == "log":
                 counts["traffic"] += 1
                 continue
@@ -656,10 +661,13 @@ class RecommendationService:
             if layer == "alert" or item_kind == "alert":
                 counts["alert"] += 1
                 continue
+            if source == "executor_plugin" or item_kind == "executor" or execution_id:
+                counts["executor"] += 1
+                continue
             if layer == "task":
                 counts["task"] += 1
 
-        signal_count = counts["traffic"] + counts["resource"] + counts["alert"]
+        signal_count = counts["traffic"] + counts["resource"] + counts["alert"] + counts["executor"]
         limitations: list[str] = []
         if counts["traffic"] == 0:
             limitations.append("缺少流量侧样本")
@@ -674,7 +682,7 @@ class RecommendationService:
             "status": "sufficient" if signal_count >= 2 else "insufficient",
             "summary": (
                 f"traffic={counts['traffic']}, resource={counts['resource']}, "
-                f"alert={counts['alert']}, task={counts['task']}"
+                f"alert={counts['alert']}, executor={counts['executor']}, task={counts['task']}"
             ),
             "limitations": limitations,
         }

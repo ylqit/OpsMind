@@ -452,13 +452,84 @@ class ExecutorService:
             "created_at": item.created_at.isoformat(),
         }
 
+    def _build_execution_evidence_refs(self, run_result: dict[str, Any]) -> list[dict[str, Any]]:
+        execution = run_result.get("execution") if isinstance(run_result.get("execution"), dict) else {}
+        plugin = run_result.get("plugin") if isinstance(run_result.get("plugin"), dict) else {}
+
+        execution_id = str(execution.get("execution_id") or "").strip()
+        task_id = str(execution.get("task_id") or "").strip()
+        plugin_key = str(execution.get("plugin_key") or "").strip()
+        plugin_name = str(plugin.get("display_name") or plugin_key or "执行插件").strip()
+        status = str(execution.get("status") or "").strip() or "unknown"
+        command = str(execution.get("command") or "").strip()
+        exit_code = execution.get("exit_code")
+        duration_ms = int(execution.get("duration_ms") or 0)
+        created_at = str(execution.get("created_at") or "").strip()
+        stdout_preview = str(execution.get("stdout_preview") or "").strip()
+        stderr_preview = str(execution.get("stderr_preview") or "").strip()
+        error_message = str(execution.get("error_message") or "").strip()
+
+        quote = stderr_preview or stdout_preview or error_message
+        quote = quote[:600]
+        if status == ExecutorRunStatus.SUCCESS.value:
+            summary = f"{plugin_name} 已完成只读诊断，命令耗时 {duration_ms} ms。"
+            priority = 76
+            signal_strength = "medium"
+        elif status == ExecutorRunStatus.TIMEOUT.value:
+            summary = f"{plugin_name} 执行超时，命令未在预期时间内返回结果。"
+            priority = 86
+            signal_strength = "high"
+        elif status in {ExecutorRunStatus.ERROR.value, ExecutorRunStatus.REJECTED.value, ExecutorRunStatus.CIRCUIT_OPEN.value}:
+            summary = f"{plugin_name} 执行未成功，当前状态为 {status}。"
+            priority = 88
+            signal_strength = "high"
+        else:
+            summary = f"{plugin_name} 已返回一条执行记录。"
+            priority = 72
+            signal_strength = "medium"
+
+        if command:
+            summary = f"{summary} 命令：{command}"
+        if exit_code not in (None, ""):
+            summary = f"{summary} 退出码：{exit_code}"
+
+        return [
+            {
+                "evidence_id": f"executor_{execution_id or plugin_key or 'result'}",
+                "kind": "executor",
+                "source": "executor_plugin",
+                "source_type": "executor_result",
+                "title": f"{plugin_name} 执行结果",
+                "summary": summary,
+                "quote": quote,
+                "metric": "execution_status",
+                "value": status,
+                "unit": "",
+                "priority": priority,
+                "signal_strength": signal_strength,
+                "tags": ["executor", plugin_key or "plugin", status],
+                "locator": {
+                    "task_id": task_id,
+                    "execution_id": execution_id,
+                    "status": status,
+                    "source": plugin_key,
+                    "timestamp": created_at,
+                    "layer": "task",
+                    "jump_kind": "executor_execution",
+                },
+            }
+        ]
+
     def build_execution_evidence(self, run_result: dict[str, Any]) -> dict[str, Any]:
         execution = run_result.get("execution") if isinstance(run_result.get("execution"), dict) else {}
         plugin = run_result.get("plugin") if isinstance(run_result.get("plugin"), dict) else {}
+        evidence_refs = self._build_execution_evidence_refs(run_result)
         # 统一证据快照结构，便于任务中心、异常中心和建议中心复用同一数据契约。
         return {
             "source": "executor_plugin",
             "generated_at": utc_now().isoformat(),
+            "summary": evidence_refs[0]["summary"] if evidence_refs else "",
+            "evidence_refs": evidence_refs,
             "execution": {
                 "execution_id": str(execution.get("execution_id") or ""),
                 "task_id": str(execution.get("task_id") or ""),
@@ -484,6 +555,42 @@ class ExecutorService:
                 "write_enabled": bool(plugin.get("write_enabled", False)),
             },
         }
+
+    def get_execution_detail(self, execution_id: str) -> dict[str, Any]:
+        audit = self.audit_repository.get((execution_id or "").strip())
+        if not audit:
+            raise ValueError("执行记录不存在")
+
+        plugin = self.plugin_repository.get(audit.plugin_key)
+        plugin_payload = (
+            self._serialize_plugin(plugin)
+            if plugin
+            else {
+                "plugin_key": audit.plugin_key,
+                "display_name": audit.plugin_key or "执行插件",
+                "description": "",
+                "enabled": False,
+                "readonly_only": True,
+                "write_enabled": False,
+                "failure_count": 0,
+                "circuit_open_until": None,
+                "circuit_remaining_seconds": 0,
+                "last_error": "",
+                "health_status": ExecutorHealthStatus.DISABLED.value,
+                "readonly_examples": [],
+                "write_examples": [],
+                "readonly_categories": [],
+                "readonly_command_packs": [],
+                "updated_at": audit.created_at.isoformat(),
+            }
+        )
+        run_result = {
+            "execution": self._serialize_audit(audit),
+            "plugin": plugin_payload,
+            "execution_context": ExecutorRunContext().to_dict(remote_enabled=self.REMOTE_EXECUTION_ENABLED),
+        }
+        run_result["evidence"] = self.build_execution_evidence(run_result)
+        return run_result
 
     def get_status(self, recent_limit: int = 30) -> dict[str, Any]:
         plugins = [self._serialize_plugin(item) for item in self.plugin_repository.list()]

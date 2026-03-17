@@ -1177,6 +1177,7 @@ export const metricsApi = {
 // 执行插件与只读诊断接口。
 export const executorsApi = {
   getStatus: (params?: { limit?: number }) => apiClient.get('/executors/status', { params }),
+  getExecution: (executionId: string) => apiClient.get(`/executors/executions/${encodePathSegment(executionId)}`),
   listReadonlyCommandPacks: (params?: { plugin_key?: string }) =>
     apiClient.get('/executors/readonly-command-packs', { params }),
   run: (payload: {
@@ -1185,6 +1186,7 @@ export const executorsApi = {
     readonly?: boolean
     timeout_seconds?: number
     task_id?: string
+    session_id?: string
     operator?: string
     approval_ticket?: string
     execution_context?: ExecutorExecutionContext

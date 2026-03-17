@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.runtime.models import ArtifactKind, TaskStatus
 
-from .deps import get_executor_service_dep, get_task_manager
+from .deps import get_analysis_session_repository_dep, get_executor_service_dep, get_task_manager
 
 router = APIRouter(prefix="/executors", tags=["executors"])
 
@@ -32,6 +33,7 @@ class ExecutorRunRequest(BaseModel):
     task_id: str | None = Field(default=None, description="关联任务 ID")
     operator: str = Field(default="system", description="操作人")
     approval_ticket: str = Field(default="", description="写操作审批单")
+    session_id: str | None = Field(default=None, description="关联分析会话 ID")
     execution_context: ExecutorExecutionContextRequest | None = Field(default=None, description="执行上下文")
 
 
@@ -127,6 +129,44 @@ async def _link_execution_to_task(
     }
 
 
+def _link_execution_to_analysis_session(
+    analysis_session_repository,
+    session_id: str,
+    run_result: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_session_id = (session_id or "").strip()
+    if not normalized_session_id:
+        return {"linked": False, "reason": "session_id_empty"}
+    if not analysis_session_repository:
+        return {"linked": False, "reason": "analysis_session_repository_unavailable"}
+
+    session = analysis_session_repository.get(normalized_session_id)
+    if not session:
+        return {"linked": False, "reason": "session_not_found", "session_id": normalized_session_id}
+
+    execution = run_result.get("execution") if isinstance(run_result.get("execution"), dict) else {}
+    execution_id = str(execution.get("execution_id") or "").strip()
+    if not execution_id:
+        return {"linked": False, "reason": "execution_id_missing", "session_id": normalized_session_id}
+
+    next_ids = list(session.executor_result_ids)
+    if execution_id not in next_ids:
+        next_ids.append(execution_id)
+    latest = analysis_session_repository.update(
+        normalized_session_id,
+        {"executor_result_ids": next_ids},
+    )
+    if not latest:
+        return {"linked": False, "reason": "session_update_failed", "session_id": normalized_session_id}
+
+    return {
+        "linked": True,
+        "session_id": normalized_session_id,
+        "execution_id": execution_id,
+        "executor_result_ids": latest.executor_result_ids,
+    }
+
+
 @router.get("/status")
 async def get_executor_status(
     limit: int = 30,
@@ -160,6 +200,7 @@ async def run_executor(
     payload: ExecutorRunRequest,
     executor_service=Depends(get_executor_service_dep),
     task_manager=Depends(get_task_manager),
+    analysis_session_repository=Depends(get_analysis_session_repository_dep),
 ):
     if not executor_service:
         raise HTTPException(status_code=409, detail="执行插件服务未初始化")
@@ -175,6 +216,7 @@ async def run_executor(
             approval_ticket=payload.approval_ticket,
             execution_context=payload.execution_context.model_dump() if payload.execution_context else None,
         )
+        result["evidence"] = executor_service.build_execution_evidence(result)
         if payload.task_id:
             try:
                 result["task_evidence"] = await _link_execution_to_task(
@@ -191,7 +233,30 @@ async def run_executor(
                 }
         else:
             result["task_evidence"] = {"linked": False, "reason": "task_id_missing"}
+        if payload.session_id:
+            result["analysis_session"] = _link_execution_to_analysis_session(
+                analysis_session_repository=analysis_session_repository,
+                session_id=payload.session_id,
+                run_result=result,
+            )
+        else:
+            result["analysis_session"] = {"linked": False, "reason": "session_id_missing"}
         return result
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "不存在" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.get("/executions/{execution_id}")
+async def get_executor_execution(
+    execution_id: str,
+    executor_service=Depends(get_executor_service_dep),
+):
+    if not executor_service:
+        raise HTTPException(status_code=409, detail="执行插件服务未初始化")
+    try:
+        return executor_service.get_execution_detail(execution_id)
     except ValueError as exc:
         message = str(exc)
         status_code = 404 if "不存在" in message else 400

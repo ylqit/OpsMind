@@ -230,6 +230,96 @@ def _extract_metric_quotes_from_text(text: str) -> list[tuple[str, str]]:
     return found
 
 
+def _read_artifact_json_payload(path: Path) -> dict[str, Any]:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        payload = json.loads(content)
+    except Exception:  # noqa: BLE001
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_executor_artifact_evidence(artifact: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    task_id = str(artifact.get("task_id") or "")
+    artifact_id = str(artifact.get("artifact_id") or "")
+    raw_path = str(artifact.get("path") or "").strip()
+    execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+    evidence_items = payload.get("evidence_refs") if isinstance(payload.get("evidence_refs"), list) else []
+
+    refs: list[dict[str, Any]] = []
+    for index, item in enumerate(evidence_items):
+        if not isinstance(item, dict):
+            continue
+        locator = dict(item.get("locator") or item.get("source_ref") or {})
+        locator.setdefault("task_id", task_id)
+        locator.setdefault("artifact_id", artifact_id)
+        locator.setdefault("path", raw_path)
+        locator.setdefault("layer", "task")
+        if execution.get("execution_id") and not locator.get("execution_id"):
+            locator["execution_id"] = execution.get("execution_id")
+        if execution.get("status") and not locator.get("status"):
+            locator["status"] = execution.get("status")
+        refs.append(
+            _build_evidence_ref(
+                {
+                    **item,
+                    "artifact_ref": artifact,
+                    "jump": {
+                        "kind": "artifact",
+                        "task_id": task_id,
+                        "artifact_id": artifact_id,
+                    },
+                    "locator": locator,
+                    "priority": int(item.get("priority") or 86),
+                    "signal_strength": str(item.get("signal_strength") or "high"),
+                    "source_type": str(item.get("source_type") or "executor_result"),
+                }
+            )
+        )
+
+    if refs:
+        return refs
+
+    execution_id = str(execution.get("execution_id") or "")
+    status = str(execution.get("status") or "")
+    plugin_key = str(execution.get("plugin_key") or "")
+    command = str(execution.get("command") or "")
+    quote = str(execution.get("stderr_preview") or execution.get("stdout_preview") or "").strip()[:600]
+    return [
+        _build_evidence_ref(
+            {
+                "evidence_id": f"executor_{execution_id or artifact_id}",
+                "kind": "executor",
+                "source": "executor_plugin",
+                "source_type": "executor_result",
+                "title": f"{plugin_key or '执行插件'} 执行结果",
+                "summary": f"命令状态 {status or '-'}，命令：{command or '-'}",
+                "quote": quote,
+                "priority": 86,
+                "signal_strength": "high",
+                "artifact_ref": artifact,
+                "jump": {
+                    "kind": "artifact",
+                    "task_id": task_id,
+                    "artifact_id": artifact_id,
+                },
+                "locator": {
+                    "task_id": task_id,
+                    "artifact_id": artifact_id,
+                    "path": raw_path,
+                    "execution_id": execution_id,
+                    "status": status,
+                    "source": plugin_key,
+                    "layer": "task",
+                },
+            }
+        )
+    ]
+
+
 def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
     artifact_id = str(artifact.get("artifact_id") or "")
     task_id = str(artifact.get("task_id") or "")
@@ -276,6 +366,10 @@ def _build_artifact_evidence(artifact: dict[str, Any]) -> list[dict[str, Any]]:
         return refs
 
     excerpt = _read_artifact_excerpt(artifact_path)
+    if kind == "json" or artifact_path.suffix.lower() == ".json":
+        payload = _read_artifact_json_payload(artifact_path)
+        if str(payload.get("source") or "").strip() == "executor_plugin":
+            refs.extend(_build_executor_artifact_evidence(artifact, payload))
     if excerpt:
         if kind in {"log_snippet", "text"} or artifact_path.suffix.lower() == ".log" or "access" in filename.lower():
             refs.append(
@@ -400,6 +494,7 @@ def _build_evidence_summary(refs: list[dict[str, Any]]) -> dict[str, int]:
         "log_snippet": len([item for item in refs if item.get("source_type") == "log_snippet"]),
         "metric_snapshot": len([item for item in refs if item.get("source_type") == "metric_snapshot"]),
         "incident_evidence": len([item for item in refs if item.get("source_type") == "incident_evidence"]),
+        "executor_result": len([item for item in refs if item.get("source_type") == "executor_result"]),
     }
 
 
