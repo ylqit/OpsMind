@@ -75,6 +75,7 @@ opsMind/
 - [Architecture](docs/architecture.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
 - [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security](SECURITY.md)
 
 ## Quick Start
@@ -181,6 +182,7 @@ npm run build
 - 提交问题前，先查看 README、架构文档和演示文档
 - 提交 PR 时，请说明变更背景、主要改动和本地验证结果
 - 详细协作说明见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 社区协作行为规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## License
 

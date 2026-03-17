@@ -74,6 +74,7 @@ opsMind/
 - [Architecture](docs/architecture.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
 - [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Security](SECURITY.md)
 
 ## Quick Start
@@ -180,6 +181,7 @@ Contributions through Issues and Pull Requests are welcome.
 - Review the README, architecture doc, and demo scenarios before opening a new issue
 - When submitting a PR, explain the background, key changes, and local verification steps
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for the detailed collaboration guide
+- See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community participation standards
 
 ## License
 

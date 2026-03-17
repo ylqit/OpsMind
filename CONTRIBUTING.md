@@ -4,6 +4,8 @@
 
 本文档提供最小协作约定，帮助贡献者快速理解提交流程、变更范围和提交期望。
 
+参与社区讨论与提交贡献前，请先阅读 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+
 ## Before You Start
 
 - 先阅读 [README.md](README.md)
@@ -57,6 +59,8 @@
 - 主要改动
 - 风险与兼容性说明
 - 本地验证结果
+
+默认模块归属规则见 [.github/CODEOWNERS](.github/CODEOWNERS)。如果改动跨越多个模块，建议在 PR 描述里明确说明影响范围。
 
 ## Development Notes
 
@@ -116,3 +120,9 @@ npm run build
 ## Questions
 
 如果你不确定某项改动是否符合当前方向，建议先提交 Issue 讨论，再开始实现。
+
+## Community Conduct
+
+- 请默认采用尊重、建设性、可协作的沟通方式
+- 对代码、设计和文档提出批评时，聚焦问题本身而不是个人
+- 如遇到不当行为或安全敏感沟通，请参考 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)

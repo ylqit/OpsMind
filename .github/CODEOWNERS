@@ -1,0 +1,32 @@
+# 默认规则：未命中更细粒度路径时，统一由仓库维护者负责评审。
+* @ylqit
+
+# 后端入口与接口层
+/api/ @ylqit
+/main.py @ylqit
+/settings.py @ylqit
+/requirements.txt @ylqit
+
+# 核心引擎与运行时
+/engine/ @ylqit
+
+# 前端工作台
+/frontend/ @ylqit
+
+# 脚本、文档与仓库治理文件
+/scripts/ @ylqit
+/docs/ @ylqit
+/README.md @ylqit
+/README_EN.md @ylqit
+/CONTRIBUTING.md @ylqit
+/CODE_OF_CONDUCT.md @ylqit
+/SECURITY.md @ylqit
+/LICENSE @ylqit
+
+# GitHub 协作配置
+/.github/ @ylqit
+
+# 部署与环境配置
+/docker-compose.yml @ylqit
+/.env.example @ylqit
+/.gitignore @ylqit
