@@ -127,6 +127,15 @@ export interface ClaimRecord {
   [key: string]: unknown
 }
 
+export interface DiagnosisReport {
+  summary: string
+  claims: ClaimRecord[]
+  evidence_refs: EvidenceRef[]
+  limitations: string[]
+  next_actions: string[]
+  risk_level: 'high' | 'medium' | 'low' | string
+}
+
 export interface IncidentRecord {
   incident_id: string
   title: string
@@ -245,6 +254,7 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
   evidence_refs: RecommendationEvidenceRef[]
   log_samples: LogSampleRecord[]
   claims: ClaimRecord[]
+  diagnosis_report: DiagnosisReport
   assistant_writebacks?: AIWritebackRecord[]
   evidence_status: 'sufficient' | 'insufficient'
   evidence_message: string
@@ -591,6 +601,7 @@ export interface IncidentDetailResponse {
   log_samples: LogSampleRecord[]
   evidence_summary: IncidentEvidenceSummary
   claims: ClaimRecord[]
+  diagnosis_report: DiagnosisReport
   assistant_writebacks?: AIWritebackRecord[]
   recommendation_task?: IncidentRecommendationTaskLink | null
   recommendation_tasks?: IncidentRecommendationTaskLink[]
@@ -626,6 +637,7 @@ export interface IncidentAISummaryResponse {
   guardrail_error_message?: string
   log_sample_count: number
   recommendation_count: number
+  diagnosis_report: DiagnosisReport
 }
 
 export interface RecommendationAIReviewResponse {
@@ -646,6 +658,7 @@ export interface RecommendationAIReviewResponse {
   retry_count?: number
   guardrail_error_code?: string
   guardrail_error_message?: string
+  diagnosis_report: DiagnosisReport
 }
 
 export interface AIAssistantCommandSuggestion {
@@ -722,6 +735,7 @@ export interface AIAssistantDiagnoseResponse {
   degraded_reason: string
   latency_ms: number
   command_suggestions: AIAssistantCommandSuggestion[]
+  diagnosis_report: DiagnosisReport
   context: {
     session_id: string
     service_key: string

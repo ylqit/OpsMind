@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from engine.llm.structured_output import run_guarded_scenario_chat
-from engine.runtime.models import ArtifactRef, Claim, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
+from engine.runtime.models import ArtifactRef, Claim, DiagnosisReport, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
 
 from .deps import (
     get_ai_writeback_repository_dep,
@@ -72,6 +72,7 @@ class RecommendationAIReviewPayload(BaseModel):
     retry_count: int = 0
     guardrail_error_code: str = ""
     guardrail_error_message: str = ""
+    diagnosis_report: DiagnosisReport
 
 
 class RecommendationFeedbackRequest(BaseModel):
@@ -739,6 +740,39 @@ def _build_recommendation_ai_claims(
             claims.append(action_claim)
 
     return claims
+
+
+def _build_recommendation_risk_level(incident, fallback: str = "medium") -> str:
+    severity = str(getattr(incident, "severity", "") or "").strip().lower()
+    if severity == "critical":
+        return "high"
+    if severity == "warning":
+        return "medium"
+    return _normalize_risk_level(fallback)
+
+
+def _build_recommendation_diagnosis_report(
+    *,
+    summary: str,
+    claims: list[dict[str, Any]],
+    evidence_refs: list[dict[str, Any]],
+    limitations: list[str],
+    next_actions: list[str],
+    risk_level: str,
+) -> dict[str, Any]:
+    """统一 recommendation 诊断对象，供详情与 AI 复核共用。"""
+
+    report = DiagnosisReport.model_validate(
+        {
+            "summary": str(summary or "").strip(),
+            "claims": claims,
+            "evidence_refs": evidence_refs,
+            "limitations": [item for item in limitations if str(item).strip()],
+            "next_actions": [item for item in next_actions if str(item).strip()],
+            "risk_level": _normalize_risk_level(risk_level),
+        }
+    )
+    return report.model_dump(mode="python")
 
 
 def _build_artifact_group(artifacts: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
@@ -1483,7 +1517,24 @@ async def get_recommendation_detail(
     detail["task_context"] = task_context
     detail["task_trace_preview"] = task_trace_preview
     detail["task_trace_summary"] = _build_task_trace_summary(task_trace_preview)
-    detail["claims"] = _build_recommendation_claims(recommendation, incident, evidence_payload)
+    recommendation_claims = _build_recommendation_claims(recommendation, incident, evidence_payload)
+    detail["claims"] = recommendation_claims
+    detail["diagnosis_report"] = _build_recommendation_diagnosis_report(
+        summary=str(detail.get("recommendation_effective") or recommendation.recommendation or ""),
+        claims=recommendation_claims,
+        evidence_refs=[item for item in detail.get("evidence_refs") or [] if isinstance(item, dict)],
+        limitations=_build_recommendation_limitations(
+            evidence_status=str(detail.get("evidence_status") or "insufficient"),
+            evidence_summary=detail.get("evidence_summary") or {},
+            risk_note=str(recommendation.risk_note or ""),
+        ),
+        next_actions=(
+            ["补充日志、指标与任务产物后重新生成建议"]
+            if str(detail.get("evidence_status") or "insufficient") != "sufficient"
+            else [str(detail.get("recommendation_effective") or recommendation.recommendation or "").strip()]
+        ),
+        risk_level=_build_recommendation_risk_level(incident),
+    )
     detail["assistant_writebacks"] = [
         item.model_dump(mode="json")
         for item in (writeback_repository.list_by_recommendation(recommendation_id) if writeback_repository else [])
@@ -1643,6 +1694,12 @@ async def review_recommendation_with_ai(
     normalized = _normalize_review_payload(guardrail_result.data, fallback_payload)
     evidence_payload = _build_recommendation_evidence_payload(recommendation, incident)
     evidence_refs = [item for item in evidence_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    ai_claims = _build_recommendation_ai_claims(recommendation, normalized, evidence_refs)
+    ai_limitations = _build_recommendation_limitations(
+        evidence_status="sufficient" if evidence_refs else "insufficient",
+        evidence_summary=evidence_payload.get("evidence_summary") or {},
+        risk_note=str(normalized.get("risk_assessment") or ""),
+    )
     result = RecommendationAIReviewPayload(
         recommendation_id=recommendation.recommendation_id,
         incident_id=recommendation.incident_id,
@@ -1652,7 +1709,15 @@ async def review_recommendation_with_ai(
         retry_count=guardrail_result.retry_count,
         guardrail_error_code=guardrail_result.error_code,
         guardrail_error_message=guardrail_result.error_message,
-        claims=_build_recommendation_ai_claims(recommendation, normalized, evidence_refs),
+        claims=ai_claims,
+        diagnosis_report=_build_recommendation_diagnosis_report(
+            summary=str(normalized.get("summary") or ""),
+            claims=ai_claims,
+            evidence_refs=evidence_refs,
+            limitations=ai_limitations,
+            next_actions=_to_string_list(normalized.get("validation_checks"), limit=8),
+            risk_level=str(normalized.get("risk_level") or "medium"),
+        ),
         **normalized,
     )
     return result.model_dump(mode="json")

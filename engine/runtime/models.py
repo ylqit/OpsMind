@@ -166,6 +166,23 @@ class Claim(BaseModel):
     next_step: Optional[str] = None
 
 
+class DiagnosisReport(BaseModel):
+    """统一诊断对象。
+
+    Incident、Recommendation 和 AI Assistant 都通过这一结构输出诊断结果，
+    这样前端可以围绕同一份“总结 + 证据 + 限制 + 下一步”协议渲染。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    summary: str = ""
+    claims: List[Claim] = Field(default_factory=list)
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+    next_actions: List[str] = Field(default_factory=list)
+    risk_level: Literal["high", "medium", "low"] = "medium"
+
+
 class Observation(BaseModel):
     kind: ObservationKind
     summary: str

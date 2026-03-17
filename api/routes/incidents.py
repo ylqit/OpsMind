@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from engine.domain.incident_evidence import normalize_incident_evidence, sort_incident_evidence, summarize_incident_evidence
 from engine.llm.structured_output import run_guarded_scenario_chat
-from engine.runtime.models import ArtifactKind, Claim, TaskStatus, TaskType
+from engine.runtime.models import ArtifactKind, Claim, DiagnosisReport, TaskStatus, TaskType
 
 from .deps import (
     get_alert_store,
@@ -62,6 +62,7 @@ class IncidentAISummaryPayload(BaseModel):
     guardrail_error_message: str = ""
     log_sample_count: int = 0
     recommendation_count: int = 0
+    diagnosis_report: DiagnosisReport
 
 
 class IncidentRoleViewSchema(BaseModel):
@@ -291,6 +292,39 @@ def _build_incident_ai_claims(
             claims.append(action_claim)
 
     return claims
+
+
+def _build_incident_risk_level(severity: Any) -> str:
+    normalized = str(severity or "").strip().lower()
+    if normalized == "critical":
+        return "high"
+    if normalized == "warning":
+        return "medium"
+    return "low"
+
+
+def _build_incident_diagnosis_report(
+    *,
+    summary: str,
+    claims: list[dict[str, Any]],
+    evidence_refs: list[dict[str, Any]],
+    limitations: list[str],
+    next_actions: list[str],
+    risk_level: str,
+) -> dict[str, Any]:
+    """统一 incident 诊断对象，供详情页和 AI 总结共用。"""
+
+    report = DiagnosisReport.model_validate(
+        {
+            "summary": str(summary or "").strip(),
+            "claims": claims,
+            "evidence_refs": evidence_refs,
+            "limitations": [item for item in limitations if str(item).strip()],
+            "next_actions": [item for item in next_actions if str(item).strip()],
+            "risk_level": _normalize_risk_level(risk_level),
+        }
+    )
+    return report.model_dump(mode="python")
 
 
 def _serialize_incident(incident) -> dict[str, Any]:
@@ -564,12 +598,31 @@ async def get_incident_detail(
     incident_payload = _serialize_incident(incident)
     recommendation_tasks = _build_recommendation_task_links(incident_id, task_manager)
     evidence_summary = _build_evidence_summary(incident_payload)
+    incident_claims = _build_incident_claims(incident_payload, evidence_summary)
+    incident_evidence_refs = [item for item in incident_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    incident_limitations = _build_claim_limitations(
+        evidence_refs=incident_evidence_refs,
+        evidence_summary=evidence_summary,
+        risk_level=_build_incident_risk_level(incident_payload.get("severity")),
+    )
+    incident_next_actions = _to_string_list(incident_payload.get("recommended_actions"), limit=6)
+    next_step = str(evidence_summary.get("next_step") or "").strip()
+    if next_step and next_step not in incident_next_actions:
+        incident_next_actions.append(next_step)
     return {
         "incident": incident_payload,
         "recommendations": [item.model_dump(mode="json") for item in recommendations],
         "log_samples": log_samples,
         "evidence_summary": evidence_summary,
-        "claims": _build_incident_claims(incident_payload, evidence_summary),
+        "claims": incident_claims,
+        "diagnosis_report": _build_incident_diagnosis_report(
+            summary=str(incident_payload.get("summary") or ""),
+            claims=incident_claims,
+            evidence_refs=incident_evidence_refs,
+            limitations=incident_limitations,
+            next_actions=incident_next_actions,
+            risk_level=_build_incident_risk_level(incident_payload.get("severity")),
+        ),
         "assistant_writebacks": [item.model_dump(mode="json") for item in (writeback_repository.list_by_incident(incident_id) if writeback_repository else [])],
         "recommendation_task": recommendation_tasks[0] if recommendation_tasks else None,
         "recommendation_tasks": recommendation_tasks,
@@ -659,6 +712,12 @@ async def generate_incident_ai_summary(
 
     normalized = _normalize_summary_payload(guardrail_result.data, fallback_payload)
     incident_payload = _serialize_incident(incident)
+    incident_evidence_refs = [item for item in incident_payload.get("evidence_refs") or [] if isinstance(item, dict)]
+    ai_claims = _build_incident_ai_claims(incident, normalized, incident_evidence_refs)
+    ai_limitations = _build_claim_limitations(
+        evidence_refs=incident_evidence_refs,
+        risk_level=str(normalized.get("risk_level") or "medium"),
+    )
     result = IncidentAISummaryPayload(
         incident_id=incident.incident_id,
         provider=request.provider or llm_router.default_client_name,
@@ -669,7 +728,15 @@ async def generate_incident_ai_summary(
         guardrail_error_message=guardrail_result.error_message,
         log_sample_count=len(samples),
         recommendation_count=len(recommendations),
-        claims=_build_incident_ai_claims(incident, normalized, incident_payload.get("evidence_refs") or []),
+        claims=ai_claims,
+        diagnosis_report=_build_incident_diagnosis_report(
+            summary=str(normalized.get("summary") or ""),
+            claims=ai_claims,
+            evidence_refs=incident_evidence_refs,
+            limitations=ai_limitations,
+            next_actions=_to_string_list(normalized.get("recommended_actions"), limit=10),
+            risk_level=str(normalized.get("risk_level") or "medium"),
+        ),
         **normalized,
     )
     return result.model_dump(mode="json")

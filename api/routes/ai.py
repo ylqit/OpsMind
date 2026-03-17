@@ -22,6 +22,8 @@ from engine.runtime.models import (
     AIWritebackRecord,
     AnalysisSession,
     AnalysisSessionSource,
+    Claim,
+    DiagnosisReport,
     TaskType,
 )
 
@@ -359,6 +361,81 @@ def _summarize_writeback_content(content: str) -> str:
     return _trim_text(first_block, limit=180)
 
 
+def _extract_assistant_summary(answer: str) -> str:
+    normalized = str(answer or "").replace("\r\n", "\n").strip()
+    if not normalized:
+        return ""
+    paragraphs = [item.strip() for item in normalized.split("\n\n") if item.strip()]
+    if paragraphs:
+        return _trim_text(paragraphs[0], limit=220)
+    return _trim_text(normalized.splitlines()[0].strip(), limit=220)
+
+
+def _infer_assistant_risk_level(answer: str, status: str) -> str:
+    text = str(answer or "").lower()
+    if any(keyword in text for keyword in ["critical", "高风险", "严重", "不可用", "oom", "5xx", "重启风暴"]):
+        return "high"
+    if status == "degraded":
+        return "medium"
+    if any(keyword in text for keyword in ["异常", "波动", "延迟", "限流", "告警", "risk"]):
+        return "medium"
+    return "low"
+
+
+def _build_assistant_diagnosis_limitations(status: str, evidence_ids: list[str]) -> list[str]:
+    limitations: list[str] = []
+    if evidence_ids:
+        limitations.append("当前会话仅保存证据标识，完整证据内容请回到异常或建议详情查看。")
+    else:
+        limitations.append("当前会话尚未绑定现场证据，诊断结论主要依赖上下文描述。")
+    if status == "degraded":
+        limitations.append("当前回答来自降级模式，建议补充可用 Provider 后再次复核。")
+    else:
+        limitations.append("AI 诊断结论仍需结合现场指标、日志和变更窗口做人工复核。")
+
+    deduplicated: list[str] = []
+    for item in limitations:
+        if item not in deduplicated:
+            deduplicated.append(item)
+    return deduplicated[:3]
+
+
+def _build_assistant_diagnosis_report(
+    *,
+    answer: str,
+    status: str,
+    evidence_ids: list[str],
+    command_suggestions: list[dict[str, str]],
+) -> dict[str, Any]:
+    summary = _extract_assistant_summary(answer)
+    limitations = _build_assistant_diagnosis_limitations(status, evidence_ids)
+    next_actions = [str(item.get("title") or item.get("command") or "").strip() for item in command_suggestions[:4]]
+    primary_claim = Claim.model_validate(
+        {
+            "claim_id": "assistant_diagnosis_summary",
+            "kind": "summary",
+            "statement": summary or "当前会话暂无可展示的 AI 诊断结论。",
+            "evidence_ids": evidence_ids[:3],
+            "confidence": 0.38 if status == "degraded" else 0.62,
+            "limitations": limitations,
+            "title": "AI 诊断结论",
+            "source": "ai_assistant",
+            "next_step": next_actions[0] if next_actions else None,
+        }
+    )
+    report = DiagnosisReport.model_validate(
+        {
+            "summary": summary or "当前会话暂无可展示的 AI 诊断结论。",
+            "claims": [primary_claim],
+            "evidence_refs": [],
+            "limitations": limitations,
+            "next_actions": [item for item in next_actions if item],
+            "risk_level": _infer_assistant_risk_level(answer, status),
+        }
+    )
+    return report.model_dump(mode="python")
+
+
 def _normalize_command_suggestion_items(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
     for item in items or []:
@@ -616,13 +693,20 @@ async def diagnose_with_ai_assistant(
 
     if not llm_router:
         reason = "NO_PROVIDER"
+        fallback_answer = _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range)
         return {
             "status": "degraded",
-            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range),
+            "answer": fallback_answer,
             "provider": "",
             "degraded_reason": reason,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "command_suggestions": command_suggestions,
+            "diagnosis_report": _build_assistant_diagnosis_report(
+                answer=fallback_answer,
+                status="degraded",
+                evidence_ids=evidence_ids,
+                command_suggestions=command_suggestions,
+            ),
             "context": {
                 "session_id": session.session_id if session else "",
                 "service_key": service_key,
@@ -659,13 +743,20 @@ async def diagnose_with_ai_assistant(
         )
     except Exception as exc:  # noqa: BLE001
         reason = _normalize_error_code(exc)
+        fallback_answer = _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range)
         return {
             "status": "degraded",
-            "answer": _build_assistant_fallback_answer(reason, command_suggestions, service_key, time_range),
+            "answer": fallback_answer,
             "provider": payload.provider or getattr(llm_router, "default_client_name", ""),
             "degraded_reason": reason,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "command_suggestions": command_suggestions,
+            "diagnosis_report": _build_assistant_diagnosis_report(
+                answer=fallback_answer,
+                status="degraded",
+                evidence_ids=evidence_ids,
+                command_suggestions=command_suggestions,
+            ),
             "context": {
                 "session_id": session.session_id if session else "",
                 "service_key": service_key,
@@ -684,6 +775,12 @@ async def diagnose_with_ai_assistant(
         "degraded_reason": "",
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "command_suggestions": command_suggestions,
+        "diagnosis_report": _build_assistant_diagnosis_report(
+            answer=content,
+            status="success",
+            evidence_ids=evidence_ids,
+            command_suggestions=command_suggestions,
+        ),
         "context": {
             "session_id": session.session_id if session else "",
             "service_key": service_key,
