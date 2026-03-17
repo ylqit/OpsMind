@@ -72,7 +72,9 @@ opsMind/
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [API Overview](docs/api-overview.md)
 - [Deployment Guide](docs/deployment.md)
+- [Project Scope](docs/project-scope.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
 - [Release Guide](docs/release.md)
 - [Contributing](CONTRIBUTING.md)
@@ -154,6 +156,8 @@ Recommended demo flows are documented in [docs/demo-scenarios.md](docs/demo-scen
 
 ## API
 
+See [docs/api-overview.md](docs/api-overview.md) for the route-level overview.
+
 Primary product routes:
 
 - `/api/dashboard/*`
@@ -169,6 +173,8 @@ Primary product routes:
 Debug-only routes:
 
 - `api/legacy_routes.py`
+
+Note: debug-only routes primarily support the developer workbench and should not be treated as the long-term integration surface for external systems.
 
 ## Development
 

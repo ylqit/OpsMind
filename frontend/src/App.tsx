@@ -42,16 +42,21 @@ const primaryMenuItems: NonNullable<MenuProps['items']>[number][] = [
   { key: '/executors', icon: <ToolOutlined />, label: '执行插件' },
 ]
 
-const supportMenuItems: NonNullable<MenuProps['items']>[number][] = [
-  { key: '/workbench', icon: <ToolOutlined />, label: '能力调试' },
+const settingsMenuItems: NonNullable<MenuProps['items']>[number][] = [
   { key: '/llm-settings', icon: <ThunderboltOutlined />, label: 'LLM 配置' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+]
+
+const devMenuItems: NonNullable<MenuProps['items']>[number][] = [
+  { key: '/workbench', icon: <ToolOutlined />, label: '能力调试（开发）' },
 ]
 
 const menuItems: MenuProps['items'] = [
   { type: 'group', label: '主控台', children: primaryMenuItems },
   { type: 'divider' },
-  { type: 'group', label: '调试与设置', children: supportMenuItems },
+  { type: 'group', label: '系统设置', children: settingsMenuItems },
+  { type: 'divider' },
+  { type: 'group', label: '开发辅助', children: devMenuItems },
 ]
 
 const AppLayout: React.FC = () => {

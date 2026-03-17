@@ -73,7 +73,9 @@ opsMind/
 
 - [English README](README_EN.md)
 - [Architecture](docs/architecture.md)
+- [API Overview](docs/api-overview.md)
 - [Deployment Guide](docs/deployment.md)
+- [Project Scope](docs/project-scope.md)
 - [Demo Scenarios](docs/demo-scenarios.md)
 - [Release Guide](docs/release.md)
 - [Contributing](CONTRIBUTING.md)
@@ -155,6 +157,8 @@ python scripts/demo_doctor.py --seed --write-report
 
 ## API
 
+详细接口总览见 [docs/api-overview.md](docs/api-overview.md)。
+
 主产品接口：
 
 - `/api/dashboard/*`
@@ -170,6 +174,8 @@ python scripts/demo_doctor.py --seed --write-report
 调试接口：
 
 - `api/legacy_routes.py`
+
+说明：调试接口主要服务于开发辅助页，不建议作为外部系统的长期集成入口。
 
 ## Development
 

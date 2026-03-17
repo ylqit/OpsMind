@@ -1,8 +1,13 @@
 """Legacy 调试路由。
 
-该模块只保留能力调试工作台所需的最小接口：
+该模块只保留开发调试页所需的最小接口：
 - 列出能力
 - 调用能力
+
+说明：
+- 不属于主产品 API 面
+- 不作为稳定集成契约
+- 主要服务于本地调试、开发验证与兼容入口
 """
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-router = APIRouter()
+router = APIRouter(tags=["legacy-debug"])
 
 
 class DispatchRequest(BaseModel):
@@ -30,7 +35,7 @@ def get_registry():
 
 @router.get("/capabilities")
 async def list_capabilities(registry=Depends(get_registry)) -> list[dict[str, Any]]:
-    """列出所有可调试能力。"""
+    """列出开发调试页可见的能力清单。"""
     if not registry:
         return []
 
@@ -52,7 +57,7 @@ async def dispatch_capability(
     request: DispatchRequest,
     registry=Depends(get_registry),
 ) -> dict[str, Any]:
-    """调用指定能力。"""
+    """调用指定能力，仅用于开发调试与兼容验证。"""
     if not registry:
         raise HTTPException(status_code=503, detail="能力注册表尚未初始化")
 
@@ -66,4 +71,3 @@ async def dispatch_capability(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return result.to_dict()
-

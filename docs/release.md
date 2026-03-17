@@ -19,7 +19,7 @@
 
 - 确认 [README.md](../README.md) 与 [README_EN.md](../README_EN.md) 没有明显过期描述
 - 确认 [CONTRIBUTING.md](../CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md)、[SECURITY.md](../SECURITY.md) 仍与当前仓库策略一致
-- 确认 [docs/architecture.md](./architecture.md)、[docs/deployment.md](./deployment.md) 与 [docs/demo-scenarios.md](./demo-scenarios.md) 未落后于主链路
+- 确认 [docs/architecture.md](./architecture.md)、[docs/api-overview.md](./api-overview.md)、[docs/deployment.md](./deployment.md)、[docs/project-scope.md](./project-scope.md) 与 [docs/demo-scenarios.md](./demo-scenarios.md) 未落后于主链路
 - 如果启动方式、环境变量或部署路径有变化，同步更新 [docker-compose.yml](../docker-compose.yml) 与 [\.env.example](../.env.example)
 
 ### Backend

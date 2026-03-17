@@ -152,6 +152,11 @@ flowchart LR
 - `api/client.ts`: 统一 API 契约层
 - `stores/`: 跨页筛选与状态共享
 
+其中：
+
+- `异常中心 / 建议中心 / 任务中心 / AI 助手 / 执行插件` 组成主产品链路
+- `CapabilityWorkbench` 属于开发辅助页面，不应被视为主产品入口
+
 ## Core Product Flows
 
 ### Incident To Recommendation
@@ -199,3 +204,9 @@ AI 助手不是独立聊天页，而是围绕当前 `incident`、`recommendation
 - [frontend/src/components/CapabilityWorkbench](../frontend/src/components/CapabilityWorkbench)
 
 这两部分用于能力调试与兼容，不承载主产品链路。
+
+对外表达建议：
+
+- README、API 文档和前端导航应优先突出主产品链路
+- 调试层可以保留，但应以“开发辅助”或“兼容入口”方式出现
+- 不建议将 `legacy_routes` 作为外部系统的长期集成面
