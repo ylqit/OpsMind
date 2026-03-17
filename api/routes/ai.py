@@ -16,15 +16,24 @@ from engine.llm.config import (
     resolve_provider_base_url,
     serialize_provider_record,
 )
-from engine.runtime.models import AIProviderConfigRecord, AnalysisSession, AnalysisSessionSource
+from engine.runtime.models import (
+    AIProviderConfigRecord,
+    AIWritebackKind,
+    AIWritebackRecord,
+    AnalysisSession,
+    AnalysisSessionSource,
+    TaskType,
+)
 
 from .deps import (
     get_ai_call_log_repository_dep,
     get_ai_provider_config_repository_dep,
+    get_ai_writeback_repository_dep,
     get_analysis_session_repository_dep,
     get_executor_service_dep,
     get_llm_router_dep,
     get_refresh_llm_router_dep,
+    get_task_manager,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -132,6 +141,23 @@ class AnalysisSessionPatchRequest(BaseModel):
     recommendation_id: str | None = Field(default=None, description="建议 ID")
     evidence_ids: list[str] | None = Field(default=None, description="证据 ID 列表")
     executor_result_ids: list[str] | None = Field(default=None, description="执行结果 ID 列表")
+
+
+class AssistantWritebackCreateRequest(BaseModel):
+    """保存 AI 助手高价值输出。"""
+
+    session_id: str | None = Field(default=None, description="分析会话 ID，可选")
+    kind: AIWritebackKind = Field(..., description="回写类型")
+    title: str = Field(default="", description="展示标题")
+    summary: str = Field(default="", description="回写摘要")
+    content: str = Field(..., min_length=1, description="回写正文")
+    provider: str = Field(default="", description="触发回写的模型名称")
+    status: str = Field(default="success", description="回写来源状态")
+    incident_id: str | None = Field(default=None, description="异常 ID")
+    recommendation_id: str | None = Field(default=None, description="建议 ID")
+    task_id: str | None = Field(default=None, description="任务 ID，可选")
+    claims: list[dict[str, Any]] = Field(default_factory=list, description="结构化结论")
+    command_suggestions: list[dict[str, Any]] = Field(default_factory=list, description="只读命令建议")
 
 
 def _normalize_error_code(error: Exception) -> str:
@@ -315,6 +341,108 @@ def _build_assistant_fallback_answer(
         lines.append("当前没有可用命令模板，请先检查执行插件是否已启用。")
     lines.append(f"降级原因：{reason}")
     return "\n".join(lines)
+
+
+def _trim_text(value: str, limit: int = 240) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _summarize_writeback_content(content: str) -> str:
+    normalized = str(content or "").replace("\r\n", "\n").strip()
+    if not normalized:
+        return ""
+    paragraphs = [item.strip() for item in normalized.split("\n\n") if item.strip()]
+    first_block = paragraphs[0] if paragraphs else normalized.splitlines()[0].strip()
+    return _trim_text(first_block, limit=180)
+
+
+def _normalize_command_suggestion_items(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        if not command:
+            continue
+        normalized.append(
+            {
+                "plugin_key": str(item.get("plugin_key") or "").strip(),
+                "plugin_name": str(item.get("plugin_name") or "").strip(),
+                "category_key": str(item.get("category_key") or "").strip(),
+                "category_label": str(item.get("category_label") or "").strip(),
+                "template_id": str(item.get("template_id") or "").strip(),
+                "title": str(item.get("title") or command).strip(),
+                "description": str(item.get("description") or "").strip(),
+                "command": command,
+            }
+        )
+    return normalized
+
+
+def _build_writeback_title(
+    kind: AIWritebackKind,
+    *,
+    incident_id: str,
+    recommendation_id: str,
+) -> str:
+    if kind == AIWritebackKind.INCIDENT_SUMMARY_DRAFT:
+        return f"异常总结草稿 · {incident_id or 'manual'}"
+    if kind == AIWritebackKind.RECOMMENDATION_RATIONALE:
+        return f"建议说明草稿 · {recommendation_id or incident_id or 'manual'}"
+    return f"执行跟进建议 · {recommendation_id or incident_id or 'manual'}"
+
+
+def _task_matches_incident(task, incident_id: str) -> bool:
+    if not incident_id:
+        return False
+    payload_incident_id = str(task.payload.get("incident_id") or "").strip()
+    if payload_incident_id == incident_id:
+        return True
+    result_ref = task.result_ref if isinstance(task.result_ref, dict) else {}
+    return str(result_ref.get("incident_id") or "").strip() == incident_id
+
+
+def _task_matches_recommendation(task, recommendation_id: str) -> bool:
+    if not recommendation_id:
+        return False
+    payload_recommendation_id = str(task.payload.get("recommendation_id") or "").strip()
+    if payload_recommendation_id == recommendation_id:
+        return True
+    result_ref = task.result_ref if isinstance(task.result_ref, dict) else {}
+    if str(result_ref.get("recommendation_id") or "").strip() == recommendation_id:
+        return True
+    recommendations = result_ref.get("recommendations")
+    if not isinstance(recommendations, list):
+        return False
+    return any(str(item.get("recommendation_id") or "").strip() == recommendation_id for item in recommendations if isinstance(item, dict))
+
+
+def _infer_related_task_id(task_manager, *, incident_id: str, recommendation_id: str) -> str | None:
+    if not task_manager:
+        return None
+
+    # 优先把 AI 助手回写挂到最贴近业务对象的任务上，便于任务中心直接回看。
+    if recommendation_id:
+        tasks = task_manager.list_tasks(task_type=TaskType.RECOMMENDATION_GENERATION.value)
+        for task in tasks:
+            if _task_matches_recommendation(task, recommendation_id):
+                return task.task_id
+
+    if incident_id:
+        incident_tasks = task_manager.list_tasks(task_type=TaskType.INCIDENT_ANALYSIS.value)
+        for task in incident_tasks:
+            if _task_matches_incident(task, incident_id):
+                return task.task_id
+
+        recommendation_tasks = task_manager.list_tasks(task_type=TaskType.RECOMMENDATION_GENERATION.value)
+        for task in recommendation_tasks:
+            if _task_matches_incident(task, incident_id):
+                return task.task_id
+
+    return None
 
 
 def _build_assistant_status_payload(
@@ -565,6 +693,68 @@ async def diagnose_with_ai_assistant(
             "evidence_ids": evidence_ids,
             "executor_result_ids": executor_result_ids,
         },
+    }
+
+
+@router.post("/assistant/writebacks")
+async def create_assistant_writeback(
+    payload: AssistantWritebackCreateRequest,
+    session_repository=Depends(get_analysis_session_repository_dep),
+    writeback_repository=Depends(get_ai_writeback_repository_dep),
+    task_manager=Depends(get_task_manager),
+):
+    """保存 AI 助手高价值输出，供异常、建议与任务详情复用。"""
+    if not writeback_repository:
+        raise HTTPException(status_code=409, detail="AI 回写仓储未初始化")
+
+    session = None
+    if payload.session_id:
+        if not session_repository:
+            raise HTTPException(status_code=409, detail="分析会话仓储未初始化")
+        session = session_repository.get(payload.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="分析会话不存在")
+
+    incident_id = str(payload.incident_id or (session.incident_id if session else "") or "").strip() or None
+    recommendation_id = str(payload.recommendation_id or (session.recommendation_id if session else "") or "").strip() or None
+    task_id = str(payload.task_id or "").strip() or _infer_related_task_id(
+        task_manager,
+        incident_id=incident_id or "",
+        recommendation_id=recommendation_id or "",
+    )
+
+    if not incident_id and not recommendation_id and not task_id:
+        raise HTTPException(status_code=400, detail="AI 回写至少需要关联异常、建议或任务中的一项")
+
+    content = str(payload.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="AI 回写内容不能为空")
+
+    summary = str(payload.summary or "").strip() or _summarize_writeback_content(content)
+    title = str(payload.title or "").strip() or _build_writeback_title(
+        payload.kind,
+        incident_id=incident_id or "",
+        recommendation_id=recommendation_id or "",
+    )
+
+    record = AIWritebackRecord(
+        session_id=session.session_id if session else (payload.session_id or None),
+        kind=payload.kind,
+        title=title,
+        summary=summary,
+        content=content,
+        provider=str(payload.provider or "").strip(),
+        status=str(payload.status or "success").strip() or "success",
+        incident_id=incident_id,
+        recommendation_id=recommendation_id,
+        task_id=task_id,
+        claims=[item for item in payload.claims if isinstance(item, dict)],
+        command_suggestions=_normalize_command_suggestion_items(payload.command_suggestions),
+    )
+    saved = writeback_repository.save(record)
+    return {
+        "message": "AI 回写已保存",
+        "writeback": saved.model_dump(mode="json"),
     }
 
 

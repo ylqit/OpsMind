@@ -19,6 +19,7 @@ import {
 } from '@/api/client'
 import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
 import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
+import AIWritebackList from '@/components/ai/AIWritebackList'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
 import { useTaskEventStream, type TaskEventMessage } from '@/hooks/useTaskEventStream'
 import { useWorkspaceFilterStore } from '@/stores/workspaceFilterStore'
@@ -270,6 +271,7 @@ export const IncidentCenter: React.FC = () => {
   const incidentClaims = useMemo<ClaimRecord[]>(() => selectedIncident?.claims || [], [selectedIncident])
   const aiSummaryClaims = useMemo<ClaimRecord[]>(() => aiSummary?.claims || [], [aiSummary])
   const evidenceHighlights = useMemo(() => diagnosisSummary?.highlights || [], [diagnosisSummary])
+  const incidentWritebacks = useMemo(() => selectedIncident?.assistant_writebacks || [], [selectedIncident])
 
   const visibleRecommendationTask = useMemo(() => {
     if (!selectedIncident || !recommendationTask) {
@@ -840,6 +842,14 @@ export const IncidentCenter: React.FC = () => {
                     ) : null}
                   </Card>
                 ) : null}
+
+                <AIWritebackList
+                  items={incidentWritebacks}
+                  title="AI 回写记录"
+                  emptyDescription="当前异常还没有沉淀下来的 AI 回写内容"
+                  style={{ marginBottom: 16 }}
+                  onOpenTask={(taskId) => navigate(`/tasks?taskId=${encodeURIComponent(taskId)}`)}
+                />
 
                 <Card type="inner" title="证据链分层" style={{ marginBottom: 16 }}>
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>

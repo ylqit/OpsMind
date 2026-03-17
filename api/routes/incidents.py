@@ -13,6 +13,7 @@ from engine.runtime.models import ArtifactKind, Claim, TaskStatus, TaskType
 
 from .deps import (
     get_alert_store,
+    get_ai_writeback_repository_dep,
     get_asset_service,
     get_incident_service,
     get_llm_router_dep,
@@ -541,6 +542,7 @@ async def get_incident_detail(
     recommendation_service=Depends(get_recommendation_service),
     traffic_engine=Depends(get_traffic_engine),
     task_manager=Depends(get_task_manager),
+    writeback_repository=Depends(get_ai_writeback_repository_dep),
 ):
     incident = incident_service.get_incident(incident_id)
     if not incident:
@@ -568,6 +570,7 @@ async def get_incident_detail(
         "log_samples": log_samples,
         "evidence_summary": evidence_summary,
         "claims": _build_incident_claims(incident_payload, evidence_summary),
+        "assistant_writebacks": [item.model_dump(mode="json") for item in (writeback_repository.list_by_incident(incident_id) if writeback_repository else [])],
         "recommendation_task": recommendation_tasks[0] if recommendation_tasks else None,
         "recommendation_tasks": recommendation_tasks,
     }

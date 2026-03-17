@@ -245,6 +245,7 @@ export interface RecommendationDetailResponse extends RecommendationRecord {
   evidence_refs: RecommendationEvidenceRef[]
   log_samples: LogSampleRecord[]
   claims: ClaimRecord[]
+  assistant_writebacks?: AIWritebackRecord[]
   evidence_status: 'sufficient' | 'insufficient'
   evidence_message: string
   confidence_effective: number
@@ -579,6 +580,7 @@ export interface TaskDetailResponse {
   trace_preview: Array<Record<string, unknown>>
   artifacts: TaskArtifact[]
   failure_diagnosis?: TaskFailureDiagnosis | null
+  assistant_writebacks?: AIWritebackRecord[]
 }
 
 export type IncidentLogSample = LogSampleRecord
@@ -589,6 +591,7 @@ export interface IncidentDetailResponse {
   log_samples: LogSampleRecord[]
   evidence_summary: IncidentEvidenceSummary
   claims: ClaimRecord[]
+  assistant_writebacks?: AIWritebackRecord[]
   recommendation_task?: IncidentRecommendationTaskLink | null
   recommendation_tasks?: IncidentRecommendationTaskLink[]
 }
@@ -673,6 +676,27 @@ export interface AnalysisSessionRecord {
   updated_at: string
 }
 
+export type AIWritebackKind = 'incident_summary_draft' | 'recommendation_rationale' | 'executor_followup'
+
+export interface AIWritebackRecord {
+  writeback_id: string
+  session_id?: string | null
+  kind: AIWritebackKind
+  title: string
+  summary: string
+  content: string
+  provider: string
+  status: string
+  source: string
+  incident_id?: string | null
+  recommendation_id?: string | null
+  task_id?: string | null
+  claims: ClaimRecord[]
+  command_suggestions: AIAssistantCommandSuggestion[]
+  created_at: string
+  updated_at: string
+}
+
 export type AIAssistantProviderStatus = 'ready' | 'degraded' | 'unavailable'
 
 export interface AIAssistantStatusResponse {
@@ -707,6 +731,11 @@ export interface AIAssistantDiagnoseResponse {
     evidence_ids: string[]
     executor_result_ids: string[]
   }
+}
+
+export interface AIAssistantWritebackSaveResponse {
+  message: string
+  writeback: AIWritebackRecord
 }
 
 export interface RecommendationMetricsTrendItem {
@@ -1284,6 +1313,20 @@ export const aiApi = {
     task_id?: string
     include_command_packs?: boolean
   }) => apiClient.post('/ai/assistant/diagnose', payload),
+  saveAssistantWriteback: (payload: {
+    session_id?: string
+    kind: AIWritebackKind
+    title?: string
+    summary?: string
+    content: string
+    provider?: string
+    status?: string
+    incident_id?: string
+    recommendation_id?: string
+    task_id?: string
+    claims?: ClaimRecord[]
+    command_suggestions?: AIAssistantCommandSuggestion[]
+  }) => apiClient.post('/ai/assistant/writebacks', payload),
 }
 
 const resolveProviderIdByName = async (providerName: string): Promise<string> => {

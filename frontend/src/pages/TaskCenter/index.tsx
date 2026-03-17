@@ -28,6 +28,7 @@ import {
 } from '@/api/client'
 import { useTaskEventStream } from '@/hooks/useTaskEventStream'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
+import AIWritebackList from '@/components/ai/AIWritebackList'
 
 const { Paragraph, Text, Title } = Typography
 const { TextArea } = Input
@@ -172,6 +173,7 @@ export const TaskCenter: React.FC = () => {
     () => getGuardrailMeta(selectedTaskGuardrailSummary),
     [selectedTaskGuardrailSummary],
   )
+  const selectedTaskWritebacks = useMemo(() => selectedTask?.assistant_writebacks || [], [selectedTask])
 
   const loadTaskDetail = useCallback(async (taskId: string) => {
     try {
@@ -587,6 +589,13 @@ export const TaskCenter: React.FC = () => {
                     )}
                   />
                 </Card>
+                <AIWritebackList
+                  items={selectedTaskWritebacks}
+                  title="AI 回写记录"
+                  emptyDescription="当前任务还没有可复用的 AI 回写内容"
+                  style={{ marginBottom: 16 }}
+                  onOpenIncident={(incidentId) => navigate(`/incidents?incidentId=${encodeURIComponent(incidentId)}`)}
+                />
                 <Card
                   type="inner"
                   title="任务产物"

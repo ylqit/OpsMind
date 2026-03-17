@@ -12,6 +12,7 @@ from typing import Any, List, Optional
 from engine.runtime.models import (
     AICallLog,
     AIProviderConfigRecord,
+    AIWritebackRecord,
     AnalysisSession,
     ArtifactRef,
     Asset,
@@ -956,6 +957,120 @@ class AnalysisSessionRepository:
         merged = current.model_copy(update=updates)
         merged.updated_at = utc_now()
         return self.save(merged)
+
+
+class AIWritebackRepository:
+    def __init__(self, db: SQLiteDatabase):
+        self.db = db
+
+    def save(self, record: AIWritebackRecord) -> AIWritebackRecord:
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO ai_writebacks (
+                writeback_id, session_id, kind, title, summary, content, provider, status,
+                source, incident_id, recommendation_id, task_id, claims_json,
+                command_suggestions_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.writeback_id,
+                record.session_id,
+                record.kind.value,
+                record.title,
+                record.summary,
+                record.content,
+                record.provider,
+                record.status,
+                record.source,
+                record.incident_id,
+                record.recommendation_id,
+                record.task_id,
+                _to_json(record.claims),
+                _to_json(record.command_suggestions),
+                record.created_at.isoformat(),
+                record.updated_at.isoformat(),
+            ),
+        )
+        latest = self.get(record.writeback_id)
+        return latest if latest else record
+
+    def _from_row(self, row) -> AIWritebackRecord:
+        return AIWritebackRecord(
+            writeback_id=row["writeback_id"],
+            session_id=row["session_id"],
+            kind=row["kind"],
+            title=row["title"] or "",
+            summary=row["summary"] or "",
+            content=row["content"] or "",
+            provider=row["provider"] or "",
+            status=row["status"] or "success",
+            source=row["source"] or "ai_assistant",
+            incident_id=row["incident_id"],
+            recommendation_id=row["recommendation_id"],
+            task_id=row["task_id"],
+            claims=_from_json(row["claims_json"], []),
+            command_suggestions=_from_json(row["command_suggestions_json"], []),
+            created_at=parse_utc_datetime(row["created_at"]),
+            updated_at=parse_utc_datetime(row["updated_at"]),
+        )
+
+    def get(self, writeback_id: str) -> Optional[AIWritebackRecord]:
+        row = self.db.fetchone("SELECT * FROM ai_writebacks WHERE writeback_id = ?", (writeback_id,))
+        if not row:
+            return None
+        return self._from_row(row)
+
+    def list_by_session(self, session_id: str, limit: int = 50) -> List[AIWritebackRecord]:
+        safe_limit = max(1, min(limit, 200))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM ai_writebacks
+            WHERE session_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (session_id, safe_limit),
+        )
+        return [self._from_row(row) for row in rows]
+
+    def list_by_incident(self, incident_id: str, limit: int = 50) -> List[AIWritebackRecord]:
+        safe_limit = max(1, min(limit, 200))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM ai_writebacks
+            WHERE incident_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (incident_id, safe_limit),
+        )
+        return [self._from_row(row) for row in rows]
+
+    def list_by_recommendation(self, recommendation_id: str, limit: int = 50) -> List[AIWritebackRecord]:
+        safe_limit = max(1, min(limit, 200))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM ai_writebacks
+            WHERE recommendation_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (recommendation_id, safe_limit),
+        )
+        return [self._from_row(row) for row in rows]
+
+    def list_by_task(self, task_id: str, limit: int = 50) -> List[AIWritebackRecord]:
+        safe_limit = max(1, min(limit, 200))
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM ai_writebacks
+            WHERE task_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (task_id, safe_limit),
+        )
+        return [self._from_row(row) for row in rows]
 
 
 class ExecutorPluginRepository:

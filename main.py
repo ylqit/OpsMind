@@ -54,6 +54,7 @@ from engine.storage.alert_store import AlertStore
 from engine.storage.repositories import (
     AICallLogRepository,
     AIProviderConfigRepository,
+    AIWritebackRepository,
     AnalysisSessionRepository,
     ArtifactRepository,
     AssetRepository,
@@ -98,6 +99,7 @@ llm_config_manager_instance = None
 llm_router_instance: LLMRouter | None = None
 ai_provider_config_repository: AIProviderConfigRepository | None = None
 analysis_session_repository: AnalysisSessionRepository | None = None
+ai_writeback_repository: AIWritebackRepository | None = None
 executor_service: ExecutorService | None = None
 
 
@@ -289,7 +291,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global runtime_db, event_bus, task_manager, asset_service, signal_service
     global incident_service, recommendation_service, traffic_analytics_engine, resource_analytics_engine, summary_builder, data_sources_status
     global ai_call_log_repository, recommendation_feedback_repository, usage_metrics_daily_repository, ai_provider_config_repository, llm_config_manager_instance, llm_router_instance
-    global analysis_session_repository
+    global analysis_session_repository, ai_writeback_repository
     global executor_service
 
     logger.info("正在启动 opsMind")
@@ -316,6 +318,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     usage_metrics_daily_repository = UsageMetricsDailyRepository(runtime_db)
     ai_provider_config_repository = AIProviderConfigRepository(runtime_db)
     analysis_session_repository = AnalysisSessionRepository(runtime_db)
+    ai_writeback_repository = AIWritebackRepository(runtime_db)
     executor_plugin_repository = ExecutorPluginRepository(runtime_db)
     executor_audit_log_repository = ExecutorAuditLogRepository(runtime_db)
 
@@ -375,6 +378,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.usage_metrics_daily_repository = usage_metrics_daily_repository
     app.state.ai_provider_config_repository = ai_provider_config_repository
     app.state.analysis_session_repository = analysis_session_repository
+    app.state.ai_writeback_repository = ai_writeback_repository
     app.state.llm_config_manager = llm_config_manager_instance
     app.state.llm_router = llm_router_instance
     app.state.executor_service = executor_service

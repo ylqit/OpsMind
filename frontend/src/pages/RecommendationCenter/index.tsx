@@ -26,6 +26,7 @@ import {
 } from '@/api/client'
 import AIDiagnosisCard from '@/components/ai/AIDiagnosisCard'
 import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
+import AIWritebackList from '@/components/ai/AIWritebackList'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -653,6 +654,10 @@ export const RecommendationCenter: React.FC = () => {
   )
   const activeRecommendationClaims = useMemo<ClaimRecord[]>(
     () => activeRecommendationDetail?.claims || [],
+    [activeRecommendationDetail],
+  )
+  const activeAssistantWritebacks = useMemo(
+    () => activeRecommendationDetail?.assistant_writebacks || [],
     [activeRecommendationDetail],
   )
   const activeAiReviewClaims = useMemo<ClaimRecord[]>(
@@ -1786,6 +1791,14 @@ export const RecommendationCenter: React.FC = () => {
                       />
                     </Card>
                   ) : null}
+
+                  <AIWritebackList
+                    items={activeAssistantWritebacks}
+                    title="AI 回写记录"
+                    emptyDescription="当前建议还没有沉淀下来的 AI 回写内容"
+                    style={{ marginBottom: 16 }}
+                    onOpenTask={(taskId) => jumpToTaskCenter(taskId)}
+                  />
 
                   {activeFeedbackPayload ? (
                     <Card type="inner" title="反馈闭环" size="small" loading={Boolean(activeRecommendation) && feedbackLoadingId === activeRecommendation?.recommendation_id}>

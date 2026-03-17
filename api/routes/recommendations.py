@@ -13,6 +13,7 @@ from engine.llm.structured_output import run_guarded_scenario_chat
 from engine.runtime.models import ArtifactRef, Claim, EvidenceLocator, EvidenceRef, RecommendationFeedback, TaskStatus, TaskType
 
 from .deps import (
+    get_ai_writeback_repository_dep,
     get_incident_service,
     get_llm_router_dep,
     get_recommendation_feedback_repository_dep,
@@ -1433,6 +1434,7 @@ async def get_recommendation_detail(
     traffic_engine=Depends(get_traffic_engine),
     task_manager=Depends(get_task_manager),
     feedback_repository=Depends(get_recommendation_feedback_repository_dep),
+    writeback_repository=Depends(get_ai_writeback_repository_dep),
 ):
     recommendation = recommendation_service.repository.get(recommendation_id)
     if not recommendation:
@@ -1482,6 +1484,10 @@ async def get_recommendation_detail(
     detail["task_trace_preview"] = task_trace_preview
     detail["task_trace_summary"] = _build_task_trace_summary(task_trace_preview)
     detail["claims"] = _build_recommendation_claims(recommendation, incident, evidence_payload)
+    detail["assistant_writebacks"] = [
+        item.model_dump(mode="json")
+        for item in (writeback_repository.list_by_recommendation(recommendation_id) if writeback_repository else [])
+    ]
     return detail
 
 

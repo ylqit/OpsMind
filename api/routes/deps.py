@@ -103,6 +103,11 @@ def get_analysis_session_repository_dep():
     return analysis_session_repository
 
 
+def get_ai_writeback_repository_dep():
+    from main import ai_writeback_repository
+    return ai_writeback_repository
+
+
 def get_refresh_llm_router_dep():
     from main import refresh_llm_router_from_db
     return refresh_llm_router_from_db

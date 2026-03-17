@@ -240,6 +240,37 @@ class AnalysisSession(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class AIWritebackKind(str, Enum):
+    INCIDENT_SUMMARY_DRAFT = "incident_summary_draft"
+    RECOMMENDATION_RATIONALE = "recommendation_rationale"
+    EXECUTOR_FOLLOWUP = "executor_followup"
+
+
+class AIWritebackRecord(BaseModel):
+    """AI 助手回写记录。
+
+    不直接覆盖 incident 或 recommendation 的原始字段，而是保留一份可追溯的草稿记录，
+    便于后续在异常、建议和任务详情中统一展示。
+    """
+
+    writeback_id: str = Field(default_factory=lambda: f"writeback_{uuid4().hex[:12]}")
+    session_id: Optional[str] = None
+    kind: AIWritebackKind
+    title: str
+    summary: str = ""
+    content: str
+    provider: str = ""
+    status: str = "success"
+    source: str = "ai_assistant"
+    incident_id: Optional[str] = None
+    recommendation_id: Optional[str] = None
+    task_id: Optional[str] = None
+    claims: List[Dict[str, Any]] = Field(default_factory=list)
+    command_suggestions: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AIProviderConfigRecord(BaseModel):
     provider_id: str = Field(default_factory=lambda: f"provider_{uuid4().hex[:12]}")
     name: str

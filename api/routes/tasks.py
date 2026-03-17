@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .deps import get_task_manager
+from .deps import get_ai_writeback_repository_dep, get_task_manager
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -198,7 +198,11 @@ async def list_tasks(
 
 
 @router.get("/{task_id}")
-async def get_task_detail(task_id: str, task_manager=Depends(get_task_manager)):
+async def get_task_detail(
+    task_id: str,
+    task_manager=Depends(get_task_manager),
+    writeback_repository=Depends(get_ai_writeback_repository_dep),
+):
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -213,6 +217,7 @@ async def get_task_detail(task_id: str, task_manager=Depends(get_task_manager)):
         "trace_preview": trace_preview,
         "artifacts": [artifact.model_dump(mode="json") for artifact in artifacts],
         "failure_diagnosis": failure_diagnosis,
+        "assistant_writebacks": [item.model_dump(mode="json") for item in (writeback_repository.list_by_task(task_id) if writeback_repository else [])],
     }
 
 

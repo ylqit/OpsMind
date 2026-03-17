@@ -20,6 +20,8 @@ import {
   type AIAssistantCommandSuggestion,
   type AIAssistantDiagnoseResponse,
   type AIAssistantStatusResponse,
+  type AIAssistantWritebackSaveResponse,
+  type AIWritebackKind,
 } from '@/api/client'
 import AIProviderStatusStrip from '@/components/ai/AIProviderStatusStrip'
 import { CardEmptyState, PageStatusBanner } from '@/components/PageState'
@@ -48,6 +50,7 @@ interface AssistantConversationItem {
   latencyMs?: number
   degradedReason?: string
   suggestions?: AIAssistantCommandSuggestion[]
+  context?: AIAssistantDiagnoseResponse['context']
 }
 
 interface AssistantEntryContext {
@@ -139,6 +142,16 @@ const getStatusLabel = (status?: AIAssistantStatusResponse['status']) => {
   return '未知'
 }
 
+const buildWritebackSummary = (content: string) => {
+  const normalized = content.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return ''
+  }
+  const [firstBlock] = normalized.split('\n\n')
+  const summary = (firstBlock || normalized.split('\n')[0] || '').trim()
+  return summary.length > 180 ? `${summary.slice(0, 180).trimEnd()}...` : summary
+}
+
 const AIAssistantWorkbench: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -155,6 +168,7 @@ const AIAssistantWorkbench: React.FC = () => {
   const [sessionPayload, setSessionPayload] = useState<AnalysisSessionRecord | null>(null)
   const [prompt, setPrompt] = useState('')
   const [history, setHistory] = useState<AssistantConversationItem[]>([])
+  const [writebackSavingKey, setWritebackSavingKey] = useState('')
   const sessionSyncTimeoutRef = useRef<number | null>(null)
   const sessionContextDirtyRef = useRef(false)
 
@@ -406,6 +420,35 @@ const AIAssistantWorkbench: React.FC = () => {
     }
   }
 
+  const saveWriteback = async (item: AssistantConversationItem, kind: AIWritebackKind) => {
+    if (item.role !== 'assistant') {
+      return
+    }
+    const context = item.context || latestAssistantItem?.context
+    const saveKey = `${item.id}_${kind}`
+    setWritebackSavingKey(saveKey)
+    try {
+      const response = (await aiApi.saveAssistantWriteback({
+        session_id: context?.session_id || resolvedSession?.session_id || undefined,
+        kind,
+        summary: buildWritebackSummary(item.content),
+        content: item.content,
+        provider: item.provider,
+        status: item.status,
+        incident_id: context?.incident_id || activeIncidentId || undefined,
+        recommendation_id: context?.recommendation_id || activeRecommendationId || undefined,
+        claims: [],
+        command_suggestions: item.suggestions || [],
+      })) as AIAssistantWritebackSaveResponse
+      const linkedTaskId = response.writeback.task_id ? `，任务 ${response.writeback.task_id}` : ''
+      message.success(`${response.message}${linkedTaskId}`)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'AI 回写保存失败')
+    } finally {
+      setWritebackSavingKey('')
+    }
+  }
+
   const openSourcePage = () => {
     if (activeRecommendationId || activeSource === 'recommendation') {
       const params = new URLSearchParams()
@@ -484,6 +527,7 @@ const AIAssistantWorkbench: React.FC = () => {
         latencyMs: response.latency_ms,
         degradedReason: response.degraded_reason,
         suggestions: response.command_suggestions || [],
+        context: response.context,
       }
       // 对话历史只保留结构化后的结果，命令建议与降级信息都附着在同一条 assistant 消息上。
       setHistory((previous) => [...previous, assistantItem])
@@ -647,9 +691,39 @@ const AIAssistantWorkbench: React.FC = () => {
                     {item.degradedReason ? <Text type="secondary">降级原因：{item.degradedReason}</Text> : null}
                     {item.role === 'assistant' ? (
                       <div style={{ marginTop: 8 }}>
-                        <Button size="small" onClick={() => void copyText(item.content, '已复制诊断结果')}>
-                          复制结果
-                        </Button>
+                        <Space wrap>
+                          <Button size="small" onClick={() => void copyText(item.content, '已复制诊断结果')}>
+                            复制结果
+                          </Button>
+                          {(item.context?.incident_id || activeIncidentId) ? (
+                            <Button
+                              size="small"
+                              loading={writebackSavingKey === `${item.id}_incident_summary_draft`}
+                              onClick={() => void saveWriteback(item, 'incident_summary_draft')}
+                            >
+                              存为异常草稿
+                            </Button>
+                          ) : null}
+                          {(item.context?.recommendation_id || activeRecommendationId) ? (
+                            <Button
+                              size="small"
+                              loading={writebackSavingKey === `${item.id}_recommendation_rationale`}
+                              onClick={() => void saveWriteback(item, 'recommendation_rationale')}
+                            >
+                              存为建议说明
+                            </Button>
+                          ) : null}
+                          {(item.context?.incident_id || item.context?.recommendation_id || activeIncidentId || activeRecommendationId) ? (
+                            <Button
+                              size="small"
+                              type="dashed"
+                              loading={writebackSavingKey === `${item.id}_executor_followup`}
+                              onClick={() => void saveWriteback(item, 'executor_followup')}
+                            >
+                              存为执行跟进
+                            </Button>
+                          ) : null}
+                        </Space>
                       </div>
                     ) : null}
                   </div>

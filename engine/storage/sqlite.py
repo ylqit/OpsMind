@@ -174,6 +174,25 @@ class SQLiteDatabase:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_writebacks (
+                writeback_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT,
+                content TEXT NOT NULL,
+                provider TEXT,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                incident_id TEXT,
+                recommendation_id TEXT,
+                task_id TEXT,
+                claims_json TEXT NOT NULL,
+                command_suggestions_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS usage_metrics_daily (
                 metric_date TEXT NOT NULL,
                 service_key TEXT NOT NULL,
@@ -234,6 +253,11 @@ class SQLiteDatabase:
             CREATE INDEX IF NOT EXISTS idx_analysis_sessions_updated_at ON analysis_sessions(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_analysis_sessions_incident_id ON analysis_sessions(incident_id);
             CREATE INDEX IF NOT EXISTS idx_analysis_sessions_recommendation_id ON analysis_sessions(recommendation_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_writebacks_session_id ON ai_writebacks(session_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_writebacks_incident_id ON ai_writebacks(incident_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_writebacks_recommendation_id ON ai_writebacks(recommendation_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_writebacks_task_id ON ai_writebacks(task_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_writebacks_created_at ON ai_writebacks(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_service ON usage_metrics_daily(service_key);
             CREATE INDEX IF NOT EXISTS idx_usage_metrics_daily_model ON usage_metrics_daily(model);
 
