@@ -29,6 +29,8 @@ logs / metrics / assets
   -> ai assistant / quality metrics
 ```
 
+详细模块说明见 [docs/architecture.md](docs/architecture.md)。
+
 ## Tech Stack
 
 ### Backend
@@ -64,6 +66,10 @@ opsMind/
 ├─ data/                 # 本地运行数据
 └─ docs/                 # 项目文档
 ```
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
 
 ## Quick Start
 
